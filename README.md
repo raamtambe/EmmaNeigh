@@ -296,7 +296,7 @@ Source code is available for full audit.
 
 ## License
 
-MIT License - Internal tool for Kirkland & Ellis LLP
+MIT License
 
 ---
 
