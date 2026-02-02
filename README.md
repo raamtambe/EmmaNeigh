@@ -1,225 +1,152 @@
-# EmmaNeigh - Signature Packet Automation
+# EmmaNeigh
 
-## Overview
+**Signature Packet Automation for M&A Transactions**
 
-EmmaNeigh is an automated signature packet tool designed for M&A transactions and financing deals. It scans transaction documents (PDFs) and automatically creates individualized signature packets for each signatory party, eliminating the tedious manual process of extracting and organizing signature pages.
-
-**Now with a beautiful desktop application!** Version 2.0 introduces a modern GUI with drag-and-drop file upload, animated progress indicators, and new features like Execution Version creation.
+EmmaNeigh automates the tedious process of extracting and organizing signature pages from transaction documents. Built for law firms handling M&A deals, financing transactions, and other complex closings.
 
 ---
 
-## What's New in v2.0.0
+## Download & Install
 
-### Desktop Application
-- **Modern GUI** - Beautiful, intuitive interface built with React
-- **Drag & Drop** - Simply drag PDF files into the app
-- **Running Horse Animation** - Fun visual feedback during processing
-- **Cross-Platform** - Works on Windows, Mac, and Linux
-- **Portable** - No installation required, runs from any folder
+### Windows
+1. Go to [Releases](https://github.com/raamtambe/EmmaNeigh/releases)
+2. Download `EmmaNeigh-Portable.exe`
+3. Double-click to run - that's it!
 
-### New Features
-- **Execution Version Creator** - Merge signed DocuSign pages back into original documents
-- **ZIP Download** - Get all signature packets in a single downloadable ZIP file
-- **Real-time Progress** - See exactly what's happening as files are processed
-- **DocuSign PDF Unlocking** - Automatically removes DocuSign restrictions
+### Mac
+1. Go to [Releases](https://github.com/raamtambe/EmmaNeigh/releases)
+2. Download the `.dmg` file
+3. Open it and drag EmmaNeigh to your Applications folder
+4. Double-click to run
 
-### Security (Unchanged)
-- **100% Local Processing** - All data stays on your machine
-- **No Network Calls** - Works completely offline
-- **No Telemetry** - Zero tracking or data collection
-
----
-
-## Quick Start
-
-### Desktop App (Recommended - v2.0)
-
-1. Navigate to `desktop-app/` folder
-2. Run setup (first time only):
-   ```bash
-   npm install
-   cd frontend && npm install && cd ..
-   pip3 install -r python/requirements.txt
-   ```
-3. Launch the app:
-   ```bash
-   npm run dev
-   ```
-4. Use the beautiful GUI to upload files and create signature packets!
-
-### Command Line (Legacy - v1.0)
-
-For the original drag-and-drop batch file experience:
-1. Download the release ZIP
-2. Drag a folder of PDFs onto `run_signature_packets.bat`
-3. Find output in `signature_packets_output/` folder
+**No installation required. No dependencies. Just download and run.**
 
 ---
 
 ## Features
 
-### Create Signature Packets
-Extract signature pages from transaction documents and organize by signer.
+### 1. Create Signature Packets
+Extract signature pages from multiple PDFs and organize them by signer.
 
-**How it works:**
-1. Upload multiple PDF documents
-2. Tool scans for signature pages (looks for "BY:", "Name:" fields)
-3. Groups pages by individual signer
-4. Generates one PDF packet per signer
-5. Creates Excel tracking sheets
-6. Download everything as a ZIP file
+**How to use:**
+1. Open EmmaNeigh
+2. Click "Create Signature Packets"
+3. Drag & drop your PDF files (or click to browse)
+4. Click "Create Signature Packets"
+5. Watch the horse run while processing
+6. Download your ZIP file with all packets
 
-**Example Output:**
-```
-signature_packets_output/
-├── packets/
-│   ├── signature_packet - JOHN SMITH.pdf
-│   ├── signature_packet - JANE DOE.pdf
-│   └── signature_packet - ABC HOLDINGS LLC.pdf
-└── tables/
-    ├── MASTER_SIGNATURE_INDEX.xlsx
-    └── (individual signer tables)
-```
+**What you get:**
+- Individual PDF packets for each signer (e.g., `signature_packet - JOHN SMITH.pdf`)
+- Excel tracking sheets
+- Master signature index
 
-### Create Execution Version (NEW in v2.0)
-Merge signed pages back into original documents after DocuSign signing.
+### 2. Create Execution Version
+Merge signed pages from DocuSign back into the original document.
 
-**The Problem:** DocuSign returns locked/protected PDFs that can't be edited.
+**The problem:** DocuSign returns locked PDFs that can't be edited.
 
-**The Solution:** EmmaNeigh automatically:
-1. Unlocks the DocuSign PDF restrictions
-2. Extracts the signed pages
-3. Merges them into your original document
-4. Creates the final execution version
+**The solution:** EmmaNeigh automatically unlocks DocuSign PDFs and merges the signed pages back into your original document.
 
----
-
-## Installation
-
-### Prerequisites
-- Node.js 18+ (for desktop app)
-- Python 3.10+
-- npm
-
-### Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/raamtambe/EmmaNeigh.git
-cd EmmaNeigh/desktop-app
-
-# Install dependencies
-npm install
-cd frontend && npm install && cd ..
-pip3 install -r python/requirements.txt
-
-# Run the app
-npm run dev
-```
-
-### Building for Distribution
-
-```bash
-# Build frontend
-npm run build:react
-
-# Build Python processor
-pip3 install pyinstaller
-cd python && pyinstaller --onefile --name processor main.py && cd ..
-
-# Build portable app
-npm run dist:win   # Windows
-npm run dist:mac   # macOS
-npm run dist:linux # Linux
-```
-
----
-
-## Project Structure
-
-```
-EmmaNeigh/
-├── desktop-app/              # NEW: Desktop application (v2.0)
-│   ├── electron/             # Electron main process
-│   ├── frontend/             # React UI
-│   └── python/               # PDF processors
-├── run_signature_packets.bat # Legacy: v1.0 launcher
-├── README.md
-├── CHANGELOG.md
-└── (documentation files)
-```
+**How to use:**
+1. Open EmmaNeigh
+2. Click "Create Execution Version"
+3. Upload the original PDF (without signature pages)
+4. Upload the signed PDF from DocuSign
+5. Enter the page number where signatures should be inserted
+6. Click "Create Execution Version"
+7. Download your final execution version
 
 ---
 
 ## Security & Privacy
 
-EmmaNeigh is designed for law firm environments handling sensitive client documents:
+EmmaNeigh is designed for handling confidential legal documents:
 
-| Guarantee | Description |
-|-----------|-------------|
-| **Local Processing** | All document processing happens on your machine |
-| **No Network** | Zero internet connections, works offline |
-| **No Cloud** | Files never leave your local disk |
-| **No Telemetry** | No analytics, tracking, or data collection |
-| **No Admin Rights** | Runs as a portable application |
-| **Auditable** | Full source code available for review |
+| Feature | Description |
+|---------|-------------|
+| **100% Local** | All processing happens on your computer |
+| **No Internet** | App never connects to the internet |
+| **No Cloud** | Your files never leave your machine |
+| **No Tracking** | Zero analytics or telemetry |
+| **No Account** | No login or registration required |
+| **Portable** | Runs from anywhere, leaves no trace |
 
----
-
-## Troubleshooting
-
-### Desktop App Issues
-
-**"npm: command not found"**
-- Install Node.js from https://nodejs.org/
-
-**"python3: command not found"**
-- Install Python from https://python.org/
-
-**App won't start**
-- Make sure port 3000 is available
-- Try `npm run dev` again
-
-### Processing Issues
-
-**"No signers detected"**
-- Ensure PDFs have standard signature blocks with "BY:" and "Name:" fields
-- Check that PDFs are not scanned images (need OCR first)
-
-**"Cannot unlock DocuSign PDF"**
-- The PDF may be password-protected (not just permission-restricted)
-- Contact the sender for the password
+Your documents stay on your computer. Always.
 
 ---
 
-## Changelog
+## Screenshots
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history.
+### Main Menu
+Choose between creating signature packets or execution versions.
+
+### Processing View
+Watch the animated horse while your documents are processed. Real-time status updates show exactly what's happening.
+
+### Results
+Download all your signature packets as a single ZIP file.
+
+---
+
+## How It Works
+
+### Signature Detection
+EmmaNeigh scans each page looking for signature block patterns:
+- "BY:" fields
+- "Name:" fields
+- Signature lines
+
+When found, it extracts the signer's name and groups all their signature pages together.
+
+### DocuSign Unlocking
+DocuSign adds permission restrictions to signed PDFs. EmmaNeigh removes these restrictions so pages can be merged into execution versions.
+
+---
+
+## FAQ
+
+**Q: Do I need to install anything else?**
+A: No. Just download and run. Everything is bundled.
+
+**Q: Does it work offline?**
+A: Yes. EmmaNeigh never connects to the internet.
+
+**Q: What PDF formats are supported?**
+A: Standard PDFs with text layers. Scanned documents without OCR may not work.
+
+**Q: Is my data sent anywhere?**
+A: No. All processing is 100% local on your machine.
+
+**Q: Can I use this on my work computer?**
+A: Yes. It's a portable app that requires no installation or admin rights.
+
+---
+
+## Version History
+
+### v2.1.0 (February 2026)
+- Simplified installation - just download and run
+- Automated builds for Windows and Mac
+- Updated documentation
 
 ### v2.0.0 (February 2026)
 - Desktop application with modern GUI
+- Drag & drop file upload
 - Running horse animation
 - Execution Version creator
-- ZIP file download
-- Cross-platform support
+- ZIP file downloads
 
 ### v1.0.0 (January 2026)
-- Initial release
-- Signature packet generation
-- Drag-and-drop batch launcher
-- Excel tracking tables
+- Initial release (command-line version)
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ---
 
-## Contributing
+## Support
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-**Areas for Improvement:**
-- Enhanced signer detection for non-standard formats
-- DocuSign API integration
-- Initial-only page detection
-- Cover sheet generation
+For issues or feature requests, please [open an issue](https://github.com/raamtambe/EmmaNeigh/issues) on GitHub.
 
 ---
 
@@ -227,11 +154,4 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 MIT License - See [LICENSE](LICENSE) for details.
 
----
-
-## Contact
-
-**Project Maintainer:** Raam Tambe
-**GitHub:** https://github.com/raamtambe/EmmaNeigh
-
-For issues, questions, or feature requests, please open a GitHub issue.
+**Made for lawyers, by lawyers (with help from AI).**
