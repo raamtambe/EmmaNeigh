@@ -1,320 +1,237 @@
-# EmmaNeigh - Signature Packet Builder
+# EmmaNeigh - Signature Packet Automation
 
 ## Overview
 
-EmmaNeigh is an automated signature packet generation tool designed for M&A transactions and financing deals. It scans transaction documents (PDFs) and automatically creates individualized signature packets for each signatory party, eliminating the tedious manual process of extracting and organizing signature pages.
+EmmaNeigh is an automated signature packet tool designed for M&A transactions and financing deals. It scans transaction documents (PDFs) and automatically creates individualized signature packets for each signatory party, eliminating the tedious manual process of extracting and organizing signature pages.
 
-**Key Features:**
-- Automatic detection of signature pages across multiple documents
-- Individual-focused packet generation (organized by person, not entity)
-- Combines all signature requirements for each person across all documents
-- Works entirely offline on locked-down corporate computers
-- No installation required - portable Python runtime included
-- Client data never leaves local machine
+**Now with a beautiful desktop application!** Version 2.0 introduces a modern GUI with drag-and-drop file upload, animated progress indicators, and new features like Execution Version creation.
 
 ---
 
-## Table of Contents
+## What's New in v2.0.0
 
-1. [Quick Start](#quick-start)
-2. [How It Works](#how-it-works)
-3. [Installation](#installation)
-4. [Usage](#usage)
-5. [Output Structure](#output-structure)
-6. [Architecture](#architecture)
-7. [Contributing](#contributing)
-8. [Security & Privacy](#security--privacy)
-9. [Troubleshooting](#troubleshooting)
-10. [Changelog](#changelog)
+### Desktop Application
+- **Modern GUI** - Beautiful, intuitive interface built with React
+- **Drag & Drop** - Simply drag PDF files into the app
+- **Running Horse Animation** - Fun visual feedback during processing
+- **Cross-Platform** - Works on Windows, Mac, and Linux
+- **Portable** - No installation required, runs from any folder
+
+### New Features
+- **Execution Version Creator** - Merge signed DocuSign pages back into original documents
+- **ZIP Download** - Get all signature packets in a single downloadable ZIP file
+- **Real-time Progress** - See exactly what's happening as files are processed
+- **DocuSign PDF Unlocking** - Automatically removes DocuSign restrictions
+
+### Security (Unchanged)
+- **100% Local Processing** - All data stays on your machine
+- **No Network Calls** - Works completely offline
+- **No Telemetry** - Zero tracking or data collection
 
 ---
 
 ## Quick Start
 
-**For End Users (Lawyers/Staff):**
+### Desktop App (Recommended - v2.0)
 
-1. Download the latest release ZIP file
-2. Unzip to a location on your computer
-3. Drag a folder containing transaction PDFs onto `run_signature_packets.bat`
-4. Wait for processing to complete
-5. Find signature packets in `signature_packets_output/` folder
+1. Navigate to `desktop-app/` folder
+2. Run setup (first time only):
+   ```bash
+   npm install
+   cd frontend && npm install && cd ..
+   pip3 install -r python/requirements.txt
+   ```
+3. Launch the app:
+   ```bash
+   npm run dev
+   ```
+4. Use the beautiful GUI to upload files and create signature packets!
 
-**That's it!** No installation, no Python, no command line required.
+### Command Line (Legacy - v1.0)
+
+For the original drag-and-drop batch file experience:
+1. Download the release ZIP
+2. Drag a folder of PDFs onto `run_signature_packets.bat`
+3. Find output in `signature_packets_output/` folder
 
 ---
 
-## How It Works
+## Features
 
-### The Problem
+### Create Signature Packets
+Extract signature pages from transaction documents and organize by signer.
 
-In M&A transactions, creating signature packets is a time-consuming manual task:
-- Attorneys must review hundreds of pages across 20+ documents
-- Each signatory needs only their specific signature pages
-- Manual extraction is error-prone and tedious
-- Missing a signature page can delay closings
+**How it works:**
+1. Upload multiple PDF documents
+2. Tool scans for signature pages (looks for "BY:", "Name:" fields)
+3. Groups pages by individual signer
+4. Generates one PDF packet per signer
+5. Creates Excel tracking sheets
+6. Download everything as a ZIP file
 
-### The Solution
+**Example Output:**
+```
+signature_packets_output/
+├── packets/
+│   ├── signature_packet - JOHN SMITH.pdf
+│   ├── signature_packet - JANE DOE.pdf
+│   └── signature_packet - ABC HOLDINGS LLC.pdf
+└── tables/
+    ├── MASTER_SIGNATURE_INDEX.xlsx
+    └── (individual signer tables)
+```
 
-EmmaNeigh automates this process:
+### Create Execution Version (NEW in v2.0)
+Merge signed pages back into original documents after DocuSign signing.
 
-1. **Scans all PDFs** in a selected folder
-2. **Detects signature blocks** using intelligent pattern matching
-3. **Identifies individual signers** by parsing "Name:" fields
-4. **Extracts signature pages** for each person
-5. **Generates combined packets** - one PDF per signer with all their pages
-6. **Creates Excel tables** for tracking and quality control
+**The Problem:** DocuSign returns locked/protected PDFs that can't be edited.
 
-### Example
-
-If John Smith needs to sign:
-- Credit Agreement (page 87)
-- Guaranty (page 12)
-- Security Agreement (page 45)
-
-EmmaNeigh creates:
-- `signature_packet - JOHN SMITH.pdf` (3 pages)
-- `signature_packet - JOHN SMITH.xlsx` (tracking table)
+**The Solution:** EmmaNeigh automatically:
+1. Unlocks the DocuSign PDF restrictions
+2. Extracts the signed pages
+3. Merges them into your original document
+4. Creates the final execution version
 
 ---
 
 ## Installation
 
-### For End Users
+### Prerequisites
+- Node.js 18+ (for desktop app)
+- Python 3.10+
+- npm
 
-**No installation required!** 
-
-Download and unzip. The tool includes:
-- Portable Python runtime (no system install)
-- All required libraries pre-packaged
-- Simple BAT file launcher
-
-### For Developers/Contributors
-
-If you want to modify the code:
+### Setup
 
 ```bash
 # Clone the repository
 git clone https://github.com/raamtambe/EmmaNeigh.git
-cd EmmaNeigh
+cd EmmaNeigh/desktop-app
 
-# The portable Python is already included
-# No additional setup needed
+# Install dependencies
+npm install
+cd frontend && npm install && cd ..
+pip3 install -r python/requirements.txt
+
+# Run the app
+npm run dev
+```
+
+### Building for Distribution
+
+```bash
+# Build frontend
+npm run build:react
+
+# Build Python processor
+pip3 install pyinstaller
+cd python && pyinstaller --onefile --name processor main.py && cd ..
+
+# Build portable app
+npm run dist:win   # Windows
+npm run dist:mac   # macOS
+npm run dist:linux # Linux
 ```
 
 ---
 
-## Usage
-
-### Basic Usage (Drag & Drop)
-
-1. Gather all transaction PDFs in one folder
-2. Drag that folder onto `run_signature_packets.bat`
-3. A console window opens showing progress
-4. Processing completes with message: "Signature packets saved to: [path]"
-
-### Advanced Usage (Command Line)
-
-```batch
-python\python.exe src\build_signature_packets.py "C:\path\to\pdf\folder"
-```
-
----
-
-## Output Structure
-
-After processing, you'll find:
-
-```
-your_pdf_folder/
-├── signature_packets_output/
-│   ├── packets/
-│   │   ├── signature_packet - JOHN SMITH.pdf
-│   │   ├── signature_packet - JANE DOE.pdf
-│   │   └── signature_packet - ABC HOLDINGS LLC.pdf
-│   └── tables/
-│       ├── MASTER_SIGNATURE_INDEX.xlsx
-│       ├── signature_packet - JOHN SMITH.xlsx
-│       └── signature_packet - JANE DOE.xlsx
-```
-
-### File Descriptions
-
-**PDF Packets:**
-- One file per individual signer
-- Contains only the pages that person must sign
-- Pages maintain original formatting and quality
-- Organized in document order
-
-**Excel Tables:**
-- `MASTER_SIGNATURE_INDEX.xlsx` - Complete list of all signature obligations
-- Individual signer tables - Detailed page references for each person
-
----
-
-## Architecture
-
-### Design Principles
-
-1. **No Cloud Dependencies** - All processing happens locally
-2. **Portable Runtime** - Includes Python environment, no system install
-3. **Person-Centric Logic** - Organizes by individual signers, not entities
-4. **Fail-Safe Detection** - Prefers precision over recall to avoid false positives
-
-### Signer Detection Strategy
-
-The tool identifies signers using a two-tier approach:
-
-**Tier 1 (Preferred):**
-- Locate "BY:" signature markers
-- Look downward for explicit "Name:" field
-- Extract the person's name from that field
-
-**Tier 2 (Fallback):**
-- If no "Name:" field exists
-- Look for probable person names near "BY:" marker
-- Filter out entity names (LLC, INC, CORP, etc.)
-- Apply name normalization to avoid duplicates
-
-**Name Normalization:**
-- Convert to uppercase
-- Remove punctuation
-- Collapse whitespace
-- Ensures "John Smith", "JOHN SMITH", "John  Smith" are treated as one person
-
-### File Structure
+## Project Structure
 
 ```
 EmmaNeigh/
-├── run_signature_packets.bat    # User-facing launcher
-├── python/                       # Portable Python runtime
-│   ├── python.exe
-│   └── (Python libraries)
-├── src/
-│   └── build_signature_packets.py  # Core logic
-└── docs/
-    ├── README.md
-    ├── USER_GUIDE.md
-    └── SECURITY_AND_PRIVACY.md
+├── desktop-app/              # NEW: Desktop application (v2.0)
+│   ├── electron/             # Electron main process
+│   ├── frontend/             # React UI
+│   └── python/               # PDF processors
+├── run_signature_packets.bat # Legacy: v1.0 launcher
+├── README.md
+├── CHANGELOG.md
+└── (documentation files)
 ```
-
----
-
-## Contributing
-
-### For Code Contributors
-
-This is an internal tool, but improvements are welcome:
-
-1. **Fork the repository**
-2. **Create a feature branch:**
-   ```bash
-   git checkout -b feature/improve-signer-detection
-   ```
-3. **Make your changes** to `src/build_signature_packets.py`
-4. **Test thoroughly** with real transaction documents
-5. **Submit a pull request** with clear description
-
-### Areas for Improvement
-
-- Enhanced signer detection for non-standard formats
-- Support for initial-only pages
-- Capacity detection (Borrower, Guarantor, Lender)
-- Cover sheet generation
-- Duplicate name handling (same name, different people)
 
 ---
 
 ## Security & Privacy
 
-### Data Handling Guarantees
+EmmaNeigh is designed for law firm environments handling sensitive client documents:
 
-✅ **All processing is local** - No network calls, no cloud uploads  
-✅ **No telemetry** - Tool does not "phone home"  
-✅ **No data persistence** - Files are read, processed, and output locally  
-✅ **Auditable source code** - Open for security review  
-✅ **No dependencies on external services**  
-
-### Compliance Notes
-
-- **Client Confidentiality:** All client files remain on local machine
-- **Work Product:** Generated packets are derivative work product
-- **No Internet Required:** Can run on air-gapped machines
-- **Portable:** No system modifications, fully reversible
-
-### IT/Security Review
-
-This tool is designed to be reviewed by:
-- Knowledge Management
-- IT Security
-- Practice group technology liaisons
-
-Source code is available for full audit.
+| Guarantee | Description |
+|-----------|-------------|
+| **Local Processing** | All document processing happens on your machine |
+| **No Network** | Zero internet connections, works offline |
+| **No Cloud** | Files never leave your local disk |
+| **No Telemetry** | No analytics, tracking, or data collection |
+| **No Admin Rights** | Runs as a portable application |
+| **Auditable** | Full source code available for review |
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+### Desktop App Issues
 
-#### "No module named 'fitz'" or similar errors
-- **Cause:** Portable Python libraries not properly installed
-- **Solution:** Ensure you're using the complete ZIP package, not just the .bat file
+**"npm: command not found"**
+- Install Node.js from https://nodejs.org/
 
-#### "No signers detected"
-- **Cause:** Signature blocks don't match expected format
-- **Solution:** Check that PDFs have standard signature blocks with "BY:" and "Name:" fields
+**"python3: command not found"**
+- Install Python from https://python.org/
 
-#### Multiple packets for same person with slight name variations
-- **Cause:** Inconsistent capitalization or punctuation in source PDFs
-- **Solution:** Manually consolidate or improve normalization in code
+**App won't start**
+- Make sure port 3000 is available
+- Try `npm run dev` again
 
-#### Tool runs but output folder is empty
-- **Cause:** PDFs may be scanned images without text layer
-- **Solution:** OCR the PDFs first using Adobe Acrobat
+### Processing Issues
+
+**"No signers detected"**
+- Ensure PDFs have standard signature blocks with "BY:" and "Name:" fields
+- Check that PDFs are not scanned images (need OCR first)
+
+**"Cannot unlock DocuSign PDF"**
+- The PDF may be password-protected (not just permission-restricted)
+- Contact the sender for the password
 
 ---
 
 ## Changelog
 
-### Version 1.0.0 (Initial Release)
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
-**Features:**
-- Automatic signature page detection
-- Individual-focused packet generation
-- Drag-and-drop BAT launcher
+### v2.0.0 (February 2026)
+- Desktop application with modern GUI
+- Running horse animation
+- Execution Version creator
+- ZIP file download
+- Cross-platform support
+
+### v1.0.0 (January 2026)
+- Initial release
+- Signature packet generation
+- Drag-and-drop batch launcher
 - Excel tracking tables
-- Master signature index
-- Portable Python runtime
 
-**Design Decisions:**
-- Chose BAT over GUI exe to avoid tkinter/Tcl requirements on locked machines
-- Used portable Python to eliminate installation requirements
-- Prioritized person-centric organization over entity-centric
-- Focused on precision (avoiding false positives) over recall
+---
+
+## Contributing
+
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+**Areas for Improvement:**
+- Enhanced signer detection for non-standard formats
+- DocuSign API integration
+- Initial-only page detection
+- Cover sheet generation
 
 ---
 
 ## License
 
-MIT License
+MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
-## Contact & Support
+## Contact
 
-**Project Maintainer:** Raam Tambe  
+**Project Maintainer:** Raam Tambe
 **GitHub:** https://github.com/raamtambe/EmmaNeigh
 
 For issues, questions, or feature requests, please open a GitHub issue.
-
----
-
-## Acknowledgments
-
-This tool was developed through iterative design with AI assistance, focusing on:
-- Law firm IT constraints (locked-down Windows environments)
-- Deal workflow requirements (closing-ready accuracy)
-- User experience (minimal technical knowledge required)
-- Security and compliance (local-only processing)
-
-Special thanks to all attorneys and staff who provide feedback to improve signature packet workflows.

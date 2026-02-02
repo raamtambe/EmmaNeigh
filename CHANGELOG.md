@@ -7,14 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.0.0] - 2026-02-01
 
-### Planned
-- Initial-only page detection
-- Capacity field extraction (Borrower, Guarantor, Lender)
-- Duplicate name disambiguation
-- Cover sheet generation per packet
-- Configuration file for custom signature keywords
+### Added
+
+#### Desktop Application
+- **Modern GUI** - Beautiful, intuitive desktop interface built with Electron + React
+- **Main Menu** - Easy navigation between features with visual feature cards
+- **Drag & Drop Upload** - Simply drag PDF files into the application
+- **Running Horse Animation** - Fun animated horse with real-time status messages during processing
+- **Progress Bar** - Visual progress indicator showing processing status
+- **ZIP Download** - Download all signature packets as a single ZIP file
+
+#### New Feature: Execution Version Creator
+- Merge signed pages back into original documents
+- Automatic DocuSign PDF unlocking (removes permission restrictions)
+- Specify exact page insertion point
+- Creates final execution version ready for filing
+
+#### Technical Improvements
+- **Cross-Platform Support** - Works on Windows, Mac, and Linux
+- **Portable Application** - No installation required, runs from any folder
+- **Real-time Progress** - JSON-based progress streaming from Python to UI
+- **Modular Python Code** - Refactored processors for better maintainability
+
+### Changed
+- Project structure reorganized with new `desktop-app/` directory
+- Python code refactored into modular processors
+- Documentation updated for v2.0
+
+### Technical Stack
+- **Frontend**: React 18 + Vite + Tailwind CSS
+- **Desktop Shell**: Electron 28
+- **Backend**: Python 3.10+ with PyMuPDF
+- **IPC**: Electron IPC with JSON progress streaming
+
+### Security
+- Maintained all v1.0 security guarantees
+- 100% local processing (no network calls)
+- No telemetry or data collection
+- Works on air-gapped machines
 
 ---
 
@@ -54,12 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Platform: Windows (locked-down corporate environments)
 - Processing: Fully offline, local-only
 
-### Design Decisions
-- BAT launcher over EXE (avoids tkinter/PyInstaller complexity)
-- Person-centric vs. entity-centric organization
-- Name normalization for consistency
-- Precision over recall in signer detection
-
 ### Known Limitations
 - Does not detect initial-only pages
 - Does not extract capacity fields (Borrower/Guarantor)
@@ -69,119 +95,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## Development History
-
-### Context
-EmmaNeigh was developed iteratively through conversation with AI assistance, focusing on:
-- Real-world law firm constraints (locked IT environments)
-- Deal workflow requirements (closing-ready accuracy)
-- User experience (minimal technical knowledge required)
-- Security compliance (attorney-client privilege, no data leakage)
-
-### Key Milestones
-1. **Initial concept:** Automated signature packet creation
-2. **Architecture choice:** Portable Python + BAT launcher
-3. **Detection strategy:** Two-tier signer extraction
-4. **Person-centric pivot:** Organize by individual, not entity
-5. **Documentation:** Comprehensive guides for all audiences
-
-### Evolution Notes
-- **v0.1 (concept):** "UNKNOWN SIGNER" placeholders
-- **v0.2 (refinement):** Entity name filtering
-- **v0.3 (pivot):** Person-centric organization
-- **v1.0 (release):** Production-ready with full documentation
-
----
-
 ## Future Versions
 
-### Version 1.1.0 (Planned)
-**Focus:** Enhanced detection and usability
-
-#### Planned Features
+### Version 2.1.0 (Planned)
+- [ ] DocuSign API integration for sending packets
 - [ ] Initial-only page detection
 - [ ] Capacity field extraction
-- [ ] Improved error messages
-- [ ] Self-check/validation mode
-- [ ] Progress indicator during processing
-
-#### Under Consideration
-- [ ] Cover sheet generation
-- [ ] Configurable signature keywords
-- [ ] Dry-run mode (preview without creating output)
-
-### Version 1.2.0 (Conceptual)
-**Focus:** Advanced features
-
-#### Potential Features
-- [ ] Duplicate name handling (disambiguation prompts)
-- [ ] DocuSign envelope ordering
 - [ ] Batch processing mode
+
+### Version 2.2.0 (Conceptual)
+- [ ] Cover sheet generation
+- [ ] Duplicate name disambiguation
 - [ ] Custom output templates
-
-### Version 2.0.0 (Long-term)
-**Focus:** Intelligence and integration
-
-#### Visionary Features
-- [ ] Machine learning for non-standard signature blocks
-- [ ] Multi-language support
-- [ ] Integration with deal management systems
-- [ ] Automated quality control checks
-
----
-
-## Maintenance Notes
-
-### Bug Fix Policy
-- **Critical bugs** (crashes, data loss): Immediate patch release
-- **High-priority bugs** (incorrect output): Within 1 week
-- **Medium bugs** (usability issues): Next minor release
-- **Low-priority bugs** (cosmetic): Batched in future releases
-
-### Deprecation Policy
-- Breaking changes require major version bump
-- Deprecated features announced in advance
-- Backward compatibility maintained where possible
-
----
-
-## Release Notes Template
-
-For future releases, use this format:
-
-```markdown
-## [X.Y.Z] - YYYY-MM-DD
-
-### Added
-- New features
-
-### Changed
-- Changes to existing functionality
-
-### Deprecated
-- Features planned for removal
-
-### Removed
-- Removed features
-
-### Fixed
-- Bug fixes
-
-### Security
-- Security improvements
-```
+- [ ] Processing history/log
 
 ---
 
 ## Version History Summary
 
-| Version | Date       | Highlights                                |
-|---------|------------|-------------------------------------------|
-| 1.0.0   | 2026-01-31 | Initial release with core functionality   |
+| Version | Date       | Highlights                                      |
+|---------|------------|-------------------------------------------------|
+| 2.0.0   | 2026-02-01 | Desktop app, GUI, Execution Version creator     |
+| 1.0.0   | 2026-01-31 | Initial release with core functionality         |
 
 ---
 
-**Note:** This changelog is maintained manually. All changes should be documented here before release.
-
-**Maintainer:** Raam Tambe  
-**Last Updated:** January 31, 2026
+**Maintainer:** Raam Tambe
+**Last Updated:** February 1, 2026

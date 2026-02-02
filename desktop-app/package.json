@@ -1,0 +1,64 @@
+{
+  "name": "emmaneigh",
+  "version": "2.0.0",
+  "description": "Signature Packet Automation for M&A Transactions",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"npm run dev:react\" \"wait-on http://localhost:3000 && electron .\"",
+    "dev:react": "cd frontend && npm run dev",
+    "build": "npm run build:react && npm run build:electron",
+    "build:react": "cd frontend && npm run build",
+    "build:electron": "electron-builder",
+    "build:python": "cd python && pyinstaller --onefile --name processor main.py",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win portable",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux AppImage"
+  },
+  "author": "Raam Tambe",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "archiver": "^6.0.1"
+  },
+  "build": {
+    "appId": "com.emmaneigh.app",
+    "productName": "EmmaNeigh",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*",
+      "python/dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "python/dist/processor",
+        "to": "python/processor"
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    },
+    "portable": {
+      "artifactName": "EmmaNeigh-Portable.exe"
+    }
+  }
+}
