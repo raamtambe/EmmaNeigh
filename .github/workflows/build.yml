@@ -1,0 +1,194 @@
+name: Build EmmaNeigh
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-python-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r desktop-app/python/requirements.txt
+
+      - name: Build Python processor
+        run: |
+          cd desktop-app/python
+          pyinstaller --onefile --name processor main.py
+
+      - name: Upload Python artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-processor-windows
+          path: desktop-app/python/dist/processor.exe
+
+  build-python-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r desktop-app/python/requirements.txt
+
+      - name: Build Python processor
+        run: |
+          cd desktop-app/python
+          pyinstaller --onefile --name processor main.py
+
+      - name: Upload Python artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-processor-mac
+          path: desktop-app/python/dist/processor
+
+  build-electron-windows:
+    needs: build-python-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download Python processor
+        uses: actions/download-artifact@v4
+        with:
+          name: python-processor-windows
+          path: desktop-app/python/dist
+
+      - name: Install dependencies
+        run: |
+          cd desktop-app
+          npm install
+          cd frontend
+          npm install
+
+      - name: Build frontend
+        run: |
+          cd desktop-app/frontend
+          npm run build
+
+      - name: Build Electron app
+        run: |
+          cd desktop-app
+          npx electron-builder --win portable --x64
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmmaNeigh-Windows
+          path: desktop-app/dist/EmmaNeigh-Portable.exe
+
+  build-electron-mac:
+    needs: build-python-mac
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download Python processor
+        uses: actions/download-artifact@v4
+        with:
+          name: python-processor-mac
+          path: desktop-app/python/dist
+
+      - name: Make processor executable
+        run: chmod +x desktop-app/python/dist/processor
+
+      - name: Install dependencies
+        run: |
+          cd desktop-app
+          npm install
+          cd frontend
+          npm install
+
+      - name: Build frontend
+        run: |
+          cd desktop-app/frontend
+          npm run build
+
+      - name: Build Electron app
+        run: |
+          cd desktop-app
+          npx electron-builder --mac --x64
+
+      - name: Upload Mac artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmmaNeigh-Mac
+          path: desktop-app/dist/*.dmg
+
+  create-release:
+    needs: [build-electron-windows, build-electron-mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: EmmaNeigh-Windows
+          path: ./windows
+
+      - name: Download Mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: EmmaNeigh-Mac
+          path: ./mac
+
+      - name: List files
+        run: |
+          ls -la ./windows
+          ls -la ./mac
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ./windows/EmmaNeigh-Portable.exe
+            ./mac/*.dmg
+          body: |
+            ## EmmaNeigh v2.0.0 - Desktop Application
+
+            ### Downloads
+            - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run!
+            - **Mac**: Download the `.dmg` file, open it, drag EmmaNeigh to Applications
+
+            ### What's New
+            - Modern GUI with drag & drop file upload
+            - Running horse animation during processing
+            - Create Signature Packets from multiple PDFs
+            - NEW: Create Execution Versions (merge DocuSign signed pages)
+            - ZIP download for all signature packets
+
+            ### Security
+            - 100% local processing - no data leaves your machine
+            - No internet connection required
+            - No installation needed (portable app)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
