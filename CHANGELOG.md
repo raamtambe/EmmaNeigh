@@ -4,6 +4,17 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 ---
 
+## [2.2.0] - 2026-02-03
+
+### Changed
+- **Clean, professional UI** - Removed generic "AI slop" styling
+- **Inter font** - Modern, readable typography
+- **SVG icons** - Replaced emojis with clean vector icons
+- **Slate color palette** - Subtle, refined appearance
+- **Simplified animation** - Cleaner horse animation during processing
+
+---
+
 ## [2.1.0] - 2026-02-02
 
 ### Changed
@@ -57,6 +68,7 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 2.2.0 | 2026-02-03 | Clean, professional UI redesign |
 | 2.1.0 | 2026-02-02 | One-click download & run |
 | 2.0.0 | 2026-02-01 | Desktop GUI, Execution Version creator |
 | 1.0.0 | 2026-01-31 | Initial release |
