@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const archiver = require('archiver');
-const pdfProcessor = require('./pdf-processor');
+const { spawn } = require('child_process');
 
 // Determine if we're in development or production
 const isDev = !app.isPackaged;
@@ -50,6 +50,104 @@ app.on('activate', () => {
     createWindow();
   }
 });
+
+// Get path to Python processor executable
+function getPythonProcessorPath() {
+  if (isDev) {
+    // In development, use Python directly
+    return null;
+  }
+
+  // In production, use bundled executable
+  const resourcesPath = process.resourcesPath;
+  const platform = process.platform;
+
+  if (platform === 'win32') {
+    return path.join(resourcesPath, 'python-processor', 'signature_packets.exe');
+  } else if (platform === 'darwin') {
+    return path.join(resourcesPath, 'python-processor', 'signature_packets');
+  }
+
+  return null;
+}
+
+// Run Python processor
+function runPythonProcessor(args, progressCallback) {
+  return new Promise((resolve, reject) => {
+    const processorPath = getPythonProcessorPath();
+
+    if (!processorPath) {
+      reject(new Error('Python processor not found. Please use the built application.'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error(`Processor not found at: ${processorPath}`));
+      return;
+    }
+
+    // Make executable on Mac
+    if (process.platform === 'darwin') {
+      try {
+        fs.chmodSync(processorPath, '755');
+      } catch (e) {
+        // Ignore chmod errors
+      }
+    }
+
+    const proc = spawn(processorPath, args);
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      const text = data.toString();
+      stdout += text;
+
+      // Parse progress messages (JSON lines)
+      const lines = text.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress' && progressCallback) {
+            progressCallback(msg.stage, msg.percent, msg.message);
+          }
+        } catch (e) {
+          // Not JSON, ignore
+        }
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        // Find the last JSON result line
+        const lines = stdout.split('\n').filter(l => l.trim());
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            const result = JSON.parse(lines[i]);
+            if (result.type === 'result') {
+              resolve(result);
+              return;
+            }
+          } catch (e) {
+            // Not JSON, continue
+          }
+        }
+        reject(new Error('No result from processor'));
+      } else {
+        reject(new Error(stderr || `Process exited with code ${code}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
 
 // IPC Handlers
 
@@ -106,8 +204,11 @@ ipcMain.handle('process-signature-packets', async (event, filePaths) => {
       });
     };
 
-    // Process using JavaScript PDF processor
-    const result = await pdfProcessor.processSignaturePackets(tempDir, progressCallback);
+    // Run Python processor
+    const result = await runPythonProcessor(
+      ['signature-packets', tempDir],
+      progressCallback
+    );
 
     if (result.success) {
       // Create ZIP file from output
@@ -115,7 +216,12 @@ ipcMain.handle('process-signature-packets', async (event, filePaths) => {
       const zipPath = path.join(app.getPath('temp'), `EmmaNeigh-Output-${Date.now()}.zip`);
 
       await createZipFromDirectory(outputDir, zipPath);
-      return { success: true, zipPath, ...result };
+      return {
+        success: true,
+        zipPath,
+        packetsCreated: result.packetsCreated,
+        packets: result.packets
+      };
     } else {
       return { success: false, error: result.error || 'Processing failed' };
     }
@@ -137,10 +243,9 @@ ipcMain.handle('create-execution-version', async (event, originalPath, signedPat
       });
     };
 
-    const result = await pdfProcessor.createExecutionVersion(
-      originalPath,
-      signedPath,
-      insertAfter,
+    // Run Python processor
+    const result = await runPythonProcessor(
+      ['execution-version', originalPath, signedPath, String(insertAfter)],
       progressCallback
     );
 

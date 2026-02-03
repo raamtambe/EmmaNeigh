@@ -42,11 +42,11 @@ def emit_error(error: str):
     print(json.dumps(output), flush=True)
 
 
-def emit_complete(result: dict):
-    """Send completion with result to Electron frontend."""
+def emit_result(result: dict):
+    """Send result to Electron frontend."""
     output = {
-        "type": "complete",
-        "result": result
+        "type": "result",
+        **result
     }
     print(json.dumps(output), flush=True)
 
@@ -66,7 +66,7 @@ def main():
 
             input_folder = sys.argv[2]
             result = process_signature_packets(input_folder, emit_progress)
-            emit_complete(result)
+            emit_result(result)
 
         elif command == "execution-version":
             if len(sys.argv) < 5:
@@ -78,7 +78,7 @@ def main():
             insert_after = int(sys.argv[4])
 
             result = create_execution_version(original_pdf, signed_pdf, insert_after, emit_progress)
-            emit_complete(result)
+            emit_result(result)
 
         else:
             emit_error(f"Unknown command: {command}")
