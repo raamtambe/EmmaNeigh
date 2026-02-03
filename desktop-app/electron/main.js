@@ -1,8 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
 const fs = require('fs');
 const archiver = require('archiver');
+const pdfProcessor = require('./pdf-processor');
 
 // Determine if we're in development or production
 const isDev = !app.isPackaged;
@@ -51,26 +51,6 @@ app.on('activate', () => {
   }
 });
 
-// Get the path to the Python processor
-function getPythonPath() {
-  if (isDev) {
-    // In development, use the Python script directly
-    return {
-      executable: 'python3',
-      script: path.join(__dirname, '../python/main.py'),
-      useScript: true
-    };
-  } else {
-    // In production, use the bundled executable
-    const resourcePath = process.resourcesPath;
-    const processorPath = path.join(resourcePath, 'python', 'processor');
-    return {
-      executable: processorPath,
-      useScript: false
-    };
-  }
-}
-
 // IPC Handlers
 
 // Select files dialog
@@ -104,125 +84,70 @@ ipcMain.handle('save-file', async (event, defaultName) => {
 
 // Process signature packets
 ipcMain.handle('process-signature-packets', async (event, filePaths) => {
-  return new Promise((resolve, reject) => {
-    const pythonConfig = getPythonPath();
+  try {
     const tempDir = path.join(app.getPath('temp'), 'emmaneigh-' + Date.now());
 
     // Create temp directory
     fs.mkdirSync(tempDir, { recursive: true });
 
     // Copy files to temp directory
-    filePaths.forEach(filePath => {
+    for (const filePath of filePaths) {
       const fileName = path.basename(filePath);
       fs.copyFileSync(filePath, path.join(tempDir, fileName));
-    });
-
-    let args;
-    let executable;
-
-    if (pythonConfig.useScript) {
-      executable = pythonConfig.executable;
-      args = [pythonConfig.script, 'signature-packets', tempDir];
-    } else {
-      executable = pythonConfig.executable;
-      args = ['signature-packets', tempDir];
     }
 
-    const pythonProcess = spawn(executable, args);
-
-    let outputData = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        try {
-          const progress = JSON.parse(line);
-          mainWindow.webContents.send('progress', progress);
-        } catch (e) {
-          // Not JSON, ignore
-        }
+    // Progress callback
+    const progressCallback = (stage, percent, message) => {
+      mainWindow.webContents.send('progress', {
+        type: 'progress',
+        stage,
+        percent,
+        message
       });
-    });
+    };
 
-    pythonProcess.stderr.on('data', (data) => {
-      console.error('Python stderr:', data.toString());
-    });
+    // Process using JavaScript PDF processor
+    const result = await pdfProcessor.processSignaturePackets(tempDir, progressCallback);
 
-    pythonProcess.on('close', async (code) => {
-      if (code === 0) {
-        // Create ZIP file from output
-        const outputDir = path.join(tempDir, 'signature_packets_output');
-        const zipPath = path.join(app.getPath('temp'), `EmmaNeigh-Output-${Date.now()}.zip`);
+    if (result.success) {
+      // Create ZIP file from output
+      const outputDir = result.outputPath;
+      const zipPath = path.join(app.getPath('temp'), `EmmaNeigh-Output-${Date.now()}.zip`);
 
-        try {
-          await createZipFromDirectory(outputDir, zipPath);
-          resolve({ success: true, zipPath });
-        } catch (err) {
-          reject({ success: false, error: err.message });
-        }
-      } else {
-        reject({ success: false, error: `Process exited with code ${code}` });
-      }
-    });
-
-    pythonProcess.on('error', (err) => {
-      reject({ success: false, error: err.message });
-    });
-  });
+      await createZipFromDirectory(outputDir, zipPath);
+      return { success: true, zipPath, ...result };
+    } else {
+      return { success: false, error: result.error || 'Processing failed' };
+    }
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // Create execution version
 ipcMain.handle('create-execution-version', async (event, originalPath, signedPath, insertAfter) => {
-  return new Promise((resolve, reject) => {
-    const pythonConfig = getPythonPath();
-
-    let args;
-    let executable;
-
-    if (pythonConfig.useScript) {
-      executable = pythonConfig.executable;
-      args = [pythonConfig.script, 'execution-version', originalPath, signedPath, insertAfter.toString()];
-    } else {
-      executable = pythonConfig.executable;
-      args = ['execution-version', originalPath, signedPath, insertAfter.toString()];
-    }
-
-    const pythonProcess = spawn(executable, args);
-
-    let outputPath = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      const lines = data.toString().split('\n').filter(line => line.trim());
-      lines.forEach(line => {
-        try {
-          const result = JSON.parse(line);
-          if (result.type === 'progress') {
-            mainWindow.webContents.send('progress', result);
-          } else if (result.type === 'complete') {
-            outputPath = result.outputPath;
-          }
-        } catch (e) {
-          // Not JSON, ignore
-        }
+  try {
+    // Progress callback
+    const progressCallback = (stage, percent, message) => {
+      mainWindow.webContents.send('progress', {
+        type: 'progress',
+        stage,
+        percent,
+        message
       });
-    });
+    };
 
-    pythonProcess.stderr.on('data', (data) => {
-      console.error('Python stderr:', data.toString());
-    });
+    const result = await pdfProcessor.createExecutionVersion(
+      originalPath,
+      signedPath,
+      insertAfter,
+      progressCallback
+    );
 
-    pythonProcess.on('close', (code) => {
-      if (code === 0 && outputPath) {
-        resolve({ success: true, outputPath });
-      } else {
-        reject({ success: false, error: `Process exited with code ${code}` });
-      }
-    });
-
-    pythonProcess.on('error', (err) => {
-      reject({ success: false, error: err.message });
-    });
-  });
+    return result;
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // Copy file to user-selected location
