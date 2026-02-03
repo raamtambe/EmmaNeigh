@@ -4,12 +4,44 @@ import FileUpload from '../components/FileUpload'
 import HorseAnimation from '../components/HorseAnimation'
 import ProgressBar from '../components/ProgressBar'
 
-// Processing states
 const STATE = {
   IDLE: 'idle',
   PROCESSING: 'processing',
   COMPLETE: 'complete',
   ERROR: 'error',
+}
+
+// Icons
+function BackIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+    </svg>
+  )
+}
+
+function DownloadIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+    </svg>
+  )
+}
+
+function CheckIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+    </svg>
+  )
+}
+
+function AlertIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+    </svg>
+  )
 }
 
 export default function SignaturePackets() {
@@ -20,19 +52,13 @@ export default function SignaturePackets() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
 
-  // Set up progress listener
   useEffect(() => {
     if (!window.api) return
-
     const cleanup = window.api.onProgress((data) => {
       if (data.type === 'progress') {
-        setProgress({
-          percent: data.percent,
-          message: data.message,
-        })
+        setProgress({ percent: data.percent, message: data.message })
       }
     })
-
     return cleanup
   }, [])
 
@@ -49,10 +75,7 @@ export default function SignaturePackets() {
     setError(null)
 
     try {
-      // Get file paths
       const filePaths = selectedFiles.map(f => f.path || f.name)
-
-      // Call the Electron API
       const response = await window.api.processSignaturePackets(filePaths)
 
       if (response.success) {
@@ -69,11 +92,9 @@ export default function SignaturePackets() {
 
   const handleDownload = async () => {
     if (!result?.zipPath) return
-
     const savePath = await window.api.saveFile('EmmaNeigh-Signature-Packets.zip')
     if (savePath) {
       await window.api.copyFile(result.zipPath, savePath)
-      // Could show a success notification here
     }
   }
 
@@ -86,132 +107,111 @@ export default function SignaturePackets() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center gap-4">
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center gap-3">
           <button
             onClick={() => navigate('/')}
-            className="text-gray-500 hover:text-gray-700 transition-colors"
+            className="p-1.5 -ml-1.5 text-slate-400 hover:text-slate-600 transition-colors rounded-md hover:bg-slate-100"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
+            <BackIcon className="w-5 h-5" />
           </button>
-          <h1 className="text-2xl font-bold text-emma-navy">Create Signature Packets</h1>
+          <h1 className="text-lg font-semibold text-slate-900">Create Signature Packets</h1>
         </div>
       </header>
 
       {/* Main content */}
-      <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-8">
-        {/* Idle State - File Selection */}
+      <main className="flex-1 max-w-3xl mx-auto w-full px-6 py-8">
+        {/* Idle State */}
         {state === STATE.IDLE && (
-          <div className="space-y-6 animate-fade-in">
-            <div className="bg-white rounded-2xl shadow-lg p-8">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">
-                Select PDF Files
-              </h2>
-              <p className="text-gray-600 mb-6">
-                Choose the PDF documents containing signature pages. The tool will scan each document,
-                identify signature pages, and organize them by signer.
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg border border-slate-200 p-6">
+              <h2 className="text-base font-medium text-slate-900 mb-1">Select PDF files</h2>
+              <p className="text-sm text-slate-500 mb-6">
+                Choose documents containing signature pages. The tool will identify signers and create individual packets.
               </p>
 
               <FileUpload
                 onFilesSelected={handleFilesSelected}
                 selectedFiles={selectedFiles}
-                title="Drag & drop PDF files here"
-                subtitle="or click to browse your files"
               />
 
               {selectedFiles.length > 0 && (
-                <div className="mt-6 flex justify-center">
+                <div className="mt-6 flex justify-end">
                   <button
                     onClick={handleProcess}
-                    className="px-8 py-3 bg-blue-600 text-white font-semibold rounded-xl
-                             hover:bg-blue-700 transition-colors shadow-lg hover:shadow-xl"
+                    className="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800 transition-colors"
                   >
-                    Create Signature Packets
+                    Create Packets
                   </button>
                 </div>
               )}
             </div>
 
-            {/* Info card */}
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-              <h3 className="font-semibold text-blue-800 mb-2">How it works</h3>
-              <ul className="text-blue-700 text-sm space-y-1">
-                <li>1. The tool scans each PDF for signature pages</li>
-                <li>2. It identifies signers by looking for "BY:" and "Name:" fields</li>
-                <li>3. Pages are grouped by signer into individual packets</li>
-                <li>4. You'll receive a ZIP file with all packets and an Excel index</li>
-              </ul>
+            {/* Info */}
+            <div className="bg-slate-100 rounded-lg p-4">
+              <h3 className="text-sm font-medium text-slate-700 mb-2">How it works</h3>
+              <ol className="text-sm text-slate-600 space-y-1 list-decimal list-inside">
+                <li>Upload PDF documents containing signature pages</li>
+                <li>The tool scans for "BY:" and "Name:" fields to identify signers</li>
+                <li>Pages are grouped by signer into individual packets</li>
+                <li>Download a ZIP file with all packets</li>
+              </ol>
             </div>
           </div>
         )}
 
         {/* Processing State */}
         {state === STATE.PROCESSING && (
-          <div className="bg-white rounded-2xl shadow-lg p-8 animate-fade-in">
+          <div className="bg-white rounded-lg border border-slate-200 p-8">
             <HorseAnimation
               statusMessage={progress.message || 'Processing...'}
               isRunning={true}
             />
-
-            <div className="mt-8 max-w-md mx-auto">
+            <div className="mt-6 max-w-sm mx-auto">
               <ProgressBar percent={progress.percent} />
             </div>
-
-            <p className="text-center text-gray-500 mt-6 text-sm">
-              Please wait while your documents are being processed...
-            </p>
           </div>
         )}
 
         {/* Complete State */}
         {state === STATE.COMPLETE && result && (
-          <div className="bg-white rounded-2xl shadow-lg p-8 animate-fade-in">
-            <div className="text-center mb-8">
-              <div className="text-6xl mb-4">✅</div>
-              <h2 className="text-2xl font-bold text-green-600 mb-2">Complete!</h2>
-              <p className="text-gray-600">
+          <div className="bg-white rounded-lg border border-slate-200 p-8">
+            <div className="text-center mb-6">
+              <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <CheckIcon className="w-6 h-6 text-emerald-600" />
+              </div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-1">Complete</h2>
+              <p className="text-sm text-slate-500">
                 Created {result.packetsCreated || 0} signature packet{result.packetsCreated !== 1 ? 's' : ''}
               </p>
             </div>
 
-            {/* Results list */}
             {result.packets && result.packets.length > 0 && (
-              <div className="bg-gray-50 rounded-xl p-4 mb-6 max-h-48 overflow-y-auto">
-                <h3 className="font-semibold text-gray-700 mb-2">Packets Created:</h3>
+              <div className="bg-slate-50 rounded-md p-4 mb-6 max-h-40 overflow-y-auto">
                 <ul className="space-y-1">
                   {result.packets.map((packet, idx) => (
                     <li key={idx} className="flex justify-between text-sm">
-                      <span className="text-gray-700">{packet.name}</span>
-                      <span className="text-gray-500">{packet.pages} page{packet.pages !== 1 ? 's' : ''}</span>
+                      <span className="text-slate-700">{packet.name}</span>
+                      <span className="text-slate-400">{packet.pages} pg</span>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
 
-            {/* Action buttons */}
-            <div className="flex justify-center gap-4">
+            <div className="flex justify-center gap-3">
               <button
                 onClick={handleDownload}
-                className="px-8 py-3 bg-green-600 text-white font-semibold rounded-xl
-                         hover:bg-green-700 transition-colors shadow-lg hover:shadow-xl
-                         flex items-center gap-2"
+                className="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800 transition-colors flex items-center gap-2"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
+                <DownloadIcon className="w-4 h-4" />
                 Download ZIP
               </button>
-
               <button
                 onClick={handleReset}
-                className="px-8 py-3 bg-gray-100 text-gray-700 font-semibold rounded-xl
-                         hover:bg-gray-200 transition-colors"
+                className="px-4 py-2 bg-slate-100 text-slate-700 text-sm font-medium rounded-md hover:bg-slate-200 transition-colors"
               >
                 Start Over
               </button>
@@ -221,18 +221,18 @@ export default function SignaturePackets() {
 
         {/* Error State */}
         {state === STATE.ERROR && (
-          <div className="bg-white rounded-2xl shadow-lg p-8 animate-fade-in">
+          <div className="bg-white rounded-lg border border-slate-200 p-8">
             <div className="text-center mb-6">
-              <div className="text-6xl mb-4">❌</div>
-              <h2 className="text-2xl font-bold text-red-600 mb-2">Error</h2>
-              <p className="text-gray-600">{error}</p>
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertIcon className="w-6 h-6 text-red-600" />
+              </div>
+              <h2 className="text-lg font-semibold text-slate-900 mb-1">Error</h2>
+              <p className="text-sm text-slate-500">{error}</p>
             </div>
-
             <div className="flex justify-center">
               <button
                 onClick={handleReset}
-                className="px-8 py-3 bg-blue-600 text-white font-semibold rounded-xl
-                         hover:bg-blue-700 transition-colors"
+                className="px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-md hover:bg-slate-800 transition-colors"
               >
                 Try Again
               </button>
@@ -242,8 +242,12 @@ export default function SignaturePackets() {
       </main>
 
       {/* Footer */}
-      <footer className="py-4 text-center text-sm text-gray-500">
-        All processing is done locally. No data leaves your machine.
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-6 py-4">
+          <p className="text-xs text-slate-400">
+            All processing happens locally. No data leaves your machine.
+          </p>
+        </div>
       </footer>
     </div>
   )

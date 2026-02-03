@@ -1,40 +1,64 @@
 import { useNavigate } from 'react-router-dom'
 
-// Horse icon SVG component
+// Clean, professional horse icon
 function HorseIcon({ className }) {
   return (
-    <svg
-      className={className}
-      viewBox="0 0 100 100"
-      fill="currentColor"
-    >
-      <path d="M85 25c-5-8-15-10-25-8-3-5-8-7-15-7-10 0-18 5-22 12-8 2-14 8-16 16-3 12 2 25 12 32v15c0 3 2 5 5 5h8c3 0 5-2 5-5v-10h10v10c0 3 2 5 5 5h8c3 0 5-2 5-5V70c8-5 14-14 15-25 8 0 12-10 5-20zM35 45c-3 0-5-2-5-5s2-5 5-5 5 2 5 5-2 5-5 5z"/>
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21.5 9.5c-.3-1.1-1-2-1.9-2.6.2-.9.1-1.8-.3-2.6-.4-.8-1.1-1.4-2-1.7-.2-.1-.4-.1-.6 0-.2.1-.3.2-.4.4l-.8 2c-.3.1-.6.2-.9.4l-2-.8c-.2-.1-.4-.1-.6 0-.2.1-.3.2-.4.4-.6 1.4-.2 3 .9 4l-.3.5c-.9.2-1.7.7-2.3 1.4l-6.2 6.2c-.4.4-.4 1 0 1.4.2.2.5.3.7.3s.5-.1.7-.3l5.8-5.8c.1.3.2.6.2.9l-1.5 4.5c-.1.4 0 .8.3 1.1.2.2.5.3.8.3.1 0 .3 0 .4-.1l3-1c.2-.1.4-.2.5-.4l2.6-3.9c.4-.1.8-.2 1.1-.4l1.8.9c.1.1.3.1.4.1.3 0 .5-.1.7-.3.3-.3.4-.7.2-1.1l-.9-1.8c.2-.4.3-.8.4-1.3h2c.6 0 1-.4 1-1s-.4-1-1-1zM19 10.5c0 .3 0 .5-.1.8l-.1.4.8 1.6-1.2-.6-.3.2c-.4.3-.8.4-1.3.5l-.4.1-2.5 3.8-2 .7 1.2-3.6.1-.4c0-.5-.1-1-.3-1.4l-.2-.4.3-.3c.5-.5 1.1-.8 1.8-.9l.4-.1.7-1.3-.1-.4c-.3-.6-.4-1.2-.2-1.8l1.4.6.4-.2c.4-.2.9-.4 1.3-.4l.4-.1.6-1.4c.3.2.5.5.6.8.2.5.2 1.1 0 1.6l-.2.4.3.3c.5.5.8 1.1.9 1.8z"/>
     </svg>
   )
 }
 
-function FeatureCard({ title, description, icon, onClick, disabled, comingSoon }) {
+// Document icon
+function DocumentIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+    </svg>
+  )
+}
+
+// Merge icon
+function MergeIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+    </svg>
+  )
+}
+
+// Send icon
+function SendIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+    </svg>
+  )
+}
+
+function FeatureCard({ title, description, icon: Icon, onClick, disabled, comingSoon }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       className={`
-        relative p-8 rounded-2xl text-left transition-all duration-300
+        relative p-6 rounded-lg text-left transition-all duration-200
         ${disabled
-          ? 'bg-gray-100 cursor-not-allowed opacity-60'
-          : 'bg-white hover:bg-blue-50 hover:shadow-xl hover:-translate-y-1 cursor-pointer shadow-lg'
+          ? 'bg-slate-50 cursor-not-allowed'
+          : 'bg-white hover:bg-slate-50 cursor-pointer border border-slate-200 hover:border-slate-300 hover:shadow-sm'
         }
-        border border-gray-200
       `}
     >
       {comingSoon && (
-        <span className="absolute top-4 right-4 bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-1 rounded-full">
-          Coming Soon
+        <span className="absolute top-3 right-3 text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
+          Soon
         </span>
       )}
-      <div className="text-5xl mb-4">{icon}</div>
-      <h3 className="text-xl font-bold text-emma-navy mb-2">{title}</h3>
-      <p className="text-gray-600 text-sm">{description}</p>
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${disabled ? 'bg-slate-100' : 'bg-slate-900'}`}>
+        <Icon className={`w-5 h-5 ${disabled ? 'text-slate-400' : 'text-white'}`} />
+      </div>
+      <h3 className={`text-base font-semibold mb-1 ${disabled ? 'text-slate-400' : 'text-slate-900'}`}>{title}</h3>
+      <p className={`text-sm leading-relaxed ${disabled ? 'text-slate-400' : 'text-slate-500'}`}>{description}</p>
     </button>
   )
 }
@@ -43,47 +67,62 @@ export default function MainMenu() {
   const navigate = useNavigate()
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-8">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header */}
-      <div className="text-center mb-12 animate-fade-in">
-        <div className="flex items-center justify-center gap-4 mb-4">
-          <HorseIcon className="w-16 h-16 text-emma-navy" />
-          <h1 className="text-5xl font-bold text-emma-navy">EmmaNeigh</h1>
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-3xl mx-auto px-6 py-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-slate-900 rounded-lg flex items-center justify-center">
+              <HorseIcon className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-slate-900">EmmaNeigh</h1>
+              <p className="text-sm text-slate-500">Signature Packet Automation</p>
+            </div>
+          </div>
         </div>
-        <p className="text-xl text-gray-600">Signature Packet Automation</p>
-        <p className="text-sm text-gray-500 mt-2">For M&A Transactions and Financing Deals</p>
-      </div>
+      </header>
 
-      {/* Feature Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl w-full">
-        <FeatureCard
-          icon="📝"
-          title="Create Signature Packets"
-          description="Extract signature pages from multiple PDFs and organize them by signer. Creates individual packets ready for DocuSign."
-          onClick={() => navigate('/signature-packets')}
-        />
+      {/* Main content */}
+      <main className="flex-1 max-w-3xl mx-auto w-full px-6 py-8">
+        <div className="mb-6">
+          <h2 className="text-sm font-medium text-slate-500 uppercase tracking-wide">Tools</h2>
+        </div>
 
-        <FeatureCard
-          icon="📋"
-          title="Create Execution Version"
-          description="Merge signed pages back into the original document. Automatically unlocks DocuSign PDFs and creates the final execution version."
-          onClick={() => navigate('/execution-version')}
-        />
+        {/* Feature Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <FeatureCard
+            icon={DocumentIcon}
+            title="Create Signature Packets"
+            description="Extract signature pages from PDFs and organize by signer for DocuSign."
+            onClick={() => navigate('/signature-packets')}
+          />
 
-        <FeatureCard
-          icon="📧"
-          title="DocuSign Integration"
-          description="Send signature packets directly to signers via DocuSign. Track signature status and receive completed documents."
-          disabled
-          comingSoon
-        />
-      </div>
+          <FeatureCard
+            icon={MergeIcon}
+            title="Create Execution Version"
+            description="Merge signed pages back into the original document."
+            onClick={() => navigate('/execution-version')}
+          />
+
+          <FeatureCard
+            icon={SendIcon}
+            title="DocuSign Integration"
+            description="Send packets directly to signers via DocuSign."
+            disabled
+            comingSoon
+          />
+        </div>
+      </main>
 
       {/* Footer */}
-      <div className="mt-12 text-center text-sm text-gray-500">
-        <p>All processing is done locally on your machine.</p>
-        <p className="mt-1">No data is ever sent to the cloud.</p>
-      </div>
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="max-w-3xl mx-auto px-6 py-4">
+          <p className="text-xs text-slate-400">
+            All processing happens locally on your machine. No data is sent to external servers.
+          </p>
+        </div>
+      </footer>
     </div>
   )
 }
