@@ -304,24 +304,126 @@
     }
 
     /* Coming Soon */
-    .coming-soon {
-      margin-top: 32px;
-      padding: 16px;
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 24px;
       background: #111;
+      padding: 4px;
       border-radius: 8px;
-      text-align: center;
+      -webkit-app-region: no-drag;
     }
 
-    .coming-soon h3 {
+    .tab {
+      flex: 1;
+      padding: 10px 16px;
       font-size: 13px;
       font-weight: 500;
       color: #666;
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .tab:hover {
+      color: #888;
+    }
+
+    .tab.active {
+      background: #222;
+      color: #fff;
+    }
+
+    /* Execution Version UI */
+    .exec-inputs {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .input-section {
+      border: 1px dashed #333;
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      min-height: 100px;
+    }
+
+    .input-section:hover {
+      border-color: #444;
+      background: rgba(255,255,255,0.02);
+    }
+
+    .input-section.active {
+      border-color: #fff;
+      background: rgba(255,255,255,0.05);
+    }
+
+    .input-section.selected {
+      border-color: #22c55e;
+      border-style: solid;
+    }
+
+    .input-section.disabled {
+      pointer-events: none;
+      opacity: 0.5;
+    }
+
+    .input-icon {
+      width: 32px;
+      height: 32px;
+      margin-bottom: 12px;
+      opacity: 0.4;
+    }
+
+    .input-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: #fff;
       margin-bottom: 4px;
     }
 
-    .coming-soon p {
+    .input-hint {
       font-size: 12px;
-      color: #444;
+      color: #555;
+    }
+
+    .input-selected {
+      font-size: 12px;
+      color: #22c55e;
+      margin-top: 8px;
+      word-break: break-all;
+      text-align: center;
+      max-width: 100%;
+    }
+
+    .exec-actions {
+      margin-top: 16px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Results summary */
+    .result-summary {
+      font-size: 13px;
+      color: #888;
+      margin-top: 8px;
+      text-align: center;
     }
   </style>
 </head>
@@ -329,9 +431,14 @@
   <div class="container">
     <header>
       <div class="logo">EmmaNeigh</div>
-      <h1>Signature Packets</h1>
-      <p class="subtitle">Extract and organize signature pages by signer</p>
+      <div class="tabs">
+        <button class="tab active" data-tab="packets">Signature Packets</button>
+        <button class="tab" data-tab="execution">Execution Version</button>
+      </div>
     </header>
+
+    <!-- Signature Packets Tab -->
+    <div id="packetsTab">
 
     <!-- Drop Zone -->
     <div class="drop-zone" id="dropZone">
@@ -405,11 +512,93 @@
       <p id="errorText">Something went wrong</p>
       <button class="btn btn-secondary" id="retryBtn">Try Again</button>
     </div>
+    </div><!-- End packetsTab -->
 
-    <div class="coming-soon">
-      <h3>Execution Version</h3>
-      <p>Merge signed DocuSign pages back into documents — coming soon</p>
-    </div>
+    <!-- Execution Version Tab -->
+    <div id="executionTab" style="display: none;">
+      <!-- Execution Inputs -->
+      <div class="exec-inputs" id="execInputs">
+        <p class="subtitle" style="margin-bottom: 8px;">Merge signed DocuSign pages back into original agreements</p>
+
+        <div class="input-section" id="originalsInput">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+          </svg>
+          <p class="input-label">Original Agreements Folder</p>
+          <p class="input-hint">Folder containing unsigned PDFs</p>
+          <p class="input-selected" id="originalsSelected"></p>
+        </div>
+
+        <div class="input-section" id="signedInput">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+          </svg>
+          <p class="input-label">Signed PDF from DocuSign</p>
+          <p class="input-hint">Single PDF with all signed pages</p>
+          <p class="input-selected" id="signedSelected"></p>
+        </div>
+
+        <div class="exec-actions">
+          <button class="btn btn-primary" id="processExecBtn" disabled>Create Execution Versions</button>
+        </div>
+      </div>
+
+      <!-- Execution Processing -->
+      <div class="processing" id="execProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <g class="front-legs">
+                <rect x="62" y="46" width="5" height="14" rx="2"/>
+                <rect x="54" y="46" width="5" height="14" rx="2"/>
+              </g>
+              <g class="back-legs">
+                <rect x="38" y="46" width="5" height="14" rx="2"/>
+                <rect x="30" y="46" width="5" height="14" rx="2"/>
+              </g>
+            </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+          </div>
+        </div>
+        <p class="progress-text" id="execProgressText">Processing...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="execProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Execution Complete -->
+      <div class="complete" id="execComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Complete</h2>
+        <p id="execResultText">Created 0 executed documents</p>
+        <p class="result-summary" id="execResultSummary"></p>
+        <button class="btn btn-primary" id="execDownloadBtn">Download ZIP</button>
+        <button class="btn btn-secondary" id="execResetBtn">Process Another</button>
+      </div>
+
+      <!-- Execution Error -->
+      <div class="error" id="execError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="execErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="execRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End executionTab -->
 
     <footer>
       <p>All processing happens locally. No data leaves your machine.</p>
@@ -419,6 +608,23 @@
   <script>
     const { ipcRenderer } = require('electron');
 
+    // ========== TABS ==========
+    const tabs = document.querySelectorAll('.tab');
+    const packetsTab = document.getElementById('packetsTab');
+    const executionTab = document.getElementById('executionTab');
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        const tabName = tab.dataset.tab;
+        packetsTab.style.display = tabName === 'packets' ? 'block' : 'none';
+        executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
+      });
+    });
+
+    // ========== SIGNATURE PACKETS TAB ==========
     const dropZone = document.getElementById('dropZone');
     const processing = document.getElementById('processing');
     const complete = document.getElementById('complete');
@@ -434,7 +640,6 @@
     let currentResult = null;
     let currentZipPath = null;
 
-    // State management
     function showState(state) {
       dropZone.style.display = state === 'idle' ? 'flex' : 'none';
       processing.classList.toggle('visible', state === 'processing');
@@ -442,7 +647,6 @@
       error.classList.toggle('visible', state === 'error');
     }
 
-    // Drag and drop
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
       dropZone.classList.add('active');
@@ -455,23 +659,17 @@
     dropZone.addEventListener('drop', async (e) => {
       e.preventDefault();
       dropZone.classList.remove('active');
-
       const files = e.dataTransfer.files;
       if (files.length > 0) {
-        const folderPath = files[0].path;
-        await processFolder(folderPath);
+        await processFolder(files[0].path);
       }
     });
 
-    // Click to browse
     dropZone.addEventListener('click', async () => {
       const folderPath = await ipcRenderer.invoke('select-folder');
-      if (folderPath) {
-        await processFolder(folderPath);
-      }
+      if (folderPath) await processFolder(folderPath);
     });
 
-    // Process folder
     async function processFolder(folderPath) {
       showState('processing');
       progressFill.style.width = '0%';
@@ -480,11 +678,8 @@
       try {
         const result = await ipcRenderer.invoke('process-folder', folderPath);
         currentResult = result;
-
-        // Create ZIP
         progressText.textContent = 'Creating ZIP file...';
         currentZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
-
         resultText.textContent = `Created ${result.packetsCreated} signature packet${result.packetsCreated !== 1 ? 's' : ''}`;
         showState('complete');
       } catch (err) {
@@ -493,20 +688,22 @@
       }
     }
 
-    // Progress updates
     ipcRenderer.on('progress', (event, data) => {
-      progressText.textContent = data.message;
-      progressFill.style.width = data.percent + '%';
-    });
-
-    // Download button
-    downloadBtn.addEventListener('click', async () => {
-      if (currentZipPath) {
-        await ipcRenderer.invoke('save-zip', currentZipPath);
+      // Route to correct progress bar based on active tab
+      const activeTab = document.querySelector('.tab.active').dataset.tab;
+      if (activeTab === 'packets') {
+        progressText.textContent = data.message;
+        progressFill.style.width = data.percent + '%';
+      } else {
+        execProgressText.textContent = data.message;
+        execProgressFill.style.width = data.percent + '%';
       }
     });
 
-    // Reset buttons
+    downloadBtn.addEventListener('click', async () => {
+      if (currentZipPath) await ipcRenderer.invoke('save-zip', currentZipPath);
+    });
+
     resetBtn.addEventListener('click', () => {
       currentResult = null;
       currentZipPath = null;
@@ -518,6 +715,164 @@
       currentZipPath = null;
       showState('idle');
     });
+
+    // ========== EXECUTION VERSION TAB ==========
+    const originalsInput = document.getElementById('originalsInput');
+    const signedInput = document.getElementById('signedInput');
+    const originalsSelected = document.getElementById('originalsSelected');
+    const signedSelected = document.getElementById('signedSelected');
+    const processExecBtn = document.getElementById('processExecBtn');
+    const execInputs = document.getElementById('execInputs');
+    const execProcessing = document.getElementById('execProcessing');
+    const execComplete = document.getElementById('execComplete');
+    const execError = document.getElementById('execError');
+    const execProgressText = document.getElementById('execProgressText');
+    const execProgressFill = document.getElementById('execProgressFill');
+    const execResultText = document.getElementById('execResultText');
+    const execResultSummary = document.getElementById('execResultSummary');
+    const execErrorText = document.getElementById('execErrorText');
+    const execDownloadBtn = document.getElementById('execDownloadBtn');
+    const execResetBtn = document.getElementById('execResetBtn');
+    const execRetryBtn = document.getElementById('execRetryBtn');
+
+    let originalsPath = null;
+    let signedPath = null;
+    let execResult = null;
+    let execZipPath = null;
+
+    function showExecState(state) {
+      execInputs.style.display = state === 'idle' ? 'flex' : 'none';
+      execProcessing.classList.toggle('visible', state === 'processing');
+      execComplete.classList.toggle('visible', state === 'complete');
+      execError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateExecButton() {
+      processExecBtn.disabled = !(originalsPath && signedPath);
+    }
+
+    function truncatePath(p, maxLen = 40) {
+      if (!p || p.length <= maxLen) return p;
+      const name = p.split(/[/\\]/).pop();
+      return '...' + p.slice(-(maxLen - 3));
+    }
+
+    // Originals folder selection
+    originalsInput.addEventListener('click', async () => {
+      const path = await ipcRenderer.invoke('select-folder');
+      if (path) {
+        originalsPath = path;
+        originalsSelected.textContent = truncatePath(path);
+        originalsInput.classList.add('selected');
+        updateExecButton();
+      }
+    });
+
+    originalsInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      originalsInput.classList.add('active');
+    });
+
+    originalsInput.addEventListener('dragleave', () => {
+      originalsInput.classList.remove('active');
+    });
+
+    originalsInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      originalsInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        originalsPath = files[0].path;
+        originalsSelected.textContent = truncatePath(originalsPath);
+        originalsInput.classList.add('selected');
+        updateExecButton();
+      }
+    });
+
+    // Signed PDF selection
+    signedInput.addEventListener('click', async () => {
+      const path = await ipcRenderer.invoke('select-pdf');
+      if (path) {
+        signedPath = path;
+        signedSelected.textContent = truncatePath(path);
+        signedInput.classList.add('selected');
+        updateExecButton();
+      }
+    });
+
+    signedInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      signedInput.classList.add('active');
+    });
+
+    signedInput.addEventListener('dragleave', () => {
+      signedInput.classList.remove('active');
+    });
+
+    signedInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      signedInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0 && files[0].name.toLowerCase().endsWith('.pdf')) {
+        signedPath = files[0].path;
+        signedSelected.textContent = truncatePath(signedPath);
+        signedInput.classList.add('selected');
+        updateExecButton();
+      }
+    });
+
+    // Process execution version
+    processExecBtn.addEventListener('click', async () => {
+      if (!originalsPath || !signedPath) return;
+
+      showExecState('processing');
+      execProgressFill.style.width = '0%';
+      execProgressText.textContent = 'Starting...';
+
+      try {
+        const result = await ipcRenderer.invoke('process-execution-version', originalsPath, signedPath);
+        execResult = result;
+
+        execProgressText.textContent = 'Creating ZIP file...';
+        execZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
+
+        execResultText.textContent = `Created ${result.executedCount} executed document${result.executedCount !== 1 ? 's' : ''}`;
+
+        let summary = `Matched ${result.matchedPages} of ${result.totalSignedPages} signed pages`;
+        if (result.unmatchedAgreements > 0) {
+          summary += ` • ${result.unmatchedAgreements} unmatched agreement${result.unmatchedAgreements !== 1 ? 's' : ''}`;
+        }
+        if (result.unmatchedPages > 0) {
+          summary += ` • ${result.unmatchedPages} unmatched page${result.unmatchedPages !== 1 ? 's' : ''}`;
+        }
+        execResultSummary.textContent = summary;
+
+        showExecState('complete');
+      } catch (err) {
+        execErrorText.textContent = err.message;
+        showExecState('error');
+      }
+    });
+
+    execDownloadBtn.addEventListener('click', async () => {
+      if (execZipPath) await ipcRenderer.invoke('save-zip', execZipPath);
+    });
+
+    function resetExecState() {
+      originalsPath = null;
+      signedPath = null;
+      execResult = null;
+      execZipPath = null;
+      originalsSelected.textContent = '';
+      signedSelected.textContent = '';
+      originalsInput.classList.remove('selected');
+      signedInput.classList.remove('selected');
+      updateExecButton();
+      showExecState('idle');
+    }
+
+    execResetBtn.addEventListener('click', resetExecState);
+    execRetryBtn.addEventListener('click', resetExecState);
   </script>
 </body>
 </html>

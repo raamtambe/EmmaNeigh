@@ -38,7 +38,7 @@ app.on('activate', () => {
 });
 
 // Get the processor path
-function getProcessorPath() {
+function getProcessorPath(processorName = 'signature_packets') {
   const isDev = !app.isPackaged;
 
   if (isDev) {
@@ -49,9 +49,9 @@ function getProcessorPath() {
   // Production - bundled processor
   const resourcesPath = process.resourcesPath;
   if (process.platform === 'win32') {
-    return path.join(resourcesPath, 'processor', 'signature_packets.exe');
+    return path.join(resourcesPath, 'processor', `${processorName}.exe`);
   } else {
-    return path.join(resourcesPath, 'processor', 'signature_packets');
+    return path.join(resourcesPath, 'processor', processorName);
   }
 }
 
@@ -154,4 +154,70 @@ ipcMain.handle('select-folder', async () => {
     properties: ['openDirectory']
   });
   return filePaths[0] || null;
+});
+
+// Select single PDF file
+ipcMain.handle('select-pdf', async () => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'PDF Documents', extensions: ['pdf'] }]
+  });
+  return filePaths[0] || null;
+});
+
+// Process execution version
+ipcMain.handle('process-execution-version', async (event, originalsFolder, signedPdfPath) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('execution_version');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Processor not found: ' + processorPath));
+      return;
+    }
+
+    // Make executable on Mac
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    const proc = spawn(processorPath, [originalsFolder, signedPdfPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      console.error('stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Processing failed with code ' + code));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(err);
+    });
+  });
 });
