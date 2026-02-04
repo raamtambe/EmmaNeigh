@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EmmaNeigh</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    @font-face {
+      font-family: 'SF Pro';
+      src: local('-apple-system'), local('BlinkMacSystemFont'), local('Segoe UI');
+    }
+
+    body {
+      font-family: 'SF Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #fafafa;
+      height: 100vh;
+      overflow: hidden;
+      -webkit-app-region: drag;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 60px 40px 40px;
+    }
+
+    header {
+      margin-bottom: 32px;
+    }
+
+    .logo {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #666;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: #666;
+      margin-top: 6px;
+    }
+
+    .drop-zone {
+      flex: 1;
+      border: 1px dashed #333;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      min-height: 200px;
+    }
+
+    .drop-zone:hover {
+      border-color: #444;
+      background: rgba(255,255,255,0.02);
+    }
+
+    .drop-zone.active {
+      border-color: #fff;
+      background: rgba(255,255,255,0.05);
+    }
+
+    .drop-zone.disabled {
+      pointer-events: none;
+      opacity: 0.5;
+    }
+
+    .drop-icon {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 16px;
+      opacity: 0.4;
+    }
+
+    .drop-text {
+      font-size: 15px;
+      color: #888;
+      text-align: center;
+    }
+
+    .drop-text span {
+      color: #fff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .drop-hint {
+      font-size: 12px;
+      color: #555;
+      margin-top: 8px;
+    }
+
+    /* Processing State */
+    .processing {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .processing.visible {
+      display: flex;
+    }
+
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 2px solid #333;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 20px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .progress-text {
+      font-size: 14px;
+      color: #888;
+      text-align: center;
+    }
+
+    .progress-bar {
+      width: 200px;
+      height: 2px;
+      background: #222;
+      border-radius: 1px;
+      margin-top: 16px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: #fff;
+      transition: width 0.3s ease;
+    }
+
+    /* Complete State */
+    .complete {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .complete.visible {
+      display: flex;
+    }
+
+    .check-icon {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 20px;
+      color: #22c55e;
+    }
+
+    .complete h2 {
+      font-size: 20px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+
+    .complete p {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 24px;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      -webkit-app-region: no-drag;
+    }
+
+    .btn-primary {
+      background: #fff;
+      color: #000;
+    }
+
+    .btn-primary:hover {
+      background: #e5e5e5;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: #888;
+      border: 1px solid #333;
+      margin-top: 12px;
+    }
+
+    .btn-secondary:hover {
+      border-color: #555;
+      color: #fff;
+    }
+
+    /* Error State */
+    .error {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .error.visible {
+      display: flex;
+    }
+
+    .error-icon {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 20px;
+      color: #ef4444;
+    }
+
+    .error h2 {
+      font-size: 20px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+
+    .error p {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 24px;
+      text-align: center;
+      max-width: 300px;
+    }
+
+    footer {
+      margin-top: 24px;
+      text-align: center;
+    }
+
+    footer p {
+      font-size: 11px;
+      color: #444;
+    }
+
+    /* Coming Soon */
+    .coming-soon {
+      margin-top: 32px;
+      padding: 16px;
+      background: #111;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .coming-soon h3 {
+      font-size: 13px;
+      font-weight: 500;
+      color: #666;
+      margin-bottom: 4px;
+    }
+
+    .coming-soon p {
+      font-size: 12px;
+      color: #444;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">EmmaNeigh</div>
+      <h1>Signature Packets</h1>
+      <p class="subtitle">Extract and organize signature pages by signer</p>
+    </header>
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+      <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+      </svg>
+      <p class="drop-text">Drop a folder here, or <span>browse</span></p>
+      <p class="drop-hint">Folder should contain PDF documents with signature pages</p>
+    </div>
+
+    <!-- Processing -->
+    <div class="processing" id="processing">
+      <div class="spinner"></div>
+      <p class="progress-text" id="progressText">Processing...</p>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- Complete -->
+    <div class="complete" id="complete">
+      <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <h2>Complete</h2>
+      <p id="resultText">Created 0 signature packets</p>
+      <button class="btn btn-primary" id="downloadBtn">Download ZIP</button>
+      <button class="btn btn-secondary" id="resetBtn">Process Another</button>
+    </div>
+
+    <!-- Error -->
+    <div class="error" id="error">
+      <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+      </svg>
+      <h2>Error</h2>
+      <p id="errorText">Something went wrong</p>
+      <button class="btn btn-secondary" id="retryBtn">Try Again</button>
+    </div>
+
+    <div class="coming-soon">
+      <h3>Execution Version</h3>
+      <p>Merge signed DocuSign pages back into documents — coming soon</p>
+    </div>
+
+    <footer>
+      <p>All processing happens locally. No data leaves your machine.</p>
+    </footer>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    const dropZone = document.getElementById('dropZone');
+    const processing = document.getElementById('processing');
+    const complete = document.getElementById('complete');
+    const error = document.getElementById('error');
+    const progressText = document.getElementById('progressText');
+    const progressFill = document.getElementById('progressFill');
+    const resultText = document.getElementById('resultText');
+    const errorText = document.getElementById('errorText');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const retryBtn = document.getElementById('retryBtn');
+
+    let currentResult = null;
+    let currentZipPath = null;
+
+    // State management
+    function showState(state) {
+      dropZone.style.display = state === 'idle' ? 'flex' : 'none';
+      processing.classList.toggle('visible', state === 'processing');
+      complete.classList.toggle('visible', state === 'complete');
+      error.classList.toggle('visible', state === 'error');
+    }
+
+    // Drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('active');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('active');
+    });
+
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('active');
+
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        const folderPath = files[0].path;
+        await processFolder(folderPath);
+      }
+    });
+
+    // Click to browse
+    dropZone.addEventListener('click', async () => {
+      const folderPath = await ipcRenderer.invoke('select-folder');
+      if (folderPath) {
+        await processFolder(folderPath);
+      }
+    });
+
+    // Process folder
+    async function processFolder(folderPath) {
+      showState('processing');
+      progressFill.style.width = '0%';
+      progressText.textContent = 'Starting...';
+
+      try {
+        const result = await ipcRenderer.invoke('process-folder', folderPath);
+        currentResult = result;
+
+        // Create ZIP
+        progressText.textContent = 'Creating ZIP file...';
+        currentZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
+
+        resultText.textContent = `Created ${result.packetsCreated} signature packet${result.packetsCreated !== 1 ? 's' : ''}`;
+        showState('complete');
+      } catch (err) {
+        errorText.textContent = err.message;
+        showState('error');
+      }
+    }
+
+    // Progress updates
+    ipcRenderer.on('progress', (event, data) => {
+      progressText.textContent = data.message;
+      progressFill.style.width = data.percent + '%';
+    });
+
+    // Download button
+    downloadBtn.addEventListener('click', async () => {
+      if (currentZipPath) {
+        await ipcRenderer.invoke('save-zip', currentZipPath);
+      }
+    });
+
+    // Reset buttons
+    resetBtn.addEventListener('click', () => {
+      currentResult = null;
+      currentZipPath = null;
+      showState('idle');
+    });
+
+    retryBtn.addEventListener('click', () => {
+      currentResult = null;
+      currentZipPath = null;
+      showState('idle');
+    });
+  </script>
+</body>
+</html>

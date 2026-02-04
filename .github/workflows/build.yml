@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-python-windows:
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,132 +19,94 @@ jobs:
 
       - name: Install Python dependencies
         run: |
+          cd desktop-app/python
+          pip install -r requirements.txt
           pip install pyinstaller
-          pip install -r desktop-app/python/requirements.txt
 
-      - name: Build Python processor
+      - name: Build Python executable
         run: |
           cd desktop-app/python
-          pyinstaller --onefile --name processor main.py
-
-      - name: Upload Python artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-processor-windows
-          path: desktop-app/python/dist/processor.exe
-
-  build-python-mac:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python dependencies
-        run: |
-          pip install pyinstaller
-          pip install -r desktop-app/python/requirements.txt
-
-      - name: Build Python processor
-        run: |
-          cd desktop-app/python
-          pyinstaller --onefile --name processor main.py
-
-      - name: Upload Python artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-processor-mac
-          path: desktop-app/python/dist/processor
-
-  build-electron-windows:
-    needs: build-python-windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+          pyinstaller --onefile --name signature_packets signature_packets.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Download Python processor
-        uses: actions/download-artifact@v4
-        with:
-          name: python-processor-windows
-          path: desktop-app/python/dist
-
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: |
           cd desktop-app
           npm install
-          cd frontend
-          npm install
 
-      - name: Build frontend
+      - name: Prepare resources
         run: |
-          cd desktop-app/frontend
-          npm run build
+          mkdir -p desktop-app/resources/win
+          cp desktop-app/python/dist/signature_packets.exe desktop-app/resources/win/
+        shell: bash
 
       - name: Build Electron app
         run: |
           cd desktop-app
-          npx electron-builder --win portable --x64
+          npm run build:win
 
-      - name: Upload Windows artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: EmmaNeigh-Windows
           path: desktop-app/dist/EmmaNeigh-Portable.exe
 
-  build-electron-mac:
-    needs: build-python-mac
+  build-mac:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          cd desktop-app/python
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Python executable
+        run: |
+          cd desktop-app/python
+          pyinstaller --onefile --name signature_packets signature_packets.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Download Python processor
-        uses: actions/download-artifact@v4
-        with:
-          name: python-processor-mac
-          path: desktop-app/python/dist
-
-      - name: Make processor executable
-        run: chmod +x desktop-app/python/dist/processor
-
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: |
           cd desktop-app
           npm install
-          cd frontend
-          npm install
 
-      - name: Build frontend
+      - name: Prepare resources
         run: |
-          cd desktop-app/frontend
-          npm run build
+          mkdir -p desktop-app/resources/mac
+          cp desktop-app/python/dist/signature_packets desktop-app/resources/mac/
+          chmod +x desktop-app/resources/mac/signature_packets
 
       - name: Build Electron app
         run: |
           cd desktop-app
-          npx electron-builder --mac --x64
+          npm run build:mac
 
-      - name: Upload Mac artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: EmmaNeigh-Mac
           path: desktop-app/dist/*.dmg
 
   create-release:
-    needs: [build-electron-windows, build-electron-mac]
+    needs: [build-windows, build-mac]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
@@ -152,43 +114,40 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: EmmaNeigh-Windows
-          path: ./windows
+          path: ./artifacts
 
       - name: Download Mac artifact
         uses: actions/download-artifact@v4
         with:
           name: EmmaNeigh-Mac
-          path: ./mac
-
-      - name: List files
-        run: |
-          ls -la ./windows
-          ls -la ./mac
+          path: ./artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            ./windows/EmmaNeigh-Portable.exe
-            ./mac/*.dmg
+            artifacts/*
           body: |
-            ## EmmaNeigh v2.0.0 - Desktop Application
+            ## EmmaNeigh v3.0.0 - Rebuilt from scratch
 
             ### Downloads
-            - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run!
-            - **Mac**: Download the `.dmg` file, open it, drag EmmaNeigh to Applications
+            - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
+            - **Mac**: Download the `.dmg` file
 
-            ### What's New
-            - Modern GUI with drag & drop file upload
-            - Running horse animation during processing
-            - Create Signature Packets from multiple PDFs
-            - NEW: Create Execution Versions (merge DocuSign signed pages)
-            - ZIP download for all signature packets
+            ### How to Use
+            1. Download and run the app
+            2. Drop a folder containing PDFs onto the app (or click to browse)
+            3. Wait for processing
+            4. Download your ZIP file with signature packets
+
+            ### What it does
+            - Scans PDFs for signature pages (looks for "BY:" and "Name:" fields)
+            - Groups pages by signer name
+            - Creates individual PDF packets per signer
+            - Generates Excel tracking sheets
 
             ### Security
             - 100% local processing - no data leaves your machine
             - No internet connection required
-            - No installation needed (portable app)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

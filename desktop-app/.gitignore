@@ -1,46 +1,9 @@
-# Dependencies
 node_modules/
-frontend/node_modules/
-
-# Build outputs
 dist/
-frontend/dist/
+build/
+resources/win/
+resources/mac/
 python/dist/
 python/build/
+python/__pycache__/
 *.spec
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.env
-.venv
-env/
-venv/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-
-# Temp files
-*.tmp
-*.temp
-
-# Test coverage
-coverage/
-
-# Electron
-out/
