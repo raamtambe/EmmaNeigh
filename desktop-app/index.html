@@ -124,18 +124,54 @@
       display: flex;
     }
 
-    .spinner {
-      width: 32px;
-      height: 32px;
-      border: 2px solid #333;
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin-bottom: 20px;
+    .horse-container {
+      width: 120px;
+      height: 60px;
+      margin-bottom: 24px;
+      position: relative;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    .horse {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      animation: gallop 0.4s ease-in-out infinite;
+    }
+
+    @keyframes gallop {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(-6px); }
+    }
+
+    .horse svg {
+      width: 80px;
+      height: 50px;
+      fill: #fff;
+      opacity: 0.9;
+    }
+
+    .dust {
+      position: absolute;
+      bottom: 0;
+      left: 20%;
+      display: flex;
+      gap: 4px;
+    }
+
+    .dust-particle {
+      width: 4px;
+      height: 4px;
+      background: #444;
+      border-radius: 50%;
+      animation: dust 0.6s ease-out infinite;
+    }
+
+    .dust-particle:nth-child(2) { animation-delay: 0.1s; }
+    .dust-particle:nth-child(3) { animation-delay: 0.2s; }
+
+    @keyframes dust {
+      0% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+      100% { transform: translate(-12px, -4px) scale(0.3); opacity: 0; }
     }
 
     .progress-text {
@@ -308,7 +344,41 @@
 
     <!-- Processing -->
     <div class="processing" id="processing">
-      <div class="spinner"></div>
+      <div class="horse-container">
+        <div class="horse">
+          <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+            <!-- Body -->
+            <ellipse cx="50" cy="35" rx="28" ry="16"/>
+            <!-- Neck -->
+            <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+            <!-- Head -->
+            <ellipse cx="88" cy="8" rx="11" ry="7"/>
+            <!-- Ear -->
+            <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+            <!-- Eye -->
+            <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+            <!-- Mane -->
+            <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+            <!-- Tail -->
+            <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+            <!-- Front legs -->
+            <g class="front-legs">
+              <rect x="62" y="46" width="5" height="14" rx="2"/>
+              <rect x="54" y="46" width="5" height="14" rx="2"/>
+            </g>
+            <!-- Back legs -->
+            <g class="back-legs">
+              <rect x="38" y="46" width="5" height="14" rx="2"/>
+              <rect x="30" y="46" width="5" height="14" rx="2"/>
+            </g>
+          </svg>
+        </div>
+        <div class="dust">
+          <div class="dust-particle"></div>
+          <div class="dust-particle"></div>
+          <div class="dust-particle"></div>
+        </div>
+      </div>
       <p class="progress-text" id="progressText">Processing...</p>
       <div class="progress-bar">
         <div class="progress-fill" id="progressFill" style="width: 0%"></div>
