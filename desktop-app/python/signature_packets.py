@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Signature Packet Processor
-v3.2.0: Added table-based signature detection for schedules.
+v3.2.1: Added MS Word (.docx) support.
 """
 
 import fitz
@@ -10,6 +10,7 @@ import pandas as pd
 import re
 import sys
 import json
+from docx import Document
 
 
 # Column header patterns for signature table detection
@@ -130,7 +131,7 @@ def extract_signers_from_table(table_data):
 
 def extract_person_signers(page):
     """
-    Extract signer names from both BY: blocks AND signature tables.
+    Extract signer names from PDF page (BY: blocks AND signature tables).
     Returns a set of normalized signer names.
     """
     signers = set()
@@ -145,36 +146,71 @@ def extract_person_signers(page):
         for table in tables.tables:
             data = table.extract()
             if data and len(data) > 0:
-                # Check if first row looks like headers for a signature table
                 if is_signature_table(data[0]):
                     signers.update(extract_signers_from_table(data))
     except Exception:
-        # If table detection fails, continue with what we have
         pass
 
     return signers
 
 
-def has_signature_content(page):
-    """Check if page has any signature-related content (BY: blocks or signature tables)."""
-    text = page.get_text()
+# ========== DOCX SUPPORT ==========
 
-    # Check for BY: marker
-    if "BY:" in text.upper():
-        return True
+def extract_text_from_docx(docx_path):
+    """Extract all text from DOCX document (headers, body)."""
+    doc = Document(docx_path)
+    text_parts = []
 
-    # Check for signature tables
-    try:
-        tables = page.find_tables()
-        for table in tables.tables:
-            data = table.extract()
-            if data and len(data) > 0 and is_signature_table(data[0]):
-                return True
-    except Exception:
-        pass
+    # Get header text
+    for section in doc.sections:
+        try:
+            for para in section.header.paragraphs:
+                if para.text.strip():
+                    text_parts.append(para.text)
+        except Exception:
+            pass
 
-    return False
+    # Get body text
+    for para in doc.paragraphs:
+        if para.text.strip():
+            text_parts.append(para.text)
 
+    return '\n'.join(text_parts)
+
+
+def extract_tables_from_docx(docx_path):
+    """Extract all tables from DOCX as list of rows."""
+    doc = Document(docx_path)
+    tables_list = []
+
+    for table in doc.tables:
+        rows = []
+        for row in table.rows:
+            row_data = [cell.text.strip() for cell in row.cells]
+            rows.append(row_data)
+        if rows:
+            tables_list.append(rows)
+
+    return tables_list
+
+
+def extract_signers_from_docx(docx_path):
+    """Extract signers from DOCX file (BY: blocks AND tables)."""
+    signers = set()
+
+    # Method 1: BY:/NAME: blocks
+    text = extract_text_from_docx(docx_path)
+    signers.update(extract_signers_from_by_blocks(text))
+
+    # Method 2: Tables
+    for table_data in extract_tables_from_docx(docx_path):
+        if table_data and is_signature_table(table_data[0]):
+            signers.update(extract_signers_from_table(table_data))
+
+    return signers
+
+
+# ========== MAIN ==========
 
 def main():
     if len(sys.argv) < 2:
@@ -195,35 +231,47 @@ def main():
     os.makedirs(output_pdf_dir, exist_ok=True)
     os.makedirs(output_table_dir, exist_ok=True)
 
-    # Find PDF files
-    pdf_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".pdf")]
+    # Find PDF and DOCX files
+    document_files = [f for f in os.listdir(input_dir)
+                      if f.lower().endswith((".pdf", ".docx"))]
 
-    if not pdf_files:
-        emit("error", message="No PDF files found in the folder.")
+    if not document_files:
+        emit("error", message="No PDF or Word files found in the folder.")
         sys.exit(1)
 
-    total = len(pdf_files)
-    emit("progress", percent=0, message=f"Found {total} PDF files")
+    total = len(document_files)
+    emit("progress", percent=0, message=f"Found {total} documents")
 
-    # Scan all PDFs for signature pages
+    # Scan all documents for signature pages
     rows = []
 
-    for idx, filename in enumerate(pdf_files):
+    for idx, filename in enumerate(document_files):
         percent = int((idx / total) * 50)
         emit("progress", percent=percent, message=f"Scanning {filename}")
+        filepath = os.path.join(input_dir, filename)
 
         try:
-            doc = fitz.open(os.path.join(input_dir, filename))
-            for page_num, page in enumerate(doc, start=1):
-                # Extract signers from both BY: blocks and tables
-                signers = extract_person_signers(page)
+            if filename.lower().endswith('.pdf'):
+                # PDF processing
+                doc = fitz.open(filepath)
+                for page_num, page in enumerate(doc, start=1):
+                    signers = extract_person_signers(page)
+                    for signer in signers:
+                        rows.append({
+                            "Signer Name": signer,
+                            "Document": filename,
+                            "Page": page_num
+                        })
+                doc.close()
+            elif filename.lower().endswith('.docx'):
+                # DOCX processing
+                signers = extract_signers_from_docx(filepath)
                 for signer in signers:
                     rows.append({
                         "Signer Name": signer,
                         "Document": filename,
-                        "Page": page_num
+                        "Page": 1  # DOCX doesn't have pages
                     })
-            doc.close()
         except Exception as e:
             emit("progress", percent=percent, message=f"Warning: {filename} - {str(e)}")
 
@@ -253,15 +301,16 @@ def main():
             index=False
         )
 
-        # Create PDF packet
+        # Create PDF packet (only from PDF sources)
         packet = fitz.open()
         for _, r in group.iterrows():
-            try:
-                src = fitz.open(os.path.join(input_dir, r["Document"]))
-                packet.insert_pdf(src, from_page=r["Page"] - 1, to_page=r["Page"] - 1)
-                src.close()
-            except Exception:
-                pass
+            if r["Document"].lower().endswith('.pdf'):
+                try:
+                    src = fitz.open(os.path.join(input_dir, r["Document"]))
+                    packet.insert_pdf(src, from_page=r["Page"] - 1, to_page=r["Page"] - 1)
+                    src.close()
+                except Exception:
+                    pass
 
         if packet.page_count > 0:
             pdf_path = os.path.join(output_pdf_dir, f"signature_packet - {signer}.pdf")

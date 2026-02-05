@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Execution Version Processor
-v3.2.0: Added table-based signature detection for schedules.
+v3.2.1: Added MS Word (.docx) support.
 Merges signed DocuSign pages back into original agreements, replacing blank signature pages in-place.
 """
 
@@ -11,6 +11,7 @@ import re
 import sys
 import json
 from difflib import SequenceMatcher
+from docx import Document
 
 
 # Column header patterns for signature table detection

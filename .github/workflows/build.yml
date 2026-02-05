@@ -133,14 +133,14 @@ jobs:
           files: |
             artifacts/*
           body: |
-            ## EmmaNeigh v3.2.0 - Schedule Table Signature Detection
+            ## EmmaNeigh v3.2.1 - MS Word Support
 
             ### Downloads
             - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
             - **Mac**: Download the `.dmg` file
 
             ### What's New in v3.2.0
-            - **Schedule Table Detection**: Now detects signatures in tables (Name | Title | Signature format)
+            - **MS Word Support: Now processes .docx files alongside PDFs
             - Works with both traditional "BY:/Name:" signature blocks AND table-based signatures
             - Recognizes column headers: "Name", "Printed Name", "Signatory", "Signer"
             - Automatically extracts signer names from schedule tables
