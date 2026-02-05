@@ -435,3 +435,82 @@ ipcMain.handle('install-update', () => {
     autoUpdater.quitAndInstall();
   }
 });
+
+// Select single DOCX file
+ipcMain.handle('select-docx', async () => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'Word Documents', extensions: ['docx'] }]
+  });
+  return filePaths[0] || null;
+});
+
+// Select multiple DOCX files
+ipcMain.handle('select-docx-multiple', async () => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Word Documents', extensions: ['docx'] }]
+  });
+  return filePaths || [];
+});
+
+// Collate documents
+ipcMain.handle('collate-documents', async (event, config) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('document_collator');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Processor not found: ' + processorPath));
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    // Write config to temp file
+    const configPath = path.join(app.getPath('temp'), `collate-config-${Date.now()}.json`);
+    fs.writeFileSync(configPath, JSON.stringify(config));
+
+    const proc = spawn(processorPath, [configPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('collate-progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      console.error('stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      // Clean up config file
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Document collation failed with code ' + code));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});

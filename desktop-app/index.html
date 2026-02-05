@@ -686,6 +686,99 @@
       align-items: center;
       margin-bottom: 8px;
     }
+
+    /* Collate Tab Styles */
+    .file-list {
+      background: #111;
+      border-radius: 8px;
+      padding: 8px;
+      max-height: 120px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+
+    .file-list-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: #888;
+      border-bottom: 1px solid #222;
+    }
+
+    .file-list-item:last-child {
+      border-bottom: none;
+    }
+
+    .file-list-item .remove-btn {
+      background: none;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      padding: 2px 6px;
+      font-size: 14px;
+      -webkit-app-region: no-drag;
+    }
+
+    .file-list-item .remove-btn:hover {
+      color: #ef4444;
+    }
+
+    .collate-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .stat-box {
+      background: #111;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    .stat-value.warning {
+      color: #f59e0b;
+    }
+
+    .stat-value.error {
+      color: #ef4444;
+    }
+
+    .conflict-list {
+      background: #1a1a1a;
+      border: 1px solid #ef4444;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .conflict-item {
+      font-size: 12px;
+      color: #f59e0b;
+      padding: 6px 0;
+      border-bottom: 1px solid #333;
+    }
+
+    .conflict-item:last-child {
+      border-bottom: none;
+    }
   </style>
 </head>
 <body>
@@ -734,6 +827,7 @@
         <button class="tab active" data-tab="packets">Signature Packets</button>
         <button class="tab" data-tab="execution">Execution Version</button>
         <button class="tab" data-tab="sigblocks">Signature Blocks</button>
+        <button class="tab" data-tab="collate">Collate</button>
       </div>
     </header>
 
@@ -1032,6 +1126,130 @@
       </div>
     </div><!-- End sigblocksTab -->
 
+    <!-- Collate Tab -->
+    <div id="collateTab" style="display: none;">
+      <!-- Collate Inputs -->
+      <div id="collateInputs" class="exec-inputs">
+        <p class="subtitle" style="margin-bottom: 8px;">Merge track changes and comments from multiple document versions</p>
+
+        <!-- Base Document -->
+        <div class="sigblock-step">
+          <div class="sigblock-step-header" id="baseDocHeader">
+            <span class="step-number">1</span>
+            Base Document
+          </div>
+          <div class="input-section" id="baseDocInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+            </svg>
+            <p class="input-label">Drop base document here (.docx)</p>
+            <p class="input-hint">The original clean version</p>
+            <p class="input-selected" id="baseDocSelected"></p>
+          </div>
+        </div>
+
+        <!-- Commented Versions -->
+        <div class="sigblock-step">
+          <div class="sigblock-step-header" id="commentedDocsHeader">
+            <span class="step-number">2</span>
+            Commented Versions
+          </div>
+          <div class="input-section" id="commentedDocsInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/>
+            </svg>
+            <p class="input-label">Drop commented versions here (.docx)</p>
+            <p class="input-hint">Multiple files with track changes or comments</p>
+            <p class="input-selected" id="commentedDocsSelected"></p>
+          </div>
+          <div class="file-list hidden" id="commentedDocsList">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <div class="exec-actions">
+          <button class="btn btn-primary" id="collateBtn" disabled>Collate Documents</button>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="collateProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <g class="front-legs">
+                <rect x="62" y="46" width="5" height="14" rx="2"/>
+                <rect x="54" y="46" width="5" height="14" rx="2"/>
+              </g>
+              <g class="back-legs">
+                <rect x="38" y="46" width="5" height="14" rx="2"/>
+                <rect x="30" y="46" width="5" height="14" rx="2"/>
+              </g>
+            </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+          </div>
+        </div>
+        <p class="progress-text" id="collateProgressText">Processing...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="collateProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Complete -->
+      <div class="complete" id="collateComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Collation Complete</h2>
+        <p id="collateResultText">Merged changes from 0 documents</p>
+
+        <div class="collate-stats">
+          <div class="stat-box">
+            <div class="stat-value" id="totalChangesValue">0</div>
+            <div class="stat-label">Track Changes</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="totalCommentsValue">0</div>
+            <div class="stat-label">Comments</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="conflictsValue">0</div>
+            <div class="stat-label">Conflicts</div>
+          </div>
+        </div>
+
+        <div class="conflict-list hidden" id="conflictList">
+          <!-- Populated dynamically -->
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="collateDownloadBtn">Download ZIP</button>
+        </div>
+        <button class="btn btn-secondary" id="collateResetBtn">Process Another</button>
+      </div>
+
+      <!-- Error -->
+      <div class="error" id="collateError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="collateErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="collateRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End collateTab -->
+
     <footer>
       <p>All processing happens locally. No data leaves your machine.</p>
     </footer>
@@ -1116,6 +1334,7 @@
     const packetsTab = document.getElementById('packetsTab');
     const executionTab = document.getElementById('executionTab');
     const sigblocksTab = document.getElementById('sigblocksTab');
+    const collateTab = document.getElementById('collateTab');
 
     tabs.forEach(tab => {
       tab.addEventListener('click', () => {
@@ -1126,6 +1345,7 @@
         packetsTab.style.display = tabName === 'packets' ? 'block' : 'none';
         executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
         sigblocksTab.style.display = tabName === 'sigblocks' ? 'block' : 'none';
+        collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
       });
     });
 
@@ -1728,6 +1948,224 @@
 
     sigblocksResetBtn.addEventListener('click', resetSigblocksState);
     sigblocksRetryBtn.addEventListener('click', resetSigblocksState);
+
+    // ========== COLLATE TAB ==========
+    const baseDocInput = document.getElementById('baseDocInput');
+    const baseDocSelected = document.getElementById('baseDocSelected');
+    const baseDocHeader = document.getElementById('baseDocHeader');
+    const commentedDocsInput = document.getElementById('commentedDocsInput');
+    const commentedDocsSelected = document.getElementById('commentedDocsSelected');
+    const commentedDocsList = document.getElementById('commentedDocsList');
+    const commentedDocsHeader = document.getElementById('commentedDocsHeader');
+    const collateBtn = document.getElementById('collateBtn');
+    const collateInputs = document.getElementById('collateInputs');
+    const collateProcessing = document.getElementById('collateProcessing');
+    const collateComplete = document.getElementById('collateComplete');
+    const collateError = document.getElementById('collateError');
+    const collateProgressText = document.getElementById('collateProgressText');
+    const collateProgressFill = document.getElementById('collateProgressFill');
+    const collateResultText = document.getElementById('collateResultText');
+    const totalChangesValue = document.getElementById('totalChangesValue');
+    const totalCommentsValue = document.getElementById('totalCommentsValue');
+    const conflictsValue = document.getElementById('conflictsValue');
+    const conflictList = document.getElementById('conflictList');
+    const collateErrorText = document.getElementById('collateErrorText');
+    const collateDownloadBtn = document.getElementById('collateDownloadBtn');
+    const collateResetBtn = document.getElementById('collateResetBtn');
+    const collateRetryBtn = document.getElementById('collateRetryBtn');
+
+    let baseDocPath = null;
+    let commentedDocPaths = [];
+    let collateResult = null;
+    let collateZipPath = null;
+
+    function showCollateState(state) {
+      collateInputs.style.display = state === 'idle' ? 'flex' : 'none';
+      collateProcessing.classList.toggle('visible', state === 'processing');
+      collateComplete.classList.toggle('visible', state === 'complete');
+      collateError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateCollateButton() {
+      collateBtn.disabled = !(baseDocPath && commentedDocPaths.length > 0);
+    }
+
+    function updateCommentedDocsList() {
+      if (commentedDocPaths.length > 0) {
+        commentedDocsList.classList.remove('hidden');
+        let html = '';
+        commentedDocPaths.forEach((p, i) => {
+          const name = p.split(/[/\\]/).pop();
+          html += `<div class="file-list-item">
+            <span>${name}</span>
+            <button class="remove-btn" data-index="${i}">×</button>
+          </div>`;
+        });
+        commentedDocsList.innerHTML = html;
+
+        // Add remove handlers
+        commentedDocsList.querySelectorAll('.remove-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const idx = parseInt(btn.dataset.index, 10);
+            commentedDocPaths.splice(idx, 1);
+            updateCommentedDocsList();
+            updateCollateButton();
+          });
+        });
+      } else {
+        commentedDocsList.classList.add('hidden');
+        commentedDocsList.innerHTML = '';
+      }
+    }
+
+    // Base document selection
+    baseDocInput.addEventListener('click', async () => {
+      const path = await ipcRenderer.invoke('select-docx');
+      if (path) {
+        baseDocPath = path;
+        baseDocSelected.textContent = truncatePath(path);
+        baseDocInput.classList.add('selected');
+        baseDocHeader.classList.add('done');
+        updateCollateButton();
+      }
+    });
+
+    baseDocInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      baseDocInput.classList.add('active');
+    });
+
+    baseDocInput.addEventListener('dragleave', () => {
+      baseDocInput.classList.remove('active');
+    });
+
+    baseDocInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      baseDocInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0 && files[0].name.toLowerCase().endsWith('.docx')) {
+        baseDocPath = files[0].path;
+        baseDocSelected.textContent = truncatePath(baseDocPath);
+        baseDocInput.classList.add('selected');
+        baseDocHeader.classList.add('done');
+        updateCollateButton();
+      }
+    });
+
+    // Commented documents selection
+    commentedDocsInput.addEventListener('click', async () => {
+      const paths = await ipcRenderer.invoke('select-docx-multiple');
+      if (paths && paths.length > 0) {
+        commentedDocPaths = [...commentedDocPaths, ...paths];
+        commentedDocsSelected.textContent = `${commentedDocPaths.length} file${commentedDocPaths.length !== 1 ? 's' : ''} selected`;
+        commentedDocsInput.classList.add('selected');
+        commentedDocsHeader.classList.add('done');
+        updateCommentedDocsList();
+        updateCollateButton();
+      }
+    });
+
+    commentedDocsInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      commentedDocsInput.classList.add('active');
+    });
+
+    commentedDocsInput.addEventListener('dragleave', () => {
+      commentedDocsInput.classList.remove('active');
+    });
+
+    commentedDocsInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      commentedDocsInput.classList.remove('active');
+      const files = Array.from(e.dataTransfer.files).filter(f =>
+        f.name.toLowerCase().endsWith('.docx')
+      );
+      if (files.length > 0) {
+        commentedDocPaths = [...commentedDocPaths, ...files.map(f => f.path)];
+        commentedDocsSelected.textContent = `${commentedDocPaths.length} file${commentedDocPaths.length !== 1 ? 's' : ''} selected`;
+        commentedDocsInput.classList.add('selected');
+        commentedDocsHeader.classList.add('done');
+        updateCommentedDocsList();
+        updateCollateButton();
+      }
+    });
+
+    // Collate documents
+    collateBtn.addEventListener('click', async () => {
+      if (!baseDocPath || commentedDocPaths.length === 0) return;
+
+      showCollateState('processing');
+      collateProgressFill.style.width = '0%';
+      collateProgressText.textContent = 'Starting...';
+
+      try {
+        const result = await ipcRenderer.invoke('collate-documents', {
+          base_document: baseDocPath,
+          commented_documents: commentedDocPaths
+        });
+
+        collateResult = result;
+        collateProgressText.textContent = 'Creating ZIP file...';
+        collateZipPath = await ipcRenderer.invoke('create-zip', result.output_folder);
+
+        // Update results UI
+        collateResultText.textContent = `Merged changes from ${commentedDocPaths.length} document${commentedDocPaths.length !== 1 ? 's' : ''}`;
+        totalChangesValue.textContent = result.total_changes || 0;
+        totalCommentsValue.textContent = result.total_comments || 0;
+        conflictsValue.textContent = result.conflicts || 0;
+
+        // Show conflicts if any
+        if (result.conflicts > 0) {
+          conflictsValue.classList.add('warning');
+          conflictList.classList.remove('hidden');
+          conflictList.innerHTML = `<div class="conflict-item">${result.unresolved_conflicts || 0} unresolved conflict(s) detected. Review the summary document for details.</div>`;
+        } else {
+          conflictsValue.classList.remove('warning');
+          conflictList.classList.add('hidden');
+        }
+
+        showCollateState('complete');
+      } catch (err) {
+        collateErrorText.textContent = err.message;
+        showCollateState('error');
+      }
+    });
+
+    // Listen for collate progress
+    ipcRenderer.on('collate-progress', (event, data) => {
+      collateProgressText.textContent = data.message;
+      collateProgressFill.style.width = data.percent + '%';
+    });
+
+    collateDownloadBtn.addEventListener('click', async () => {
+      if (collateZipPath) await ipcRenderer.invoke('save-zip', collateZipPath);
+    });
+
+    function resetCollateState() {
+      baseDocPath = null;
+      commentedDocPaths = [];
+      collateResult = null;
+      collateZipPath = null;
+
+      baseDocSelected.textContent = '';
+      commentedDocsSelected.textContent = '';
+      commentedDocsList.innerHTML = '';
+      commentedDocsList.classList.add('hidden');
+
+      baseDocInput.classList.remove('selected');
+      commentedDocsInput.classList.remove('selected');
+      baseDocHeader.classList.remove('done');
+      commentedDocsHeader.classList.remove('done');
+
+      conflictList.classList.add('hidden');
+      conflictsValue.classList.remove('warning');
+
+      updateCollateButton();
+      showCollateState('idle');
+    }
+
+    collateResetBtn.addEventListener('click', resetCollateState);
+    collateRetryBtn.addEventListener('click', resetCollateState);
   </script>
 </body>
 </html>

@@ -31,6 +31,7 @@ jobs:
           pyinstaller --onefile --name checklist_parser checklist_parser.py
           pyinstaller --onefile --name incumbency_parser incumbency_parser.py
           pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
+          pyinstaller --onefile --name document_collator document_collator.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -50,12 +51,13 @@ jobs:
           cp desktop-app/python/dist/checklist_parser.exe desktop-app/resources/win/
           cp desktop-app/python/dist/incumbency_parser.exe desktop-app/resources/win/
           cp desktop-app/python/dist/sigblock_workflow.exe desktop-app/resources/win/
+          cp desktop-app/python/dist/document_collator.exe desktop-app/resources/win/
         shell: bash
 
       - name: Build Electron app
         run: |
           cd desktop-app
-          npm run build:win
+          npx electron-builder --win portable --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -87,6 +89,7 @@ jobs:
           pyinstaller --onefile --name checklist_parser checklist_parser.py
           pyinstaller --onefile --name incumbency_parser incumbency_parser.py
           pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
+          pyinstaller --onefile --name document_collator document_collator.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -106,16 +109,18 @@ jobs:
           cp desktop-app/python/dist/checklist_parser desktop-app/resources/mac/
           cp desktop-app/python/dist/incumbency_parser desktop-app/resources/mac/
           cp desktop-app/python/dist/sigblock_workflow desktop-app/resources/mac/
+          cp desktop-app/python/dist/document_collator desktop-app/resources/mac/
           chmod +x desktop-app/resources/mac/signature_packets
           chmod +x desktop-app/resources/mac/execution_version
           chmod +x desktop-app/resources/mac/checklist_parser
           chmod +x desktop-app/resources/mac/incumbency_parser
           chmod +x desktop-app/resources/mac/sigblock_workflow
+          chmod +x desktop-app/resources/mac/document_collator
 
       - name: Build Electron app
         run: |
           cd desktop-app
-          npm run build:mac
+          npx electron-builder --mac --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -148,23 +153,36 @@ jobs:
           files: |
             artifacts/*
           body: |
-            ## EmmaNeigh v4.1.0 - Disclaimer, User Profiles & Auto-Update
+            ## EmmaNeigh v4.1.1 - Document Collation
 
             ### Downloads
             - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
             - **Mac**: Download the `.dmg` file
 
-            ### What's New in v4.1.0
-            - **Liability Disclaimer**: Terms of use modal on first launch
-            - **User Profiles**: Click your name to set a display name (stored locally)
-            - **Auto-Update**: App will notify you when updates are available
+            ### What's New in v4.1.1
+            - **Collate Tab**: Merge track changes and comments from multiple document versions
+              - Upload a base document and multiple commented versions
+              - Integrates track changes (insertions/deletions) from all versions
+              - Extracts and includes comment bubbles
+              - Detects conflicts when different versions modify the same content
+              - Generates summary table showing each author's contributions
+              - 100% local processing - no LLM or cloud services required
 
-            ### Features (from v4.0.0)
+            ### Previous Features
+            - **Liability Disclaimer**: Terms of use modal on first launch (v4.1.0)
+            - **User Profiles**: Click your name to set a display name (v4.1.0)
+            - **Auto-Update**: App notifies you when updates are available (v4.1.0)
             - **Signature Blocks Tab**: Generate signature blocks from checklists and incumbency certificates
             - **Signature Packets Tab**: Extract and organize signature pages by signer
             - **Execution Version Tab**: Merge signed DocuSign pages back into originals
 
             ### How to Use
+
+            **Collate Tab:**
+            1. Upload your base document (.docx)
+            2. Upload commented versions from different reviewers
+            3. Click "Collate Documents"
+            4. Review conflict flags and download merged document with summary
 
             **Signature Blocks Tab:**
             1. Upload your transaction checklist (.xlsx or .csv)
