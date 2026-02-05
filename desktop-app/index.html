@@ -425,6 +425,141 @@
       margin-top: 8px;
       text-align: center;
     }
+
+    /* Signature Blocks Tab Styles */
+    .sigblock-step {
+      margin-bottom: 16px;
+    }
+
+    .sigblock-step-header {
+      font-size: 13px;
+      font-weight: 500;
+      color: #888;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sigblock-step-header .step-number {
+      width: 20px;
+      height: 20px;
+      background: #222;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #666;
+    }
+
+    .sigblock-step-header.done .step-number {
+      background: #22c55e;
+      color: #fff;
+    }
+
+    .entity-mapping {
+      background: #111;
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .entity-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+    }
+
+    .entity-row:last-child {
+      border-bottom: none;
+    }
+
+    .entity-name {
+      flex: 1;
+      font-size: 13px;
+      color: #fff;
+    }
+
+    .entity-arrow {
+      color: #444;
+      font-size: 14px;
+    }
+
+    .entity-select {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: #fff;
+      min-width: 140px;
+      -webkit-app-region: no-drag;
+    }
+
+    .entity-select:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    .signer-select {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: #888;
+      min-width: 160px;
+      -webkit-app-region: no-drag;
+    }
+
+    .sigblock-results {
+      background: #111;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 12px;
+    }
+
+    .sigblock-result-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      font-size: 13px;
+      color: #888;
+    }
+
+    .sigblock-result-item svg {
+      width: 16px;
+      height: 16px;
+      color: #22c55e;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 16px;
+    }
+
+    .btn-flow {
+      background: #22c55e;
+      color: #000;
+    }
+
+    .btn-flow:hover {
+      background: #16a34a;
+    }
+
+    .no-data-msg {
+      font-size: 13px;
+      color: #555;
+      text-align: center;
+      padding: 16px;
+    }
   </style>
 </head>
 <body>
@@ -434,6 +569,7 @@
       <div class="tabs">
         <button class="tab active" data-tab="packets">Signature Packets</button>
         <button class="tab" data-tab="execution">Execution Version</button>
+        <button class="tab" data-tab="sigblocks">Signature Blocks</button>
       </div>
     </header>
 
@@ -600,6 +736,138 @@
       </div>
     </div><!-- End executionTab -->
 
+    <!-- Signature Blocks Tab -->
+    <div id="sigblocksTab" style="display: none;">
+      <!-- Input Steps -->
+      <div id="sigblocksInputs" class="exec-inputs">
+        <p class="subtitle" style="margin-bottom: 8px;">Generate signature blocks from checklist and incumbency certificates</p>
+
+        <!-- Step 1: Checklist -->
+        <div class="sigblock-step">
+          <div class="sigblock-step-header" id="checklistHeader">
+            <span class="step-number">1</span>
+            Transaction Checklist
+          </div>
+          <div class="input-section" id="checklistInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125"/>
+            </svg>
+            <p class="input-label">Drop checklist here (.xlsx, .csv)</p>
+            <p class="input-hint">Should have Document and Signatories columns</p>
+            <p class="input-selected" id="checklistSelected"></p>
+          </div>
+        </div>
+
+        <!-- Step 2: Incumbency Certificates -->
+        <div class="sigblock-step">
+          <div class="sigblock-step-header" id="incumbencyHeader">
+            <span class="step-number">2</span>
+            Incumbency Certificates
+          </div>
+          <div class="input-section" id="incumbencyInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+            </svg>
+            <p class="input-label">Drop incumbency certs here (.pdf, .docx)</p>
+            <p class="input-hint">Multiple files supported - one per entity</p>
+            <p class="input-selected" id="incumbencySelected"></p>
+          </div>
+        </div>
+
+        <!-- Step 3: Entity Mapping -->
+        <div class="sigblock-step" id="mappingStep" style="display: none;">
+          <div class="sigblock-step-header">
+            <span class="step-number">3</span>
+            Entity Mapping
+          </div>
+          <div class="entity-mapping" id="entityMapping">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <!-- Step 4: Documents -->
+        <div class="sigblock-step" id="documentsStep" style="display: none;">
+          <div class="sigblock-step-header" id="documentsHeader">
+            <span class="step-number">4</span>
+            Unsigned Documents
+          </div>
+          <div class="input-section" id="documentsInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+            <p class="input-label">Drop documents folder here</p>
+            <p class="input-hint">PDFs and Word docs to add signature blocks</p>
+            <p class="input-selected" id="documentsSelected"></p>
+          </div>
+        </div>
+
+        <div class="exec-actions">
+          <button class="btn btn-primary" id="generateSigblocksBtn" disabled>Generate Signature Blocks</button>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="sigblocksProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <g class="front-legs">
+                <rect x="62" y="46" width="5" height="14" rx="2"/>
+                <rect x="54" y="46" width="5" height="14" rx="2"/>
+              </g>
+              <g class="back-legs">
+                <rect x="38" y="46" width="5" height="14" rx="2"/>
+                <rect x="30" y="46" width="5" height="14" rx="2"/>
+              </g>
+            </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+          </div>
+        </div>
+        <p class="progress-text" id="sigblocksProgressText">Processing...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="sigblocksProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Complete -->
+      <div class="complete" id="sigblocksComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Complete</h2>
+        <p id="sigblocksResultText">Generated signature blocks for 0 documents</p>
+        <div class="sigblock-results" id="sigblocksResults">
+          <!-- Populated dynamically -->
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="sigblocksDownloadBtn">Download ZIP</button>
+          <button class="btn btn-flow" id="sigblocksToPacketsBtn">Create Signature Packets →</button>
+        </div>
+        <button class="btn btn-secondary" id="sigblocksResetBtn">Process Another</button>
+      </div>
+
+      <!-- Error -->
+      <div class="error" id="sigblocksError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="sigblocksErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="sigblocksRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End sigblocksTab -->
+
     <footer>
       <p>All processing happens locally. No data leaves your machine.</p>
     </footer>
@@ -612,6 +880,7 @@
     const tabs = document.querySelectorAll('.tab');
     const packetsTab = document.getElementById('packetsTab');
     const executionTab = document.getElementById('executionTab');
+    const sigblocksTab = document.getElementById('sigblocksTab');
 
     tabs.forEach(tab => {
       tab.addEventListener('click', () => {
@@ -621,6 +890,7 @@
         const tabName = tab.dataset.tab;
         packetsTab.style.display = tabName === 'packets' ? 'block' : 'none';
         executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
+        sigblocksTab.style.display = tabName === 'sigblocks' ? 'block' : 'none';
       });
     });
 
@@ -873,6 +1143,356 @@
 
     execResetBtn.addEventListener('click', resetExecState);
     execRetryBtn.addEventListener('click', resetExecState);
+
+    // ========== SIGNATURE BLOCKS TAB ==========
+    const checklistInput = document.getElementById('checklistInput');
+    const checklistSelected = document.getElementById('checklistSelected');
+    const checklistHeader = document.getElementById('checklistHeader');
+    const incumbencyInput = document.getElementById('incumbencyInput');
+    const incumbencySelected = document.getElementById('incumbencySelected');
+    const incumbencyHeader = document.getElementById('incumbencyHeader');
+    const mappingStep = document.getElementById('mappingStep');
+    const entityMapping = document.getElementById('entityMapping');
+    const documentsStep = document.getElementById('documentsStep');
+    const documentsInput = document.getElementById('documentsInput');
+    const documentsSelected = document.getElementById('documentsSelected');
+    const documentsHeader = document.getElementById('documentsHeader');
+    const generateSigblocksBtn = document.getElementById('generateSigblocksBtn');
+    const sigblocksInputs = document.getElementById('sigblocksInputs');
+    const sigblocksProcessing = document.getElementById('sigblocksProcessing');
+    const sigblocksComplete = document.getElementById('sigblocksComplete');
+    const sigblocksError = document.getElementById('sigblocksError');
+    const sigblocksProgressText = document.getElementById('sigblocksProgressText');
+    const sigblocksProgressFill = document.getElementById('sigblocksProgressFill');
+    const sigblocksResultText = document.getElementById('sigblocksResultText');
+    const sigblocksResults = document.getElementById('sigblocksResults');
+    const sigblocksErrorText = document.getElementById('sigblocksErrorText');
+    const sigblocksDownloadBtn = document.getElementById('sigblocksDownloadBtn');
+    const sigblocksToPacketsBtn = document.getElementById('sigblocksToPacketsBtn');
+    const sigblocksResetBtn = document.getElementById('sigblocksResetBtn');
+    const sigblocksRetryBtn = document.getElementById('sigblocksRetryBtn');
+
+    let checklistPath = null;
+    let checklistData = null;
+    let incumbencyPaths = [];
+    let incumbencyData = [];
+    let sigblocksDocumentsPath = null;
+    let sigblocksResult = null;
+    let sigblocksZipPath = null;
+
+    function showSigblocksState(state) {
+      sigblocksInputs.style.display = state === 'idle' ? 'flex' : 'none';
+      sigblocksProcessing.classList.toggle('visible', state === 'processing');
+      sigblocksComplete.classList.toggle('visible', state === 'complete');
+      sigblocksError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateSigblocksButton() {
+      const hasMappings = entityMapping.querySelectorAll('.entity-row').length > 0;
+      generateSigblocksBtn.disabled = !(checklistPath && incumbencyPaths.length > 0 && sigblocksDocumentsPath && hasMappings);
+    }
+
+    // Checklist selection
+    checklistInput.addEventListener('click', async () => {
+      const path = await ipcRenderer.invoke('select-spreadsheet');
+      if (path) {
+        await loadChecklist(path);
+      }
+    });
+
+    checklistInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      checklistInput.classList.add('active');
+    });
+
+    checklistInput.addEventListener('dragleave', () => {
+      checklistInput.classList.remove('active');
+    });
+
+    checklistInput.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      checklistInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        const ext = files[0].name.toLowerCase();
+        if (ext.endsWith('.xlsx') || ext.endsWith('.xls') || ext.endsWith('.csv')) {
+          await loadChecklist(files[0].path);
+        }
+      }
+    });
+
+    async function loadChecklist(path) {
+      try {
+        checklistPath = path;
+        checklistSelected.textContent = truncatePath(path);
+        checklistInput.classList.add('selected');
+        checklistHeader.classList.add('done');
+
+        // Parse checklist
+        checklistData = await ipcRenderer.invoke('parse-checklist', path);
+        updateEntityMappingUI();
+        updateSigblocksButton();
+      } catch (err) {
+        checklistSelected.textContent = 'Error: ' + err.message;
+        checklistInput.classList.remove('selected');
+      }
+    }
+
+    // Incumbency selection
+    incumbencyInput.addEventListener('click', async () => {
+      const paths = await ipcRenderer.invoke('select-files', {
+        filters: [{ name: 'Documents', extensions: ['pdf', 'docx'] }],
+        properties: ['openFile', 'multiSelections']
+      });
+      if (paths && paths.length > 0) {
+        await loadIncumbencies(paths);
+      }
+    });
+
+    incumbencyInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      incumbencyInput.classList.add('active');
+    });
+
+    incumbencyInput.addEventListener('dragleave', () => {
+      incumbencyInput.classList.remove('active');
+    });
+
+    incumbencyInput.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      incumbencyInput.classList.remove('active');
+      const files = Array.from(e.dataTransfer.files).filter(f => {
+        const ext = f.name.toLowerCase();
+        return ext.endsWith('.pdf') || ext.endsWith('.docx');
+      });
+      if (files.length > 0) {
+        await loadIncumbencies(files.map(f => f.path));
+      }
+    });
+
+    async function loadIncumbencies(paths) {
+      try {
+        incumbencyPaths = paths;
+        incumbencySelected.textContent = `${paths.length} file${paths.length !== 1 ? 's' : ''} selected`;
+        incumbencyInput.classList.add('selected');
+        incumbencyHeader.classList.add('done');
+
+        // Parse incumbencies
+        incumbencyData = [];
+        for (const p of paths) {
+          try {
+            const data = await ipcRenderer.invoke('parse-incumbency', p);
+            incumbencyData.push(data);
+          } catch (err) {
+            console.error('Failed to parse', p, err);
+          }
+        }
+
+        updateEntityMappingUI();
+        updateSigblocksButton();
+      } catch (err) {
+        incumbencySelected.textContent = 'Error: ' + err.message;
+      }
+    }
+
+    function updateEntityMappingUI() {
+      // Show mapping step if we have both checklist and incumbencies
+      if (checklistData && incumbencyData.length > 0) {
+        mappingStep.style.display = 'block';
+        documentsStep.style.display = 'block';
+
+        // Get all roles from checklist
+        const roles = checklistData.all_roles || [];
+
+        // Build mapping UI
+        let html = '';
+        for (const inc of incumbencyData) {
+          const entityName = inc.entity_name || inc.source_file || 'Unknown Entity';
+          const signers = inc.signers || [];
+
+          html += `<div class="entity-row" data-entity="${entityName}">`;
+          html += `<span class="entity-name">${entityName}</span>`;
+          html += `<span class="entity-arrow">→</span>`;
+          html += `<select class="entity-select" data-entity="${entityName}">`;
+          html += `<option value="">Select role...</option>`;
+          for (const role of roles) {
+            html += `<option value="${role}">${role}</option>`;
+          }
+          html += `</select>`;
+
+          // Signer dropdown
+          html += `<select class="signer-select" data-entity="${entityName}">`;
+          if (signers.length === 0) {
+            html += `<option value="0">No signers found</option>`;
+          } else {
+            for (let i = 0; i < signers.length; i++) {
+              const s = signers[i];
+              html += `<option value="${i}">${s.name}${s.title ? ', ' + s.title : ''}</option>`;
+            }
+          }
+          html += `</select>`;
+          html += `</div>`;
+        }
+
+        if (html === '') {
+          html = '<p class="no-data-msg">No entities found in incumbency certificates</p>';
+        }
+
+        entityMapping.innerHTML = html;
+      }
+    }
+
+    // Documents folder selection
+    documentsInput.addEventListener('click', async () => {
+      const path = await ipcRenderer.invoke('select-folder');
+      if (path) {
+        sigblocksDocumentsPath = path;
+        documentsSelected.textContent = truncatePath(path);
+        documentsInput.classList.add('selected');
+        documentsHeader.classList.add('done');
+        updateSigblocksButton();
+      }
+    });
+
+    documentsInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      documentsInput.classList.add('active');
+    });
+
+    documentsInput.addEventListener('dragleave', () => {
+      documentsInput.classList.remove('active');
+    });
+
+    documentsInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      documentsInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        sigblocksDocumentsPath = files[0].path;
+        documentsSelected.textContent = truncatePath(sigblocksDocumentsPath);
+        documentsInput.classList.add('selected');
+        documentsHeader.classList.add('done');
+        updateSigblocksButton();
+      }
+    });
+
+    // Generate signature blocks
+    generateSigblocksBtn.addEventListener('click', async () => {
+      if (!checklistPath || incumbencyPaths.length === 0 || !sigblocksDocumentsPath) return;
+
+      // Build entity mappings from UI
+      const entityMappings = {};
+      const rows = entityMapping.querySelectorAll('.entity-row');
+      rows.forEach(row => {
+        const entityName = row.dataset.entity;
+        const roleSelect = row.querySelector('.entity-select');
+        const signerSelect = row.querySelector('.signer-select');
+        const role = roleSelect.value;
+        const signerIndex = parseInt(signerSelect.value, 10) || 0;
+
+        if (role) {
+          entityMappings[entityName] = { role, signer_index: signerIndex };
+        }
+      });
+
+      showSigblocksState('processing');
+      sigblocksProgressFill.style.width = '0%';
+      sigblocksProgressText.textContent = 'Starting...';
+
+      try {
+        const result = await ipcRenderer.invoke('process-sigblocks', {
+          checklist_path: checklistPath,
+          incumbency_paths: incumbencyPaths,
+          documents_folder: sigblocksDocumentsPath,
+          entity_mappings: entityMappings
+        });
+
+        sigblocksResult = result;
+        sigblocksProgressText.textContent = 'Creating ZIP file...';
+        sigblocksZipPath = await ipcRenderer.invoke('create-zip', result.output_folder);
+
+        // Update results UI
+        const processed = result.documents_processed || [];
+        sigblocksResultText.textContent = `Generated signature blocks for ${processed.length} document${processed.length !== 1 ? 's' : ''}`;
+
+        let resultsHtml = '';
+        for (const doc of processed.slice(0, 10)) {
+          const status = doc.status === 'processed' ? '✓' : '○';
+          const note = doc.blocks_added ? `(${doc.blocks_added} blocks)` : doc.note || '';
+          resultsHtml += `<div class="sigblock-result-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            ${doc.file} ${note}
+          </div>`;
+        }
+        if (processed.length > 10) {
+          resultsHtml += `<div class="sigblock-result-item" style="color: #555;">...and ${processed.length - 10} more</div>`;
+        }
+        sigblocksResults.innerHTML = resultsHtml;
+
+        showSigblocksState('complete');
+      } catch (err) {
+        sigblocksErrorText.textContent = err.message;
+        showSigblocksState('error');
+      }
+    });
+
+    // Listen for sigblocks progress
+    ipcRenderer.on('sigblocks-progress', (event, data) => {
+      sigblocksProgressText.textContent = data.message;
+      sigblocksProgressFill.style.width = data.percent + '%';
+    });
+
+    sigblocksDownloadBtn.addEventListener('click', async () => {
+      if (sigblocksZipPath) await ipcRenderer.invoke('save-zip', sigblocksZipPath);
+    });
+
+    // Flow to Signature Packets
+    sigblocksToPacketsBtn.addEventListener('click', async () => {
+      if (sigblocksResult && sigblocksResult.output_folder) {
+        // Switch to packets tab
+        tabs.forEach(t => t.classList.remove('active'));
+        document.querySelector('[data-tab="packets"]').classList.add('active');
+        packetsTab.style.display = 'block';
+        executionTab.style.display = 'none';
+        sigblocksTab.style.display = 'none';
+
+        // Process the output folder
+        await processFolder(sigblocksResult.output_folder);
+      }
+    });
+
+    function resetSigblocksState() {
+      checklistPath = null;
+      checklistData = null;
+      incumbencyPaths = [];
+      incumbencyData = [];
+      sigblocksDocumentsPath = null;
+      sigblocksResult = null;
+      sigblocksZipPath = null;
+
+      checklistSelected.textContent = '';
+      incumbencySelected.textContent = '';
+      documentsSelected.textContent = '';
+      entityMapping.innerHTML = '';
+
+      checklistInput.classList.remove('selected');
+      incumbencyInput.classList.remove('selected');
+      documentsInput.classList.remove('selected');
+      checklistHeader.classList.remove('done');
+      incumbencyHeader.classList.remove('done');
+      documentsHeader.classList.remove('done');
+
+      mappingStep.style.display = 'none';
+      documentsStep.style.display = 'none';
+
+      updateSigblocksButton();
+      showSigblocksState('idle');
+    }
+
+    sigblocksResetBtn.addEventListener('click', resetSigblocksState);
+    sigblocksRetryBtn.addEventListener('click', resetSigblocksState);
   </script>
 </body>
 </html>

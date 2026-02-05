@@ -165,6 +165,179 @@ ipcMain.handle('select-pdf', async () => {
   return filePaths[0] || null;
 });
 
+// Select Excel/CSV file
+ipcMain.handle('select-spreadsheet', async () => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'Spreadsheets', extensions: ['xlsx', 'xls', 'csv'] }]
+  });
+  return filePaths[0] || null;
+});
+
+// Select multiple files
+ipcMain.handle('select-files', async (event, extensions) => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Documents', extensions: extensions || ['pdf', 'docx'] }]
+  });
+  return filePaths || [];
+});
+
+// Parse checklist
+ipcMain.handle('parse-checklist', async (event, checklistPath) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('checklist_parser');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Processor not found: ' + processorPath));
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    const proc = spawn(processorPath, [checklistPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Checklist parsing failed'));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
+// Parse incumbency certificate
+ipcMain.handle('parse-incumbency', async (event, incPath) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('incumbency_parser');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Processor not found: ' + processorPath));
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    const proc = spawn(processorPath, [incPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Incumbency parsing failed'));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
+// Process signature block workflow
+ipcMain.handle('process-sigblocks', async (event, config) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('sigblock_workflow');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Processor not found: ' + processorPath));
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    // Write config to temp file
+    const configPath = path.join(app.getPath('temp'), `sigblock-config-${Date.now()}.json`);
+    fs.writeFileSync(configPath, JSON.stringify(config));
+
+    const proc = spawn(processorPath, [configPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.on('close', (code) => {
+      // Clean up config file
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Signature block processing failed'));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
 // Process execution version
 ipcMain.handle('process-execution-version', async (event, originalsFolder, signedPdfPath) => {
   return new Promise((resolve, reject) => {
