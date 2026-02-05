@@ -148,48 +148,45 @@ jobs:
           files: |
             artifacts/*
           body: |
-            ## EmmaNeigh v4.0.0 - Signature Block Generator
+            ## EmmaNeigh v4.1.0 - Disclaimer, User Profiles & Auto-Update
 
             ### Downloads
             - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
             - **Mac**: Download the `.dmg` file
 
-            ### What's New in v4.0.0
-            - **NEW: Signature Blocks Tab** - Generate signature blocks from checklists and incumbency certificates
-            - Parse transaction checklists (Excel/CSV) to identify documents and signatories
-            - Parse incumbency certificates (PDF/DOCX) to extract authorized signer details
-            - Map entities to roles with user-friendly dropdown interface
-            - Generate formatted signature blocks and insert into documents
-            - One-click flow to Signature Packets for seamless workflow
+            ### What's New in v4.1.0
+            - **Liability Disclaimer**: Terms of use modal on first launch
+            - **User Profiles**: Click your name to set a display name (stored locally)
+            - **Auto-Update**: App will notify you when updates are available
+
+            ### Features (from v4.0.0)
+            - **Signature Blocks Tab**: Generate signature blocks from checklists and incumbency certificates
+            - **Signature Packets Tab**: Extract and organize signature pages by signer
+            - **Execution Version Tab**: Merge signed DocuSign pages back into originals
 
             ### How to Use
 
-            **Signature Blocks Tab (NEW):**
+            **Signature Blocks Tab:**
             1. Upload your transaction checklist (.xlsx or .csv)
             2. Upload incumbency certificates (.pdf or .docx)
             3. Map each entity to its role and select the authorized signer
             4. Upload folder with unsigned documents
             5. Click "Generate Signature Blocks"
-            6. Download ZIP or click "Create Signature Packets →" to continue workflow
+            6. Download ZIP or click "Create Signature Packets" to continue
 
             **Signature Packets Tab:**
-            1. Drop a folder containing PDFs/DOCX onto the app (or click to browse)
-            2. Wait for processing - detects signatures in both blocks AND tables
+            1. Drop a folder containing PDFs/DOCX onto the app
+            2. Wait for processing
             3. Download your ZIP file with signature packets organized by signer
 
             **Execution Version Tab:**
             1. Select folder containing original unsigned agreements
-            2. Select the signed PDF from DocuSign (single PDF with all signed pages)
+            2. Select the signed PDF from DocuSign
             3. Click "Create Execution Versions"
             4. Download ZIP with executed documents
 
-            ### What it does
-            - **Signature Blocks**: Parses checklists & incumbencies to generate signature pages
-            - **Signature Packets**: Scans PDFs for signature pages, groups by signer
-            - **Execution Version**: Matches signed pages to originals, replaces blank signature pages
-
             ### Security
             - 100% local processing - no data leaves your machine
-            - No internet connection required
+            - No internet connection required (except for update checks)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

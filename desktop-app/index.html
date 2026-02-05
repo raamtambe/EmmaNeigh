@@ -560,12 +560,176 @@
       text-align: center;
       padding: 16px;
     }
+
+    /* Modal Overlay */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      -webkit-app-region: no-drag;
+    }
+
+    .modal-overlay.hidden {
+      display: none;
+    }
+
+    .modal {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 480px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .modal h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: #fff;
+    }
+
+    .modal-content {
+      font-size: 13px;
+      color: #999;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .modal-content p {
+      margin-bottom: 12px;
+    }
+
+    .modal-content strong {
+      color: #fff;
+    }
+
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .modal-actions .btn {
+      width: 100%;
+      text-align: center;
+    }
+
+    /* Update banner */
+    .update-banner {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      z-index: 900;
+      -webkit-app-region: no-drag;
+    }
+
+    .update-banner.hidden {
+      display: none;
+    }
+
+    .update-banner p {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .update-banner .btn {
+      padding: 8px 16px;
+      font-size: 12px;
+    }
+
+    /* User info in header */
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #666;
+      -webkit-app-region: no-drag;
+      cursor: pointer;
+    }
+
+    .user-info:hover {
+      color: #888;
+    }
+
+    .user-avatar {
+      width: 24px;
+      height: 24px;
+      background: #222;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
+  <!-- Disclaimer Modal -->
+  <div class="modal-overlay" id="disclaimerModal">
+    <div class="modal">
+      <h2>Terms of Use</h2>
+      <div class="modal-content">
+        <p><strong>DISCLAIMER:</strong> EmmaNeigh is provided "as is" without warranty of any kind, express or implied.</p>
+        <p>By using this software, you acknowledge and agree that:</p>
+        <p>1. This tool is intended to assist with document processing and signature management. It does not constitute legal advice.</p>
+        <p>2. You are solely responsible for reviewing and verifying all output documents before use.</p>
+        <p>3. The developers and publishers of EmmaNeigh shall not be liable for any damages, losses, or legal issues arising from the use of this software.</p>
+        <p>4. All document processing occurs locally on your machine. No data is transmitted to external servers.</p>
+        <p>5. You agree to use this software in compliance with all applicable laws and regulations.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="acceptDisclaimerBtn">I Accept</button>
+        <button class="btn btn-secondary" id="declineDisclaimerBtn">Decline & Exit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update Banner -->
+  <div class="update-banner hidden" id="updateBanner">
+    <p id="updateMessage">A new version is available!</p>
+    <button class="btn btn-primary" id="updateBtn">Update Now</button>
+    <button class="btn btn-secondary" id="dismissUpdateBtn" style="margin-top: 0;">Later</button>
+  </div>
+
   <div class="container">
     <header>
-      <div class="logo">EmmaNeigh</div>
+      <div class="header-row">
+        <div class="logo">EmmaNeigh</div>
+        <div class="user-info" id="userInfo">
+          <div class="user-avatar">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <span id="userName">Guest</span>
+        </div>
+      </div>
       <div class="tabs">
         <button class="tab active" data-tab="packets">Signature Packets</button>
         <button class="tab" data-tab="execution">Execution Version</button>
@@ -875,6 +1039,77 @@
 
   <script>
     const { ipcRenderer } = require('electron');
+
+    // ========== DISCLAIMER MODAL ==========
+    const disclaimerModal = document.getElementById('disclaimerModal');
+    const acceptDisclaimerBtn = document.getElementById('acceptDisclaimerBtn');
+    const declineDisclaimerBtn = document.getElementById('declineDisclaimerBtn');
+
+    // Check if user has accepted disclaimer
+    const hasAcceptedDisclaimer = localStorage.getItem('emmaneigh_disclaimer_accepted');
+    if (hasAcceptedDisclaimer) {
+      disclaimerModal.classList.add('hidden');
+    }
+
+    acceptDisclaimerBtn.addEventListener('click', () => {
+      localStorage.setItem('emmaneigh_disclaimer_accepted', 'true');
+      disclaimerModal.classList.add('hidden');
+    });
+
+    declineDisclaimerBtn.addEventListener('click', async () => {
+      await ipcRenderer.invoke('quit-app');
+    });
+
+    // ========== USER INFO / LOGIN ==========
+    const userInfo = document.getElementById('userInfo');
+    const userName = document.getElementById('userName');
+
+    // Check for stored user
+    const storedUser = localStorage.getItem('emmaneigh_user');
+    if (storedUser) {
+      try {
+        const user = JSON.parse(storedUser);
+        userName.textContent = user.name || 'Guest';
+      } catch (e) {
+        userName.textContent = 'Guest';
+      }
+    }
+
+    userInfo.addEventListener('click', () => {
+      // Simple prompt for name (in future could be full login modal)
+      const currentName = userName.textContent;
+      const newName = prompt('Enter your name (or leave blank for Guest):', currentName === 'Guest' ? '' : currentName);
+
+      if (newName !== null) {
+        const displayName = newName.trim() || 'Guest';
+        userName.textContent = displayName;
+        localStorage.setItem('emmaneigh_user', JSON.stringify({ name: displayName }));
+      }
+    });
+
+    // ========== AUTO-UPDATE ==========
+    const updateBanner = document.getElementById('updateBanner');
+    const updateMessage = document.getElementById('updateMessage');
+    const updateBtn = document.getElementById('updateBtn');
+    const dismissUpdateBtn = document.getElementById('dismissUpdateBtn');
+
+    ipcRenderer.on('update-available', (event, info) => {
+      updateMessage.textContent = `Version ${info.version} is available!`;
+      updateBanner.classList.remove('hidden');
+    });
+
+    ipcRenderer.on('update-downloaded', () => {
+      updateMessage.textContent = 'Update downloaded. Restart to install.';
+      updateBtn.textContent = 'Restart Now';
+    });
+
+    updateBtn.addEventListener('click', async () => {
+      await ipcRenderer.invoke('install-update');
+    });
+
+    dismissUpdateBtn.addEventListener('click', () => {
+      updateBanner.classList.add('hidden');
+    });
 
     // ========== TABS ==========
     const tabs = document.querySelectorAll('.tab');

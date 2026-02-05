@@ -1,6 +1,6 @@
 {
   "name": "emmaneigh",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Signature Packet Automation",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "electron-builder": "^24.9.1"
   },
   "dependencies": {
-    "archiver": "^6.0.1"
+    "archiver": "^6.0.1",
+    "electron-updater": "^6.1.7"
   },
   "build": {
     "appId": "com.emmaneigh.app",
@@ -30,6 +31,11 @@
         "filter": ["**/*"]
       }
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "raamtambe",
+      "repo": "EmmaNeigh"
+    },
     "win": {
       "target": "portable",
       "icon": "icon.ico"

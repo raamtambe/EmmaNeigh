@@ -4,6 +4,16 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
 
+// Auto-updater (only in production)
+let autoUpdater;
+if (app.isPackaged) {
+  try {
+    autoUpdater = require('electron-updater').autoUpdater;
+  } catch (e) {
+    console.log('electron-updater not available');
+  }
+}
+
 let mainWindow;
 
 function createWindow() {
@@ -27,7 +37,26 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+
+  // Setup auto-updater
+  if (autoUpdater) {
+    autoUpdater.checkForUpdatesAndNotify();
+
+    autoUpdater.on('update-available', (info) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('update-available', info);
+      }
+    });
+
+    autoUpdater.on('update-downloaded', () => {
+      if (mainWindow) {
+        mainWindow.webContents.send('update-downloaded');
+      }
+    });
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -393,4 +422,16 @@ ipcMain.handle('process-execution-version', async (event, originalsFolder, signe
       reject(err);
     });
   });
+});
+
+// Quit app (for disclaimer decline)
+ipcMain.handle('quit-app', () => {
+  app.quit();
+});
+
+// Install update and restart
+ipcMain.handle('install-update', () => {
+  if (autoUpdater) {
+    autoUpdater.quitAndInstall();
+  }
 });
