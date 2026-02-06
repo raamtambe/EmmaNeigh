@@ -779,6 +779,27 @@
     .conflict-item:last-child {
       border-bottom: none;
     }
+
+    /* Tab scrolling */
+    #packetsTab,
+    #executionTab,
+    #sigblocksTab,
+    #collateTab {
+      overflow-y: auto;
+      flex: 1;
+      padding-bottom: 40px;
+    }
+
+    .tabs {
+      flex-shrink: 0;
+    }
+
+    /* File count badge */
+    .file-count {
+      font-size: 12px;
+      color: #22c55e;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
@@ -839,8 +860,9 @@
       <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
       </svg>
-      <p class="drop-text">Drop a folder here, or <span>browse</span></p>
-      <p class="drop-hint">Folder should contain PDF documents with signature pages</p>
+      <p class="drop-text">Drop folder or PDFs here, or <span>browse</span></p>
+      <p class="drop-hint">Accepts a folder or individual PDF files with signature pages</p>
+      <p class="file-count" id="packetsFileCount"></p>
     </div>
 
     <!-- Processing -->
@@ -918,8 +940,8 @@
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
           </svg>
-          <p class="input-label">Original Agreements Folder</p>
-          <p class="input-hint">Folder containing unsigned PDFs</p>
+          <p class="input-label">Original Agreements</p>
+          <p class="input-hint">Folder or individual PDF files</p>
           <p class="input-selected" id="originalsSelected"></p>
         </div>
 
@@ -1361,15 +1383,27 @@
     const downloadBtn = document.getElementById('downloadBtn');
     const resetBtn = document.getElementById('resetBtn');
     const retryBtn = document.getElementById('retryBtn');
+    const packetsFileCount = document.getElementById('packetsFileCount');
 
     let currentResult = null;
     let currentZipPath = null;
+    let packetsPaths = []; // Can be folder path or array of file paths
 
     function showState(state) {
       dropZone.style.display = state === 'idle' ? 'flex' : 'none';
       processing.classList.toggle('visible', state === 'processing');
       complete.classList.toggle('visible', state === 'complete');
       error.classList.toggle('visible', state === 'error');
+    }
+
+    function updatePacketsFileCount() {
+      if (packetsPaths.length === 0) {
+        packetsFileCount.textContent = '';
+      } else if (typeof packetsPaths === 'string') {
+        packetsFileCount.textContent = 'Folder selected';
+      } else {
+        packetsFileCount.textContent = `${packetsPaths.length} file${packetsPaths.length !== 1 ? 's' : ''} selected`;
+      }
     }
 
     dropZone.addEventListener('dragover', (e) => {
@@ -1386,22 +1420,61 @@
       dropZone.classList.remove('active');
       const files = e.dataTransfer.files;
       if (files.length > 0) {
-        await processFolder(files[0].path);
+        // Check if it's a folder or files
+        const firstFile = files[0];
+        // If multiple files or single PDF, treat as file list
+        if (files.length > 1 || firstFile.name.toLowerCase().endsWith('.pdf')) {
+          packetsPaths = Array.from(files)
+            .filter(f => f.name.toLowerCase().endsWith('.pdf'))
+            .map(f => f.path);
+          if (packetsPaths.length > 0) {
+            updatePacketsFileCount();
+            await processPackets({ files: packetsPaths });
+          }
+        } else {
+          // Single item that's not a PDF - assume folder
+          packetsPaths = firstFile.path;
+          updatePacketsFileCount();
+          await processPackets({ folder: firstFile.path });
+        }
       }
     });
 
     dropZone.addEventListener('click', async () => {
-      const folderPath = await ipcRenderer.invoke('select-folder');
-      if (folderPath) await processFolder(folderPath);
+      // Show choice dialog - folder or files
+      const choice = await showPacketsChoiceDialog();
+      if (choice === 'folder') {
+        const folderPath = await ipcRenderer.invoke('select-folder');
+        if (folderPath) {
+          packetsPaths = folderPath;
+          updatePacketsFileCount();
+          await processPackets({ folder: folderPath });
+        }
+      } else if (choice === 'files') {
+        const filePaths = await ipcRenderer.invoke('select-pdfs-multiple');
+        if (filePaths && filePaths.length > 0) {
+          packetsPaths = filePaths;
+          updatePacketsFileCount();
+          await processPackets({ files: filePaths });
+        }
+      }
     });
 
-    async function processFolder(folderPath) {
+    function showPacketsChoiceDialog() {
+      return new Promise((resolve) => {
+        // Simple approach: use confirm dialog
+        const useFolder = confirm('Click OK to select a folder, or Cancel to select individual PDF files.');
+        resolve(useFolder ? 'folder' : 'files');
+      });
+    }
+
+    async function processPackets(input) {
       showState('processing');
       progressFill.style.width = '0%';
       progressText.textContent = 'Starting...';
 
       try {
-        const result = await ipcRenderer.invoke('process-folder', folderPath);
+        const result = await ipcRenderer.invoke('process-folder', input);
         currentResult = result;
         progressText.textContent = 'Creating ZIP file...';
         currentZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
@@ -1411,6 +1484,11 @@
         errorText.textContent = err.message;
         showState('error');
       }
+    }
+
+    // Keep old function for backwards compatibility
+    async function processFolder(folderPath) {
+      await processPackets({ folder: folderPath });
     }
 
     ipcRenderer.on('progress', (event, data) => {
@@ -1432,12 +1510,16 @@
     resetBtn.addEventListener('click', () => {
       currentResult = null;
       currentZipPath = null;
+      packetsPaths = [];
+      packetsFileCount.textContent = '';
       showState('idle');
     });
 
     retryBtn.addEventListener('click', () => {
       currentResult = null;
       currentZipPath = null;
+      packetsPaths = [];
+      packetsFileCount.textContent = '';
       showState('idle');
     });
 
@@ -1460,7 +1542,7 @@
     const execResetBtn = document.getElementById('execResetBtn');
     const execRetryBtn = document.getElementById('execRetryBtn');
 
-    let originalsPath = null;
+    let originalsPath = null; // Can be folder path (string) or array of file paths
     let signedPath = null;
     let execResult = null;
     let execZipPath = null;
@@ -1473,7 +1555,8 @@
     }
 
     function updateExecButton() {
-      processExecBtn.disabled = !(originalsPath && signedPath);
+      const hasOriginals = originalsPath && (typeof originalsPath === 'string' || originalsPath.length > 0);
+      processExecBtn.disabled = !(hasOriginals && signedPath);
     }
 
     function truncatePath(p, maxLen = 40) {
@@ -1482,14 +1565,37 @@
       return '...' + p.slice(-(maxLen - 3));
     }
 
-    // Originals folder selection
-    originalsInput.addEventListener('click', async () => {
-      const path = await ipcRenderer.invoke('select-folder');
-      if (path) {
-        originalsPath = path;
-        originalsSelected.textContent = truncatePath(path);
+    function updateOriginalsDisplay() {
+      if (!originalsPath) {
+        originalsSelected.textContent = '';
+        originalsInput.classList.remove('selected');
+      } else if (typeof originalsPath === 'string') {
+        originalsSelected.textContent = truncatePath(originalsPath);
         originalsInput.classList.add('selected');
-        updateExecButton();
+      } else {
+        originalsSelected.textContent = `${originalsPath.length} file${originalsPath.length !== 1 ? 's' : ''} selected`;
+        originalsInput.classList.add('selected');
+      }
+    }
+
+    // Originals folder/files selection
+    originalsInput.addEventListener('click', async () => {
+      // Show choice dialog
+      const useFolder = confirm('Click OK to select a folder, or Cancel to select individual PDF files.');
+      if (useFolder) {
+        const path = await ipcRenderer.invoke('select-folder');
+        if (path) {
+          originalsPath = path;
+          updateOriginalsDisplay();
+          updateExecButton();
+        }
+      } else {
+        const paths = await ipcRenderer.invoke('select-pdfs-multiple');
+        if (paths && paths.length > 0) {
+          originalsPath = paths;
+          updateOriginalsDisplay();
+          updateExecButton();
+        }
       }
     });
 
@@ -1507,9 +1613,21 @@
       originalsInput.classList.remove('active');
       const files = e.dataTransfer.files;
       if (files.length > 0) {
-        originalsPath = files[0].path;
-        originalsSelected.textContent = truncatePath(originalsPath);
-        originalsInput.classList.add('selected');
+        // Check if multiple files or single PDF
+        if (files.length > 1 || files[0].name.toLowerCase().endsWith('.pdf')) {
+          // Treat as file list
+          originalsPath = Array.from(files)
+            .filter(f => f.name.toLowerCase().endsWith('.pdf'))
+            .map(f => f.path);
+          if (originalsPath.length === 0) {
+            // If no PDFs found, maybe it was a folder
+            originalsPath = files[0].path;
+          }
+        } else {
+          // Single item that's not a PDF - assume folder
+          originalsPath = files[0].path;
+        }
+        updateOriginalsDisplay();
         updateExecButton();
       }
     });
@@ -1548,14 +1666,19 @@
 
     // Process execution version
     processExecBtn.addEventListener('click', async () => {
-      if (!originalsPath || !signedPath) return;
+      const hasOriginals = originalsPath && (typeof originalsPath === 'string' || originalsPath.length > 0);
+      if (!hasOriginals || !signedPath) return;
 
       showExecState('processing');
       execProgressFill.style.width = '0%';
       execProgressText.textContent = 'Starting...';
 
       try {
-        const result = await ipcRenderer.invoke('process-execution-version', originalsPath, signedPath);
+        // Pass originals as object with folder or files key
+        const originalsInput = typeof originalsPath === 'string'
+          ? { folder: originalsPath }
+          : { files: originalsPath };
+        const result = await ipcRenderer.invoke('process-execution-version', originalsInput, signedPath);
         execResult = result;
 
         execProgressText.textContent = 'Creating ZIP file...';
@@ -1592,6 +1715,7 @@
       signedSelected.textContent = '';
       originalsInput.classList.remove('selected');
       signedInput.classList.remove('selected');
+      updateOriginalsDisplay();
       updateExecButton();
       showExecState('idle');
     }
@@ -1991,8 +2115,13 @@
     }
 
     function updateCommentedDocsList() {
+      // Always update the count display
       if (commentedDocPaths.length > 0) {
+        commentedDocsSelected.textContent = `${commentedDocPaths.length} file${commentedDocPaths.length !== 1 ? 's' : ''} selected`;
+        commentedDocsInput.classList.add('selected');
+        commentedDocsHeader.classList.add('done');
         commentedDocsList.classList.remove('hidden');
+
         let html = '';
         commentedDocPaths.forEach((p, i) => {
           const name = p.split(/[/\\]/).pop();
@@ -2013,6 +2142,9 @@
           });
         });
       } else {
+        commentedDocsSelected.textContent = '';
+        commentedDocsInput.classList.remove('selected');
+        commentedDocsHeader.classList.remove('done');
         commentedDocsList.classList.add('hidden');
         commentedDocsList.innerHTML = '';
       }

@@ -85,7 +85,8 @@ function getProcessorPath(processorName = 'signature_packets') {
 }
 
 // Process signature packets
-ipcMain.handle('process-folder', async (event, folderPath) => {
+// Accepts either a folder path string (legacy) or an object { folder: string } or { files: string[] }
+ipcMain.handle('process-folder', async (event, input) => {
   return new Promise((resolve, reject) => {
     const processorPath = getProcessorPath();
 
@@ -104,7 +105,23 @@ ipcMain.handle('process-folder', async (event, folderPath) => {
       try { fs.chmodSync(processorPath, '755'); } catch (e) {}
     }
 
-    const proc = spawn(processorPath, [folderPath]);
+    let args;
+    // Handle legacy string input (folder path)
+    if (typeof input === 'string') {
+      args = [input];
+    } else if (input.folder) {
+      args = [input.folder];
+    } else if (input.files) {
+      // Write config to temp file for multi-file input
+      const configPath = path.join(app.getPath('temp'), `packets-config-${Date.now()}.json`);
+      fs.writeFileSync(configPath, JSON.stringify({ files: input.files }));
+      args = ['--config', configPath];
+    } else {
+      reject(new Error('Invalid input: must be folder path or { folder } or { files }'));
+      return;
+    }
+
+    const proc = spawn(processorPath, args);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -208,6 +225,15 @@ ipcMain.handle('select-files', async (event, extensions) => {
   const { filePaths } = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Documents', extensions: extensions || ['pdf', 'docx'] }]
+  });
+  return filePaths || [];
+});
+
+// Select multiple PDF files
+ipcMain.handle('select-pdfs-multiple', async () => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'PDF Documents', extensions: ['pdf'] }]
   });
   return filePaths || [];
 });
@@ -368,7 +394,8 @@ ipcMain.handle('process-sigblocks', async (event, config) => {
 });
 
 // Process execution version
-ipcMain.handle('process-execution-version', async (event, originalsFolder, signedPdfPath) => {
+// originalsInput can be a folder path string (legacy) or { folder: string } or { files: string[] }
+ipcMain.handle('process-execution-version', async (event, originalsInput, signedPdfPath) => {
   return new Promise((resolve, reject) => {
     const processorPath = getProcessorPath('execution_version');
 
@@ -387,7 +414,28 @@ ipcMain.handle('process-execution-version', async (event, originalsFolder, signe
       try { fs.chmodSync(processorPath, '755'); } catch (e) {}
     }
 
-    const proc = spawn(processorPath, [originalsFolder, signedPdfPath]);
+    let args;
+    let configPath = null;
+    // Handle different input types
+    if (typeof originalsInput === 'string') {
+      // Legacy: folder path string
+      args = [originalsInput, signedPdfPath];
+    } else if (originalsInput.folder) {
+      args = [originalsInput.folder, signedPdfPath];
+    } else if (originalsInput.files) {
+      // Write config to temp file
+      configPath = path.join(app.getPath('temp'), `exec-config-${Date.now()}.json`);
+      fs.writeFileSync(configPath, JSON.stringify({
+        files: originalsInput.files,
+        signed_pdf: signedPdfPath
+      }));
+      args = ['--config', configPath];
+    } else {
+      reject(new Error('Invalid input: must be folder path or { folder } or { files }'));
+      return;
+    }
+
+    const proc = spawn(processorPath, args);
     let result = null;
 
     proc.stdout.on('data', (data) => {

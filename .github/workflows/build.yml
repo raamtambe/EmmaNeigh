@@ -153,22 +153,19 @@ jobs:
           files: |
             artifacts/*
           body: |
-            ## EmmaNeigh v4.1.1 - Document Collation
+            ## EmmaNeigh v4.1.2 - UI Improvements
 
             ### Downloads
             - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
             - **Mac**: Download the `.dmg` file
 
-            ### What's New in v4.1.1
-            - **Collate Tab**: Merge track changes and comments from multiple document versions
-              - Upload a base document and multiple commented versions
-              - Integrates track changes (insertions/deletions) from all versions
-              - Extracts and includes comment bubbles
-              - Detects conflicts when different versions modify the same content
-              - Generates summary table showing each author's contributions
-              - 100% local processing - no LLM or cloud services required
+            ### What's New in v4.1.2
+            - **Individual PDF Support**: Signature Packets and Execution Version tabs now accept individual PDF files (not just folders). Drag and drop multiple PDFs directly!
+            - **Tab Scrolling**: All tabs now scroll properly, so you can access all buttons without resizing the window
+            - **File Count Fix**: The file count display now correctly updates when adding/removing documents in Collate tab
 
             ### Previous Features
+            - **Collate Tab**: Merge track changes and comments from multiple document versions (v4.1.1)
             - **Liability Disclaimer**: Terms of use modal on first launch (v4.1.0)
             - **User Profiles**: Click your name to set a display name (v4.1.0)
             - **Auto-Update**: App notifies you when updates are available (v4.1.0)
@@ -177,6 +174,17 @@ jobs:
             - **Execution Version Tab**: Merge signed DocuSign pages back into originals
 
             ### How to Use
+
+            **Signature Packets Tab:**
+            1. Drop a folder OR individual PDF files onto the app
+            2. Wait for processing
+            3. Download your ZIP file with signature packets organized by signer
+
+            **Execution Version Tab:**
+            1. Select folder OR individual PDF files as original agreements
+            2. Select the signed PDF from DocuSign
+            3. Click "Create Execution Versions"
+            4. Download ZIP with executed documents
 
             **Collate Tab:**
             1. Upload your base document (.docx)
@@ -191,17 +199,6 @@ jobs:
             4. Upload folder with unsigned documents
             5. Click "Generate Signature Blocks"
             6. Download ZIP or click "Create Signature Packets" to continue
-
-            **Signature Packets Tab:**
-            1. Drop a folder containing PDFs/DOCX onto the app
-            2. Wait for processing
-            3. Download your ZIP file with signature packets organized by signer
-
-            **Execution Version Tab:**
-            1. Select folder containing original unsigned agreements
-            2. Select the signed PDF from DocuSign
-            3. Click "Create Execution Versions"
-            4. Download ZIP with executed documents
 
             ### Security
             - 100% local processing - no data leaves your machine

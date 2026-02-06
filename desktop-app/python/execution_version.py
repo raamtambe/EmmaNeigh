@@ -538,14 +538,195 @@ def process_execution_version(originals_folder, signed_pdf_path):
 
 
 def main():
-    if len(sys.argv) < 3:
-        emit("error", message="Usage: execution_version.py <originals_folder> <signed_pdf_path>")
+    if len(sys.argv) < 2:
+        emit("error", message="Usage: execution_version.py <originals_folder> <signed_pdf_path> OR --config <config_file>")
         sys.exit(1)
 
-    originals_folder = sys.argv[1]
-    signed_pdf_path = sys.argv[2]
+    # Check if we have --config argument (for file list) or folder path
+    if sys.argv[1] == '--config':
+        if len(sys.argv) < 3:
+            emit("error", message="No config file provided.")
+            sys.exit(1)
+        config_path = sys.argv[2]
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            file_paths = config.get('files', [])
+            signed_pdf_path = config.get('signed_pdf')
+            if not file_paths or not signed_pdf_path:
+                emit("error", message="Config must have 'files' and 'signed_pdf' keys.")
+                sys.exit(1)
+            # Process with file list
+            process_execution_version_files(file_paths, signed_pdf_path)
+        except Exception as e:
+            emit("error", message=f"Failed to read config: {str(e)}")
+            sys.exit(1)
+    else:
+        if len(sys.argv) < 3:
+            emit("error", message="Usage: execution_version.py <originals_folder> <signed_pdf_path>")
+            sys.exit(1)
+        originals_folder = sys.argv[1]
+        signed_pdf_path = sys.argv[2]
+        process_execution_version(originals_folder, signed_pdf_path)
 
-    process_execution_version(originals_folder, signed_pdf_path)
+
+def process_execution_version_files(file_paths, signed_pdf_path):
+    """Process execution version with a list of file paths instead of a folder."""
+    import tempfile
+
+    # Validate signed PDF
+    if not os.path.isfile(signed_pdf_path):
+        emit("error", message=f"Signed PDF not found: {signed_pdf_path}")
+        sys.exit(1)
+
+    # Filter valid files
+    valid_files = [(os.path.basename(f), f) for f in file_paths
+                   if os.path.isfile(f) and f.lower().endswith(('.pdf', '.docx'))]
+
+    if not valid_files:
+        emit("error", message="No valid PDF or DOCX files provided.")
+        sys.exit(1)
+
+    # Create temp output directory
+    output_folder = tempfile.mkdtemp(prefix='emmaneigh_exec_')
+
+    total = len(valid_files)
+    emit("progress", percent=0, message=f"Found {total} original documents")
+
+    # Load signed PDF
+    emit("progress", percent=5, message="Loading signed PDF...")
+    try:
+        signed_doc = fitz.open(signed_pdf_path)
+    except Exception as e:
+        emit("error", message=f"Failed to open signed PDF: {e}")
+        sys.exit(1)
+
+    # Extract signature pages from signed PDF
+    emit("progress", percent=10, message="Analyzing signed pages...")
+    signed_pages = []
+    for page_num in range(signed_doc.page_count):
+        page = signed_doc[page_num]
+        text = page.get_text()
+        if is_signature_page(page):
+            doc_name = detect_document_name_from_footer(text)
+            if not doc_name:
+                doc_name = detect_document_name_from_title(text)
+            signed_pages.append({
+                'page_num': page_num,
+                'doc_name': doc_name,
+                'text': text[:500]
+            })
+
+    emit("progress", percent=20, message=f"Found {len(signed_pages)} signed signature pages")
+
+    # Process each original document
+    results = []
+    matched_pages = 0
+    unmatched_agreements = 0
+
+    for idx, (filename, filepath) in enumerate(valid_files):
+        percent = 20 + int((idx / total) * 70)
+        emit("progress", percent=percent, message=f"Processing {filename}")
+
+        try:
+            if filename.lower().endswith('.pdf'):
+                result = process_pdf_document_with_path(filepath, filename, signed_doc, signed_pages, output_folder)
+            elif filename.lower().endswith('.docx'):
+                result = process_docx_document_with_path(filepath, filename, signed_doc, signed_pages, output_folder)
+            else:
+                continue
+
+            results.append(result)
+            matched_pages += result.get('matched_pages', 0)
+            if result.get('matched_pages', 0) == 0:
+                unmatched_agreements += 1
+        except Exception as e:
+            results.append({
+                'file': filename,
+                'status': 'error',
+                'error': str(e)
+            })
+
+    signed_doc.close()
+
+    # Count results
+    executed_count = sum(1 for r in results if r.get('status') == 'executed')
+    unmatched_pages = len(signed_pages) - matched_pages
+
+    emit("progress", percent=100, message="Complete!")
+    emit("result",
+         success=True,
+         outputPath=output_folder,
+         executedCount=executed_count,
+         matchedPages=matched_pages,
+         totalSignedPages=len(signed_pages),
+         unmatchedAgreements=unmatched_agreements,
+         unmatchedPages=unmatched_pages)
+
+
+def process_pdf_document_with_path(filepath, filename, signed_doc, signed_pages, output_folder):
+    """Process a PDF document using its full path."""
+    try:
+        original = fitz.open(filepath)
+    except Exception as e:
+        return {'file': filename, 'status': 'error', 'error': str(e)}
+
+    # Find signature pages in original
+    sig_page_indices = []
+    for page_num in range(original.page_count):
+        if is_signature_page(original[page_num]):
+            sig_page_indices.append(page_num)
+
+    if not sig_page_indices:
+        original.close()
+        return {'file': filename, 'status': 'no_sig_pages', 'matched_pages': 0}
+
+    # Match with signed pages
+    matched = 0
+    orig_name = os.path.splitext(filename)[0].upper()
+
+    for orig_page_idx in sig_page_indices:
+        orig_text = original[orig_page_idx].get_text()[:500]
+
+        best_match = None
+        best_score = 0
+
+        for sp in signed_pages:
+            if sp.get('used'):
+                continue
+            score = SequenceMatcher(None, orig_text, sp['text']).ratio()
+            if score > best_score and score > 0.5:
+                best_score = score
+                best_match = sp
+
+        if best_match:
+            # Replace page
+            original.delete_page(orig_page_idx)
+            original.insert_pdf(signed_doc, from_page=best_match['page_num'],
+                               to_page=best_match['page_num'], start_at=orig_page_idx)
+            best_match['used'] = True
+            matched += 1
+
+    # Save
+    if matched > 0:
+        output_name = sanitize_output_name(filename)
+        output_path = os.path.join(output_folder, output_name)
+        original.save(output_path)
+        original.close()
+        return {'file': filename, 'status': 'executed', 'matched_pages': matched, 'output': output_name}
+    else:
+        original.close()
+        return {'file': filename, 'status': 'no_match', 'matched_pages': 0}
+
+
+def process_docx_document_with_path(filepath, filename, signed_doc, signed_pages, output_folder):
+    """Process a DOCX document - convert to PDF first if possible."""
+    # For now, just copy DOCX files as-is (can't easily merge signed pages into DOCX)
+    import shutil
+    output_name = filename.replace('.docx', ' (executed).docx')
+    output_path = os.path.join(output_folder, output_name)
+    shutil.copy(filepath, output_path)
+    return {'file': filename, 'status': 'copied', 'matched_pages': 0, 'note': 'DOCX copied without modification'}
 
 
 if __name__ == "__main__":

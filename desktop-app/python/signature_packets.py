@@ -214,14 +214,36 @@ def extract_signers_from_docx(docx_path):
 
 def main():
     if len(sys.argv) < 2:
-        emit("error", message="No folder provided.")
+        emit("error", message="No input provided.")
         sys.exit(1)
 
-    input_dir = sys.argv[1]
+    input_dir = None
+    file_paths = None
 
-    if not os.path.isdir(input_dir):
-        emit("error", message=f"Invalid folder: {input_dir}")
-        sys.exit(1)
+    # Check if we have --config argument (for file list) or folder path
+    if sys.argv[1] == '--config':
+        if len(sys.argv) < 3:
+            emit("error", message="No config file provided.")
+            sys.exit(1)
+        config_path = sys.argv[2]
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            file_paths = config.get('files', [])
+            if not file_paths:
+                emit("error", message="No files in config.")
+                sys.exit(1)
+            # Use temp directory for output
+            import tempfile
+            input_dir = tempfile.mkdtemp(prefix='emmaneigh_packets_')
+        except Exception as e:
+            emit("error", message=f"Failed to read config: {str(e)}")
+            sys.exit(1)
+    else:
+        input_dir = sys.argv[1]
+        if not os.path.isdir(input_dir):
+            emit("error", message=f"Invalid folder: {input_dir}")
+            sys.exit(1)
 
     # Set up output directories
     output_base = os.path.join(input_dir, "signature_packets_output")
@@ -231,12 +253,18 @@ def main():
     os.makedirs(output_pdf_dir, exist_ok=True)
     os.makedirs(output_table_dir, exist_ok=True)
 
-    # Find PDF and DOCX files
-    document_files = [f for f in os.listdir(input_dir)
-                      if f.lower().endswith((".pdf", ".docx"))]
+    # Get document files - either from file_paths list or scan directory
+    if file_paths:
+        # Filter to valid PDF/DOCX files
+        document_files = [(os.path.basename(f), f) for f in file_paths
+                          if os.path.isfile(f) and f.lower().endswith((".pdf", ".docx"))]
+    else:
+        # Scan directory
+        document_files = [(f, os.path.join(input_dir, f)) for f in os.listdir(input_dir)
+                          if f.lower().endswith((".pdf", ".docx"))]
 
     if not document_files:
-        emit("error", message="No PDF or Word files found in the folder.")
+        emit("error", message="No PDF or Word files found.")
         sys.exit(1)
 
     total = len(document_files)
@@ -244,11 +272,12 @@ def main():
 
     # Scan all documents for signature pages
     rows = []
+    # Build filepath lookup for later use
+    filepath_lookup = {filename: filepath for filename, filepath in document_files}
 
-    for idx, filename in enumerate(document_files):
+    for idx, (filename, filepath) in enumerate(document_files):
         percent = int((idx / total) * 50)
         emit("progress", percent=percent, message=f"Scanning {filename}")
-        filepath = os.path.join(input_dir, filename)
 
         try:
             if filename.lower().endswith('.pdf'):
@@ -306,7 +335,9 @@ def main():
         for _, r in group.iterrows():
             if r["Document"].lower().endswith('.pdf'):
                 try:
-                    src = fitz.open(os.path.join(input_dir, r["Document"]))
+                    # Use filepath_lookup if available, otherwise build from input_dir
+                    doc_path = filepath_lookup.get(r["Document"], os.path.join(input_dir, r["Document"]))
+                    src = fitz.open(doc_path)
                     packet.insert_pdf(src, from_page=r["Page"] - 1, to_page=r["Page"] - 1)
                     src.close()
                 except Exception:
