@@ -2,6 +2,7 @@
 """
 EmmaNeigh - Document Collator
 Integrates track changes and comments from multiple document versions into a base document.
+v4.1.3: Fixed to actually merge changes from commented documents into base.
 """
 
 import os
@@ -10,6 +11,7 @@ import json
 import re
 import zipfile
 import shutil
+import difflib
 from collections import defaultdict
 from datetime import datetime
 from xml.etree import ElementTree as ET
@@ -301,55 +303,251 @@ def check_grammatical_validity(text):
     return has_verb and reasonable_length and not bad_start and balanced
 
 
-def merge_changes_into_document(base_path, changes_by_source, comments_by_source, output_path):
+def get_all_paragraph_texts(docx_path):
+    """Extract all paragraph texts from a docx file."""
+    doc = Document(docx_path)
+    return [p.text for p in doc.paragraphs]
+
+
+def apply_word_level_diff(output_doc, base_text, modified_text, author):
     """
-    Merge all track changes and comments into the base document.
-    Creates a new document with all changes integrated.
+    Apply word-level diff between base and modified text to output paragraph.
+    Returns a paragraph with insertions (blue) and deletions (red strikethrough).
     """
-    # Copy base document
-    shutil.copy2(base_path, output_path)
+    para = output_doc.add_paragraph()
 
-    # Open the copied document
-    doc = Document(output_path)
+    # Split into words, preserving spaces
+    base_words = re.findall(r'\S+|\s+', base_text)
+    mod_words = re.findall(r'\S+|\s+', modified_text)
 
-    # Collect all unique changes
-    all_changes = []
-    for source, changes in changes_by_source.items():
-        for change in changes:
-            change['source_file'] = source
-            all_changes.append(change)
+    matcher = difflib.SequenceMatcher(None, base_words, mod_words)
 
-    # Add a summary section at the end
-    doc.add_page_break()
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            # Unchanged text
+            text = ''.join(base_words[i1:i2])
+            if text:
+                para.add_run(text)
 
-    # Add header for comments summary
-    heading = doc.add_paragraph()
+        elif tag == 'delete':
+            # Deleted text - red with strikethrough
+            text = ''.join(base_words[i1:i2])
+            if text.strip():  # Only show if has content
+                run = para.add_run(text)
+                run.font.color.rgb = RGBColor(255, 0, 0)
+                run.font.strike = True
+
+        elif tag == 'insert':
+            # Inserted text - blue
+            text = ''.join(mod_words[j1:j2])
+            if text.strip():  # Only show if has content
+                run = para.add_run(text)
+                run.font.color.rgb = RGBColor(0, 0, 255)
+
+        elif tag == 'replace':
+            # Replaced - show deletion then insertion
+            del_text = ''.join(base_words[i1:i2])
+            ins_text = ''.join(mod_words[j1:j2])
+
+            if del_text.strip():
+                run = para.add_run(del_text)
+                run.font.color.rgb = RGBColor(255, 0, 0)
+                run.font.strike = True
+
+            if ins_text.strip():
+                run = para.add_run(ins_text)
+                run.font.color.rgb = RGBColor(0, 0, 255)
+
+    return para
+
+
+def merge_changes_into_document(base_path, commented_paths, comments_by_source, output_path):
+    """
+    Merge all changes from commented documents into the base document.
+    Uses difflib to compare paragraphs and show additions/deletions.
+    """
+    # Get base document paragraphs
+    base_doc = Document(base_path)
+    base_para_texts = [p.text for p in base_doc.paragraphs]
+
+    # Create output document
+    output_doc = Document()
+
+    # Track all changes from all sources
+    # For each paragraph position, collect all versions
+    para_versions = defaultdict(list)  # index -> [(source, text), ...]
+
+    for commented_path in commented_paths:
+        try:
+            commented_texts = get_all_paragraph_texts(commented_path)
+            author = get_author_from_docx(commented_path)
+
+            # Use SequenceMatcher to align paragraphs
+            matcher = difflib.SequenceMatcher(None, base_para_texts, commented_texts)
+
+            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                if tag == 'equal':
+                    # Paragraphs match - no change needed
+                    for idx in range(i1, i2):
+                        para_versions[idx].append({
+                            'source': commented_path,
+                            'author': author,
+                            'text': base_para_texts[idx],
+                            'type': 'unchanged'
+                        })
+
+                elif tag == 'replace':
+                    # Paragraphs were modified
+                    # Map modified paragraphs to base paragraphs
+                    for base_idx, mod_idx in zip(range(i1, i2), range(j1, j2)):
+                        para_versions[base_idx].append({
+                            'source': commented_path,
+                            'author': author,
+                            'text': commented_texts[mod_idx],
+                            'type': 'modified'
+                        })
+
+                    # Handle unequal lengths
+                    if i2 - i1 < j2 - j1:
+                        # More paragraphs in modified - additions
+                        for mod_idx in range(j1 + (i2 - i1), j2):
+                            # Add after last base paragraph in range
+                            insert_after = i2 - 1 if i2 > i1 else i1
+                            key = f"{insert_after}_ins_{mod_idx}"
+                            para_versions[key].append({
+                                'source': commented_path,
+                                'author': author,
+                                'text': commented_texts[mod_idx],
+                                'type': 'inserted'
+                            })
+
+                elif tag == 'delete':
+                    # Paragraphs deleted in modified version
+                    for idx in range(i1, i2):
+                        para_versions[idx].append({
+                            'source': commented_path,
+                            'author': author,
+                            'text': '',  # Deleted
+                            'type': 'deleted'
+                        })
+
+                elif tag == 'insert':
+                    # New paragraphs added in modified version
+                    insert_after = i1 - 1 if i1 > 0 else 0
+                    for mod_idx in range(j1, j2):
+                        key = f"{insert_after}_ins_{mod_idx}"
+                        para_versions[key].append({
+                            'source': commented_path,
+                            'author': author,
+                            'text': commented_texts[mod_idx],
+                            'type': 'inserted'
+                        })
+
+        except Exception as e:
+            emit("progress", percent=0, message=f"Warning: Error processing {commented_path}: {str(e)}")
+
+    # Now build the output document
+    changes_made = 0
+    processed_insertions = set()
+
+    for idx, base_text in enumerate(base_para_texts):
+        # Check for insertions before this paragraph
+        for key in sorted(para_versions.keys()):
+            if isinstance(key, str) and key.startswith(f"{idx-1}_ins_") and key not in processed_insertions:
+                # This is an insertion that goes before current paragraph
+                versions = para_versions[key]
+                for v in versions:
+                    if v['text'].strip():
+                        para = output_doc.add_paragraph()
+                        run = para.add_run(v['text'])
+                        run.font.color.rgb = RGBColor(0, 0, 255)  # Blue for insertions
+                        changes_made += 1
+                processed_insertions.add(key)
+
+        # Get all versions for this paragraph
+        versions = para_versions.get(idx, [])
+
+        if not versions:
+            # No changes from any source - keep original
+            output_doc.add_paragraph(base_text)
+        else:
+            # Check what types of changes we have
+            modifications = [v for v in versions if v['type'] == 'modified']
+            deletions = [v for v in versions if v['type'] == 'deleted']
+            unchanged = [v for v in versions if v['type'] == 'unchanged']
+
+            if modifications:
+                # Apply the modification with word-level diff
+                # Use the first modification (could enhance to merge multiple)
+                mod = modifications[0]
+                apply_word_level_diff(output_doc, base_text, mod['text'], mod['author'])
+                changes_made += 1
+            elif deletions and not unchanged:
+                # All sources deleted this paragraph - show as deleted
+                if base_text.strip():
+                    para = output_doc.add_paragraph()
+                    run = para.add_run(base_text)
+                    run.font.color.rgb = RGBColor(255, 0, 0)
+                    run.font.strike = True
+                    changes_made += 1
+            else:
+                # Keep original (unchanged or mixed signals)
+                output_doc.add_paragraph(base_text)
+
+    # Handle any remaining insertions at the end
+    for key in sorted(para_versions.keys()):
+        if isinstance(key, str) and key not in processed_insertions:
+            versions = para_versions[key]
+            for v in versions:
+                if v['text'].strip():
+                    para = output_doc.add_paragraph()
+                    run = para.add_run(v['text'])
+                    run.font.color.rgb = RGBColor(0, 0, 255)
+                    changes_made += 1
+            processed_insertions.add(key)
+
+    # Add legend at the beginning
+    output_doc.paragraphs[0].insert_paragraph_before("")
+    legend_para = output_doc.paragraphs[0].insert_paragraph_before("")
+    legend_para.add_run("LEGEND: ").bold = True
+    del_run = legend_para.add_run("Deleted text")
+    del_run.font.color.rgb = RGBColor(255, 0, 0)
+    del_run.font.strike = True
+    legend_para.add_run(" | ")
+    ins_run = legend_para.add_run("Added text")
+    ins_run.font.color.rgb = RGBColor(0, 0, 255)
+
+    # Add a summary section at the end with comments
+    output_doc.add_page_break()
+
+    heading = output_doc.add_paragraph()
     heading_run = heading.add_run("COLLATED CHANGES SUMMARY")
     heading_run.bold = True
     heading_run.font.size = Pt(14)
 
-    doc.add_paragraph("")
+    output_doc.add_paragraph(f"Total text changes applied: {changes_made}")
+    output_doc.add_paragraph("")
 
     # Add comments from all sources
     if any(comments_by_source.values()):
-        comments_heading = doc.add_paragraph()
+        comments_heading = output_doc.add_paragraph()
         comments_heading_run = comments_heading.add_run("Comments from Reviewers:")
         comments_heading_run.bold = True
         comments_heading_run.font.size = Pt(12)
 
         for source, comments in comments_by_source.items():
             if comments:
-                source_para = doc.add_paragraph()
+                source_para = output_doc.add_paragraph()
                 source_run = source_para.add_run(f"\nFrom {os.path.basename(source)}:")
                 source_run.italic = True
 
                 for comment in comments:
-                    comment_para = doc.add_paragraph()
+                    comment_para = output_doc.add_paragraph()
                     comment_para.add_run(f"  [{comment['author']}]: ").bold = True
                     comment_para.add_run(comment['content'])
 
-    doc.save(output_path)
-    return len(all_changes)
+    output_doc.save(output_path)
+    return changes_made
 
 
 def generate_summary_table(base_path, commented_versions, changes_by_source, comments_by_source, conflicts, output_folder):
@@ -527,13 +725,14 @@ def collate_documents(base_path, commented_paths, output_folder):
     base_name = os.path.splitext(os.path.basename(base_path))[0]
     output_doc_path = os.path.join(output_folder, f"{base_name}_Collated.docx")
 
-    merge_changes_into_document(
+    changes_applied = merge_changes_into_document(
         base_path,
-        changes_by_source,
+        commented_paths,
         comments_by_source,
         output_doc_path
     )
     results['output_document'] = output_doc_path
+    results['changes_applied'] = changes_applied
 
     emit("progress", percent=90, message="Generating summary table...")
 

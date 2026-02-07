@@ -32,6 +32,7 @@ jobs:
           pyinstaller --onefile --name incumbency_parser incumbency_parser.py
           pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
           pyinstaller --onefile --name document_collator document_collator.py
+          pyinstaller --onefile --name document_redline document_redline.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -52,6 +53,7 @@ jobs:
           cp desktop-app/python/dist/incumbency_parser.exe desktop-app/resources/win/
           cp desktop-app/python/dist/sigblock_workflow.exe desktop-app/resources/win/
           cp desktop-app/python/dist/document_collator.exe desktop-app/resources/win/
+          cp desktop-app/python/dist/document_redline.exe desktop-app/resources/win/
         shell: bash
 
       - name: Build Electron app
@@ -90,6 +92,7 @@ jobs:
           pyinstaller --onefile --name incumbency_parser incumbency_parser.py
           pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
           pyinstaller --onefile --name document_collator document_collator.py
+          pyinstaller --onefile --name document_redline document_redline.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -110,12 +113,14 @@ jobs:
           cp desktop-app/python/dist/incumbency_parser desktop-app/resources/mac/
           cp desktop-app/python/dist/sigblock_workflow desktop-app/resources/mac/
           cp desktop-app/python/dist/document_collator desktop-app/resources/mac/
+          cp desktop-app/python/dist/document_redline desktop-app/resources/mac/
           chmod +x desktop-app/resources/mac/signature_packets
           chmod +x desktop-app/resources/mac/execution_version
           chmod +x desktop-app/resources/mac/checklist_parser
           chmod +x desktop-app/resources/mac/incumbency_parser
           chmod +x desktop-app/resources/mac/sigblock_workflow
           chmod +x desktop-app/resources/mac/document_collator
+          chmod +x desktop-app/resources/mac/document_redline
 
       - name: Build Electron app
         run: |
@@ -153,27 +158,41 @@ jobs:
           files: |
             artifacts/*
           body: |
-            ## EmmaNeigh v4.1.2 - UI Improvements
+            ## EmmaNeigh v4.1.3 - Redline & Collate Fix
 
             ### Downloads
             - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
             - **Mac**: Download the `.dmg` file
 
-            ### What's New in v4.1.2
-            - **Individual PDF Support**: Signature Packets and Execution Version tabs now accept individual PDF files (not just folders). Drag and drop multiple PDFs directly!
-            - **Tab Scrolling**: All tabs now scroll properly, so you can access all buttons without resizing the window
-            - **File Count Fix**: The file count display now correctly updates when adding/removing documents in Collate tab
+            ### What's New in v4.1.3
+            - **Redline Tab**: Compare two Word documents side-by-side with color-coded differences
+              - Deleted text: Red with strikethrough
+              - Added text: Blue
+              - Moved text: Green
+              - Summary statistics included
+            - **Collate Fix**: The Collate feature now properly merges changes from commented documents into the base document (previously just copied the base)
+            - **ZIP Naming**: Download filenames now match the feature (EmmaNeigh-Signature-Packets.zip, EmmaNeigh-Redline.zip, etc.)
 
             ### Previous Features
+            - **Individual PDF Support**: Signature Packets and Execution Version tabs accept individual PDF files (v4.1.2)
             - **Collate Tab**: Merge track changes and comments from multiple document versions (v4.1.1)
-            - **Liability Disclaimer**: Terms of use modal on first launch (v4.1.0)
-            - **User Profiles**: Click your name to set a display name (v4.1.0)
-            - **Auto-Update**: App notifies you when updates are available (v4.1.0)
             - **Signature Blocks Tab**: Generate signature blocks from checklists and incumbency certificates
             - **Signature Packets Tab**: Extract and organize signature pages by signer
             - **Execution Version Tab**: Merge signed DocuSign pages back into originals
 
             ### How to Use
+
+            **Redline Tab:**
+            1. Upload the original document (.docx)
+            2. Upload the modified document (.docx)
+            3. Click "Compare Documents"
+            4. Download the redlined document showing all differences
+
+            **Collate Tab:**
+            1. Upload your base document (.docx)
+            2. Upload commented versions from different reviewers
+            3. Click "Collate Documents"
+            4. Download merged document with all changes incorporated
 
             **Signature Packets Tab:**
             1. Drop a folder OR individual PDF files onto the app
@@ -185,20 +204,6 @@ jobs:
             2. Select the signed PDF from DocuSign
             3. Click "Create Execution Versions"
             4. Download ZIP with executed documents
-
-            **Collate Tab:**
-            1. Upload your base document (.docx)
-            2. Upload commented versions from different reviewers
-            3. Click "Collate Documents"
-            4. Review conflict flags and download merged document with summary
-
-            **Signature Blocks Tab:**
-            1. Upload your transaction checklist (.xlsx or .csv)
-            2. Upload incumbency certificates (.pdf or .docx)
-            3. Map each entity to its role and select the authorized signer
-            4. Upload folder with unsigned documents
-            5. Click "Generate Signature Blocks"
-            6. Download ZIP or click "Create Signature Packets" to continue
 
             ### Security
             - 100% local processing - no data leaves your machine

@@ -176,9 +176,10 @@ ipcMain.handle('create-zip', async (event, outputPath) => {
 });
 
 // Save ZIP to user location
-ipcMain.handle('save-zip', async (event, zipPath) => {
+ipcMain.handle('save-zip', async (event, zipPath, suggestedName) => {
+  const defaultName = suggestedName || 'EmmaNeigh-Output.zip';
   const { filePath } = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: 'EmmaNeigh-Signature-Packets.zip',
+    defaultPath: defaultName,
     filters: [{ name: 'ZIP Archive', extensions: ['zip'] }]
   });
 
@@ -556,6 +557,67 @@ ipcMain.handle('collate-documents', async (event, config) => {
         resolve(result);
       } else if (!result) {
         reject(new Error('Document collation failed with code ' + code));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
+// Redline documents
+ipcMain.handle('redline-documents', async (event, config) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('document_redline');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Processor not found: ' + processorPath));
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    // Write config to temp file
+    const configPath = path.join(app.getPath('temp'), `redline-config-${Date.now()}.json`);
+    fs.writeFileSync(configPath, JSON.stringify(config));
+
+    const proc = spawn(processorPath, [configPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('redline-progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      console.error('stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      // Clean up config file
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Document redline failed with code ' + code));
       }
     });
 
