@@ -687,6 +687,199 @@
       margin-bottom: 8px;
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .history-btn {
+      background: transparent;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: #666;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .history-btn:hover {
+      border-color: #555;
+      color: #fff;
+      background: #222;
+    }
+
+    /* History Modal */
+    .history-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.2s;
+    }
+
+    .history-modal.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .history-content {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 600px;
+      max-height: 80vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .history-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #222;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .history-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .history-close {
+      background: transparent;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .history-close:hover {
+      color: #fff;
+    }
+
+    .history-tabs {
+      display: flex;
+      border-bottom: 1px solid #222;
+    }
+
+    .history-tab {
+      flex: 1;
+      padding: 12px;
+      background: transparent;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .history-tab:hover {
+      color: #888;
+    }
+
+    .history-tab.active {
+      color: #fff;
+      border-bottom: 2px solid #fff;
+    }
+
+    .history-body {
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .history-item {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .history-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .history-item-feature {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .history-item-meta {
+      font-size: 11px;
+      color: #666;
+    }
+
+    .history-item-stats {
+      text-align: right;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .history-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .history-stat-card {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .history-stat-value {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .history-stat-label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .history-actions {
+      padding: 16px 20px;
+      border-top: 1px solid #222;
+      display: flex;
+      gap: 8px;
+    }
+
+    .history-empty {
+      text-align: center;
+      color: #666;
+      padding: 40px 20px;
+    }
+
     /* Collate Tab Styles */
     .file-list {
       background: #111;
@@ -823,6 +1016,47 @@
     </div>
   </div>
 
+  <!-- History Modal -->
+  <div class="history-modal" id="historyModal">
+    <div class="history-content">
+      <div class="history-header">
+        <h2>Usage History</h2>
+        <button class="history-close" id="historyClose">&times;</button>
+      </div>
+      <div class="history-tabs">
+        <button class="history-tab active" data-history-tab="recent">Recent Activity</button>
+        <button class="history-tab" data-history-tab="stats">Statistics</button>
+      </div>
+      <div class="history-body">
+        <!-- Recent Tab -->
+        <div id="historyRecentTab">
+          <div class="history-list" id="historyList">
+            <div class="history-empty">No activity recorded yet</div>
+          </div>
+        </div>
+        <!-- Stats Tab -->
+        <div id="historyStatsTab" style="display: none;">
+          <div class="history-stats-grid" id="historyStatsGrid">
+            <div class="history-stat-card">
+              <div class="history-stat-value" id="statTotalOps">0</div>
+              <div class="history-stat-label">Total Operations</div>
+            </div>
+            <div class="history-stat-card">
+              <div class="history-stat-value" id="statTotalOutputs">0</div>
+              <div class="history-stat-label">Documents Created</div>
+            </div>
+          </div>
+          <h3 style="margin: 20px 0 12px; font-size: 13px; color: #888;">By Feature</h3>
+          <div class="history-list" id="historyFeatureList"></div>
+        </div>
+      </div>
+      <div class="history-actions">
+        <button class="btn btn-secondary" id="historyExportBtn">Export CSV</button>
+        <button class="btn btn-secondary" id="historyClearBtn" style="color: #ff6666;">Clear History</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Update Banner -->
   <div class="update-banner hidden" id="updateBanner">
     <p id="updateMessage">A new version is available!</p>
@@ -834,14 +1068,22 @@
     <header>
       <div class="header-row">
         <div class="logo">EmmaNeigh</div>
-        <div class="user-info" id="userInfo">
-          <div class="user-avatar">
+        <div class="header-actions">
+          <button class="history-btn" id="historyBtn" title="View History">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-              <circle cx="12" cy="7" r="4"/>
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
             </svg>
+          </button>
+          <div class="user-info" id="userInfo">
+            <div class="user-avatar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+            </div>
+            <span id="userName">Guest</span>
           </div>
-          <span id="userName">Guest</span>
         </div>
       </div>
       <div class="tabs">
@@ -1427,6 +1669,145 @@
       await ipcRenderer.invoke('quit-app');
     });
 
+    // ========== HISTORY MODAL ==========
+    const historyBtn = document.getElementById('historyBtn');
+    const historyModal = document.getElementById('historyModal');
+    const historyClose = document.getElementById('historyClose');
+    const historyList = document.getElementById('historyList');
+    const historyTabs = document.querySelectorAll('.history-tab');
+    const historyRecentTab = document.getElementById('historyRecentTab');
+    const historyStatsTab = document.getElementById('historyStatsTab');
+    const historyExportBtn = document.getElementById('historyExportBtn');
+    const historyClearBtn = document.getElementById('historyClearBtn');
+    const statTotalOps = document.getElementById('statTotalOps');
+    const statTotalOutputs = document.getElementById('statTotalOutputs');
+    const historyFeatureList = document.getElementById('historyFeatureList');
+
+    // Feature name mapping
+    const featureNames = {
+      'signature_packets': 'Signature Packets',
+      'execution_version': 'Execution Version',
+      'sigblocks': 'Signature Blocks',
+      'collate': 'Collate',
+      'redline': 'Redline'
+    };
+
+    async function loadHistory() {
+      const history = await ipcRenderer.invoke('get-history', 20);
+
+      if (!history || history.length === 0) {
+        historyList.innerHTML = '<div class="history-empty">No activity recorded yet</div>';
+        return;
+      }
+
+      historyList.innerHTML = history.map(item => {
+        const date = new Date(item.timestamp);
+        const dateStr = date.toLocaleDateString();
+        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const featureName = featureNames[item.feature] || item.feature;
+
+        return `
+          <div class="history-item">
+            <div class="history-item-info">
+              <div class="history-item-feature">${featureName}</div>
+              <div class="history-item-meta">${dateStr} at ${timeStr}</div>
+            </div>
+            <div class="history-item-stats">
+              ${item.output_count || 0} created
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function loadStats() {
+      const stats = await ipcRenderer.invoke('get-usage-stats');
+
+      statTotalOps.textContent = stats.total_operations || 0;
+      statTotalOutputs.textContent = stats.total_outputs || 0;
+
+      if (stats.by_feature && Object.keys(stats.by_feature).length > 0) {
+        historyFeatureList.innerHTML = Object.entries(stats.by_feature).map(([feature, data]) => {
+          const featureName = featureNames[feature] || feature;
+          return `
+            <div class="history-item">
+              <div class="history-item-info">
+                <div class="history-item-feature">${featureName}</div>
+              </div>
+              <div class="history-item-stats">
+                ${data.count} uses, ${data.outputs || 0} outputs
+              </div>
+            </div>
+          `;
+        }).join('');
+      } else {
+        historyFeatureList.innerHTML = '<div class="history-empty">No statistics yet</div>';
+      }
+    }
+
+    historyBtn.addEventListener('click', async () => {
+      historyModal.classList.add('visible');
+      await loadHistory();
+      await loadStats();
+    });
+
+    historyClose.addEventListener('click', () => {
+      historyModal.classList.remove('visible');
+    });
+
+    historyModal.addEventListener('click', (e) => {
+      if (e.target === historyModal) {
+        historyModal.classList.remove('visible');
+      }
+    });
+
+    historyTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        historyTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        const tabName = tab.dataset.historyTab;
+        historyRecentTab.style.display = tabName === 'recent' ? 'block' : 'none';
+        historyStatsTab.style.display = tabName === 'stats' ? 'block' : 'none';
+      });
+    });
+
+    historyExportBtn.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('export-history-csv');
+      if (result) {
+        alert('History exported to: ' + result);
+      }
+    });
+
+    historyClearBtn.addEventListener('click', async () => {
+      if (confirm('Are you sure you want to clear all history? This cannot be undone.')) {
+        await ipcRenderer.invoke('clear-history');
+        await loadHistory();
+        await loadStats();
+      }
+    });
+
+    // Helper function to log usage (call this after each feature completes)
+    async function logUsage(feature, action, inputCount, outputCount, durationMs) {
+      const currentUser = localStorage.getItem('emmaneigh_user');
+      let userName = 'Guest';
+      try {
+        if (currentUser) {
+          const user = JSON.parse(currentUser);
+          userName = user.name || 'Guest';
+        }
+      } catch (e) {}
+
+      await ipcRenderer.invoke('log-usage', {
+        user_name: userName,
+        feature: feature,
+        action: action,
+        input_count: inputCount,
+        output_count: outputCount,
+        duration_ms: durationMs
+      });
+    }
+
     // ========== USER INFO / LOGIN ==========
     const userInfo = document.getElementById('userInfo');
     const userName = document.getElementById('userName');
@@ -1603,11 +1984,16 @@
       progressText.textContent = 'Starting...';
 
       try {
+        const startTime = Date.now();
         const result = await ipcRenderer.invoke('process-folder', input);
         currentResult = result;
         progressText.textContent = 'Creating ZIP file...';
         currentZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
         resultText.textContent = `Created ${result.packetsCreated} signature packet${result.packetsCreated !== 1 ? 's' : ''}`;
+
+        // Log usage
+        await logUsage('signature_packets', 'process', packetsPaths.length || 1, result.packetsCreated || 0, Date.now() - startTime);
+
         showState('complete');
       } catch (err) {
         errorText.textContent = err.message;
@@ -1803,6 +2189,7 @@
       execProgressText.textContent = 'Starting...';
 
       try {
+        const startTime = Date.now();
         // Pass originals as object with folder or files key
         const originalsInput = typeof originalsPath === 'string'
           ? { folder: originalsPath }
@@ -1823,6 +2210,10 @@
           summary += ` • ${result.unmatchedPages} unmatched page${result.unmatchedPages !== 1 ? 's' : ''}`;
         }
         execResultSummary.textContent = summary;
+
+        // Log usage
+        const inputCount = typeof originalsPath === 'string' ? 1 : originalsPath.length;
+        await logUsage('execution_version', 'process', inputCount, result.executedCount || 0, Date.now() - startTime);
 
         showExecState('complete');
       } catch (err) {
@@ -2108,6 +2499,7 @@
       sigblocksProgressText.textContent = 'Starting...';
 
       try {
+        const startTime = Date.now();
         const result = await ipcRenderer.invoke('process-sigblocks', {
           checklist_path: checklistPath,
           incumbency_paths: incumbencyPaths,
@@ -2138,6 +2530,9 @@
           resultsHtml += `<div class="sigblock-result-item" style="color: #555;">...and ${processed.length - 10} more</div>`;
         }
         sigblocksResults.innerHTML = resultsHtml;
+
+        // Log usage
+        await logUsage('sigblocks', 'process', 1, processed.length, Date.now() - startTime);
 
         showSigblocksState('complete');
       } catch (err) {
@@ -2360,6 +2755,7 @@
       collateProgressText.textContent = 'Starting...';
 
       try {
+        const startTime = Date.now();
         const result = await ipcRenderer.invoke('collate-documents', {
           base_document: baseDocPath,
           commented_documents: commentedDocPaths
@@ -2384,6 +2780,9 @@
           conflictsValue.classList.remove('warning');
           conflictList.classList.add('hidden');
         }
+
+        // Log usage
+        await logUsage('collate', 'process', commentedDocPaths.length + 1, 1, Date.now() - startTime);
 
         showCollateState('complete');
       } catch (err) {
@@ -2545,6 +2944,7 @@
       redlineProgressText.textContent = 'Starting comparison...';
 
       try {
+        const startTime = Date.now();
         const result = await ipcRenderer.invoke('redline-documents', {
           original_document: originalDocPath,
           modified_document: modifiedDocPath
@@ -2559,6 +2959,9 @@
         parasAddedValue.textContent = result.paragraphs_added || 0;
         parasModifiedValue.textContent = result.paragraphs_modified || 0;
         parasMovedValue.textContent = result.paragraphs_moved || 0;
+
+        // Log usage
+        await logUsage('redline', 'process', 2, 1, Date.now() - startTime);
 
         showRedlineState('complete');
       } catch (err) {

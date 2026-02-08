@@ -4,6 +4,66 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
 
+// SQLite for usage history
+let db = null;
+let SQL = null;
+const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db');
+
+async function initDatabase() {
+  try {
+    const initSqlJs = require('sql.js');
+    SQL = await initSqlJs();
+
+    // Try to load existing database
+    if (fs.existsSync(historyDbPath)) {
+      const buffer = fs.readFileSync(historyDbPath);
+      db = new SQL.Database(buffer);
+    } else {
+      db = new SQL.Database();
+    }
+
+    // Create tables if they don't exist
+    db.run(`
+      CREATE TABLE IF NOT EXISTS usage_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        user_name TEXT,
+        feature TEXT,
+        action TEXT,
+        input_count INTEGER DEFAULT 0,
+        output_count INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_profile (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        telemetry_enabled INTEGER DEFAULT 0
+      )
+    `);
+
+    saveDatabase();
+    console.log('Database initialized at:', historyDbPath);
+  } catch (e) {
+    console.error('Failed to initialize database:', e);
+  }
+}
+
+function saveDatabase() {
+  if (db) {
+    try {
+      const data = db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(historyDbPath, buffer);
+    } catch (e) {
+      console.error('Failed to save database:', e);
+    }
+  }
+}
+
 // Auto-updater (only in production)
 let autoUpdater;
 if (app.isPackaged) {
@@ -37,7 +97,10 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Initialize database first
+  await initDatabase();
+
   createWindow();
 
   // Setup auto-updater
@@ -623,4 +686,164 @@ ipcMain.handle('redline-documents', async (event, config) => {
 
     proc.on('error', reject);
   });
+});
+
+// ========== USAGE HISTORY HANDLERS ==========
+
+// Log usage event
+ipcMain.handle('log-usage', async (event, data) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    db.run(`
+      INSERT INTO usage_history (user_name, feature, action, input_count, output_count, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [
+      data.user_name || 'Guest',
+      data.feature || 'unknown',
+      data.action || 'process',
+      data.input_count || 0,
+      data.output_count || 0,
+      data.duration_ms || 0
+    ]);
+    saveDatabase();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get recent usage history
+ipcMain.handle('get-history', async (event, limit = 20) => {
+  if (!db) return [];
+
+  try {
+    const results = db.exec(`
+      SELECT id, timestamp, user_name, feature, action, input_count, output_count, duration_ms
+      FROM usage_history
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `, [limit]);
+
+    if (results.length === 0) return [];
+
+    const columns = results[0].columns;
+    return results[0].values.map(row => {
+      const obj = {};
+      columns.forEach((col, i) => obj[col] = row[i]);
+      return obj;
+    });
+  } catch (e) {
+    console.error('Error getting history:', e);
+    return [];
+  }
+});
+
+// Get usage statistics
+ipcMain.handle('get-usage-stats', async () => {
+  if (!db) return {};
+
+  try {
+    // Total counts by feature
+    const featureStats = db.exec(`
+      SELECT feature, COUNT(*) as count, SUM(output_count) as total_output
+      FROM usage_history
+      GROUP BY feature
+    `);
+
+    // Recent activity (last 7 days)
+    const recentStats = db.exec(`
+      SELECT DATE(timestamp) as date, COUNT(*) as count
+      FROM usage_history
+      WHERE timestamp >= datetime('now', '-7 days')
+      GROUP BY DATE(timestamp)
+      ORDER BY date DESC
+    `);
+
+    // Total lifetime stats
+    const totals = db.exec(`
+      SELECT COUNT(*) as total_operations, SUM(output_count) as total_outputs
+      FROM usage_history
+    `);
+
+    const stats = {
+      by_feature: {},
+      by_date: {},
+      total_operations: 0,
+      total_outputs: 0
+    };
+
+    if (featureStats.length > 0) {
+      featureStats[0].values.forEach(row => {
+        stats.by_feature[row[0]] = { count: row[1], outputs: row[2] || 0 };
+      });
+    }
+
+    if (recentStats.length > 0) {
+      recentStats[0].values.forEach(row => {
+        stats.by_date[row[0]] = row[1];
+      });
+    }
+
+    if (totals.length > 0 && totals[0].values.length > 0) {
+      stats.total_operations = totals[0].values[0][0] || 0;
+      stats.total_outputs = totals[0].values[0][1] || 0;
+    }
+
+    return stats;
+  } catch (e) {
+    console.error('Error getting stats:', e);
+    return {};
+  }
+});
+
+// Export history to CSV
+ipcMain.handle('export-history-csv', async () => {
+  if (!db) return null;
+
+  try {
+    const results = db.exec(`
+      SELECT timestamp, user_name, feature, action, input_count, output_count, duration_ms
+      FROM usage_history
+      ORDER BY timestamp DESC
+    `);
+
+    if (results.length === 0) return null;
+
+    const headers = results[0].columns.join(',');
+    const rows = results[0].values.map(row => row.join(',')).join('\n');
+    const csv = headers + '\n' + rows;
+
+    const { filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: `emmaneigh-history-${new Date().toISOString().split('T')[0]}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    });
+
+    if (filePath) {
+      fs.writeFileSync(filePath, csv);
+      return filePath;
+    }
+    return null;
+  } catch (e) {
+    console.error('Error exporting history:', e);
+    return null;
+  }
+});
+
+// Clear history (for privacy)
+ipcMain.handle('clear-history', async () => {
+  if (!db) return { success: false };
+
+  try {
+    db.run('DELETE FROM usage_history');
+    saveDatabase();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Save database on app quit
+app.on('before-quit', () => {
+  saveDatabase();
 });
