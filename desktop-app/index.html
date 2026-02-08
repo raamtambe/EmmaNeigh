@@ -303,38 +303,136 @@
       color: #444;
     }
 
-    /* Coming Soon */
-    /* Tabs */
-    .tabs {
+    /* Navigation Sidebar */
+    .main-layout {
       display: flex;
-      gap: 4px;
-      margin-bottom: 24px;
-      background: #111;
-      padding: 4px;
-      border-radius: 8px;
+      gap: 24px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .nav-sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       -webkit-app-region: no-drag;
     }
 
-    .tab {
-      flex: 1;
-      padding: 10px 16px;
+    .nav-category {
+      background: #111;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .nav-category-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      width: 100%;
+      text-align: left;
+      transition: all 0.15s;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-category-header:hover {
+      color: #aaa;
+      background: rgba(255,255,255,0.02);
+    }
+
+    .nav-category-header .icon {
+      font-size: 14px;
+    }
+
+    .nav-category-header .arrow {
+      margin-left: auto;
+      font-size: 10px;
+      transition: transform 0.2s;
+    }
+
+    .nav-category.expanded .nav-category-header .arrow {
+      transform: rotate(180deg);
+    }
+
+    .nav-items {
+      display: none;
+      flex-direction: column;
+      padding: 0 8px 8px;
+      gap: 2px;
+    }
+
+    .nav-category.expanded .nav-items {
+      display: flex;
+    }
+
+    .nav-item {
+      padding: 10px 12px;
       font-size: 13px;
-      font-weight: 500;
       color: #666;
       background: transparent;
       border: none;
       border-radius: 6px;
       cursor: pointer;
-      transition: all 0.15s ease;
+      text-align: left;
+      transition: all 0.15s;
     }
 
-    .tab:hover {
+    .nav-item:hover {
+      color: #888;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .nav-item.active {
+      background: #222;
+      color: #fff;
+    }
+
+    .nav-item.disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      position: relative;
+    }
+
+    .nav-item.disabled:hover {
+      background: transparent;
+      color: #666;
+    }
+
+    .nav-item.disabled::after {
+      content: 'Soon';
+      position: absolute;
+      right: 8px;
+      font-size: 9px;
+      background: #333;
+      padding: 2px 5px;
+      border-radius: 3px;
       color: #888;
     }
 
-    .tab.active {
-      background: #222;
-      color: #fff;
+    .content-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow-y: auto;
+    }
+
+    /* Legacy tabs - hidden but kept for JS compatibility */
+    .tabs {
+      display: none;
+    }
+
+    .tab {
+      display: none;
     }
 
     /* Execution Version UI */
@@ -1086,17 +1184,68 @@
           </div>
         </div>
       </div>
-      <div class="tabs">
-        <button class="tab active" data-tab="packets">Signature Packets</button>
-        <button class="tab" data-tab="execution">Execution Version</button>
-        <button class="tab" data-tab="sigblocks">Signature Blocks</button>
-        <button class="tab" data-tab="collate">Collate</button>
-        <button class="tab" data-tab="redline">Redline</button>
-      </div>
     </header>
 
-    <!-- Signature Packets Tab -->
-    <div id="packetsTab">
+    <!-- Main Layout: Sidebar + Content -->
+    <div class="main-layout">
+      <!-- Navigation Sidebar -->
+      <div class="nav-sidebar">
+        <!-- Signature Packet / Closing Documentation -->
+        <div class="nav-category expanded">
+          <button class="nav-category-header">
+            <span class="icon">📝</span>
+            <span>Closing Docs</span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="nav-items">
+            <button class="nav-item active" data-tab="packets">Signature Packets</button>
+            <button class="nav-item" data-tab="execution">Execution Version</button>
+            <button class="nav-item" data-tab="sigblocks">Signature Blocks</button>
+          </div>
+        </div>
+
+        <!-- Document Updates -->
+        <div class="nav-category expanded">
+          <button class="nav-category-header">
+            <span class="icon">📄</span>
+            <span>Document Updates</span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="nav-items">
+            <button class="nav-item" data-tab="collate">Collate Documents</button>
+            <button class="nav-item" data-tab="redline">Redline Compare</button>
+          </div>
+        </div>
+
+        <!-- Checklist Management (placeholder for Phase 3) -->
+        <div class="nav-category">
+          <button class="nav-category-header">
+            <span class="icon">✅</span>
+            <span>Checklists</span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="nav-items">
+            <button class="nav-item disabled" data-tab="email" title="Coming in v5.0">Email → Checklist</button>
+          </div>
+        </div>
+
+        <!-- Time Tracking (placeholder for Phase 4) -->
+        <div class="nav-category">
+          <button class="nav-category-header">
+            <span class="icon">⏱️</span>
+            <span>Time Tracking</span>
+            <span class="arrow">▼</span>
+          </button>
+          <div class="nav-items">
+            <button class="nav-item disabled" data-tab="timetrack" title="Coming in v5.0">Activity Summary</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Content Area -->
+      <div class="content-area">
+        <!-- Signature Packets Tab -->
+        <div id="packetsTab">
 
     <!-- Drop Zone -->
     <div class="drop-zone" id="dropZone">
@@ -1641,6 +1790,9 @@
       </div>
     </div><!-- End redlineTab -->
 
+      </div><!-- End content-area -->
+    </div><!-- End main-layout -->
+
     <footer>
       <p>All processing happens locally. No data leaves your machine.</p>
     </footer>
@@ -1859,25 +2011,43 @@
       updateBanner.classList.add('hidden');
     });
 
-    // ========== TABS ==========
-    const tabs = document.querySelectorAll('.tab');
+    // ========== NAVIGATION SIDEBAR ==========
+    const navItems = document.querySelectorAll('.nav-item');
+    const navCategoryHeaders = document.querySelectorAll('.nav-category-header');
     const packetsTab = document.getElementById('packetsTab');
     const executionTab = document.getElementById('executionTab');
     const sigblocksTab = document.getElementById('sigblocksTab');
     const collateTab = document.getElementById('collateTab');
     const redlineTab = document.getElementById('redlineTab');
 
-    tabs.forEach(tab => {
-      tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
+    // Category accordion toggle
+    navCategoryHeaders.forEach(header => {
+      header.addEventListener('click', () => {
+        const category = header.parentElement;
+        category.classList.toggle('expanded');
+      });
+    });
 
-        const tabName = tab.dataset.tab;
-        packetsTab.style.display = tabName === 'packets' ? 'block' : 'none';
-        executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
-        sigblocksTab.style.display = tabName === 'sigblocks' ? 'block' : 'none';
-        collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
-        redlineTab.style.display = tabName === 'redline' ? 'block' : 'none';
+    // Tab switching with nav-items
+    function switchTab(tabName) {
+      // Update active state on all nav-items
+      navItems.forEach(item => item.classList.remove('active'));
+      const activeItem = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
+      if (activeItem) activeItem.classList.add('active');
+
+      // Show/hide tab content
+      packetsTab.style.display = tabName === 'packets' ? 'block' : 'none';
+      executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
+      sigblocksTab.style.display = tabName === 'sigblocks' ? 'block' : 'none';
+      collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
+      redlineTab.style.display = tabName === 'redline' ? 'block' : 'none';
+    }
+
+    navItems.forEach(item => {
+      item.addEventListener('click', () => {
+        // Skip disabled items
+        if (item.classList.contains('disabled')) return;
+        switchTab(item.dataset.tab);
       });
     });
 
@@ -2554,12 +2724,8 @@
     // Flow to Signature Packets
     sigblocksToPacketsBtn.addEventListener('click', async () => {
       if (sigblocksResult && sigblocksResult.output_folder) {
-        // Switch to packets tab
-        tabs.forEach(t => t.classList.remove('active'));
-        document.querySelector('[data-tab="packets"]').classList.add('active');
-        packetsTab.style.display = 'block';
-        executionTab.style.display = 'none';
-        sigblocksTab.style.display = 'none';
+        // Switch to packets tab using new nav system
+        switchTab('packets');
 
         // Process the output folder
         await processFolder(sigblocksResult.output_folder);

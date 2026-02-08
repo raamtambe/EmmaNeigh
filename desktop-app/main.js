@@ -78,9 +78,9 @@ let mainWindow;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 600,
+    width: 800,
     height: 700,
-    minWidth: 500,
+    minWidth: 700,
     minHeight: 600,
     resizable: true,
     webPreferences: {
