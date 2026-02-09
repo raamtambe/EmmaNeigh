@@ -9,6 +9,8 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -63,16 +65,20 @@ jobs:
           cd desktop-app
           npx electron-builder --win --publish never
 
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
         with:
-          name: EmmaNeigh-Windows
-          path: |
+          files: |
             desktop-app/dist/EmmaNeigh-Setup.exe
             desktop-app/dist/EmmaNeigh-Portable.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-mac:
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -134,75 +140,10 @@ jobs:
           cd desktop-app
           npx electron-builder --mac --publish never
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: EmmaNeigh-Mac
-          path: desktop-app/dist/*.dmg
-
-  create-release:
-    needs: [build-windows, build-mac]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: write
-    steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: EmmaNeigh-Windows
-          path: ./artifacts
-
-      - name: Download Mac artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: EmmaNeigh-Mac
-          path: ./artifacts
-
-      - name: Create Release
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/*
-          body: |
-            ## EmmaNeigh v5.0.0 - Major Update
-
-            ### Downloads
-            - **Windows Installer**: `EmmaNeigh-Setup.exe` - Recommended, supports auto-updates
-            - **Windows Portable**: `EmmaNeigh-Portable.exe` - No installation needed
-            - **Mac**: Download the `.dmg` file
-
-            ### What's New in v5.0.0
-
-            **🎨 Redesigned Navigation**
-            - New sidebar with collapsible categories
-            - Organized into: Closing Docs, Document Updates, Checklists, Time Tracking
-            - Wider window (800px) for better workspace
-
-            **📊 Usage History Tracking**
-            - Track all document processing operations
-            - View recent activity and statistics
-            - Export history to CSV
-            - All data stored locally for privacy
-
-            **🔄 Auto-Update Support**
-            - Windows Installer version now supports automatic updates
-            - Download progress indicator
-            - One-click install and restart
-
-            ### All Features
-            - **Signature Packets**: Extract and organize signature pages by signer
-            - **Execution Version**: Merge signed DocuSign pages into originals
-            - **Signature Blocks**: Generate signature blocks from checklists
-            - **Collate Documents**: Merge track changes from multiple reviewers
-            - **Email → Checklist**: Parse Outlook CSV exports and search emails
-            - **Time Tracking**: Generate activity summaries from emails + calendar
-
-            ### Coming Soon
-            - Claude AI integration for smart queries
-
-            ### Security
-            - 100% local processing - no data leaves your machine
-            - No internet connection required (except for update checks)
+          files: desktop-app/dist/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
