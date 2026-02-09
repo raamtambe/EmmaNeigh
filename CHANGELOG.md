@@ -4,52 +4,81 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 ---
 
-## [2.2.0] - 2026-02-03
+## [5.0.1] - 2026-02-09
+
+### Added
+- **Format preservation** - DOCX inputs now produce DOCX outputs, PDF inputs produce PDF outputs
+- Direct release uploads (bypasses GitHub artifact storage quota)
 
 ### Changed
-- **Clean, professional UI** - Removed generic "AI slop" styling
-- **Inter font** - Modern, readable typography
-- **SVG icons** - Replaced emojis with clean vector icons
-- **Slate color palette** - Subtle, refined appearance
-- **Simplified animation** - Cleaner horse animation during processing
+- Updated build workflow for more reliable releases
 
 ---
 
-## [2.1.0] - 2026-02-02
+## [5.0.0] - 2026-02-09
+
+### Added
+
+#### New Features
+- **Email Search** - Parse and search Outlook CSV exports
+- **Time Tracking** - Generate activity summaries from emails and calendar
+- **Document Collation** - Merge track changes from multiple reviewers
+- **Usage History** - Track all operations with local SQLite database
+
+#### UI Improvements
+- **Sidebar Navigation** - New accordion-style collapsible categories
+- **Wider Window** - 800px width for better workspace
+- **History Modal** - View and export usage statistics
+
+#### Auto-Update (Windows Installer)
+- Automatic update checking
+- Download progress indicator
+- One-click install and restart
 
 ### Changed
-- **One-click installation** - Just download and run, no setup required
-- **Automated builds** - Windows and Mac versions built automatically via GitHub Actions
-- **Updated documentation** - Clear instructions, removed outdated command-line references
+- Complete navigation redesign with 4 categories:
+  - Closing (Sig Packets, Execution Versions, Sig Blocks)
+  - Document Processing (Collate)
+  - Project Management (Email Search)
+  - Time Management (Activity Summary)
 
-### Fixed
-- Removed confusing references to old batch file installation
-- Updated README with simple download instructions
+### Removed
+- Redline comparison feature (deprecated)
+
+---
+
+## [4.1.x] - 2026-02
+
+### Added
+- MS Word (.docx) support for all processors
+- Document collation feature
+
+---
+
+## [3.x] - 2026-02
+
+### Added
+- Signature blocks from checklist workflow
+- Incumbency certificate parsing
+- Better DocuSign page matching
+
+---
+
+## [2.2.0] - 2026-02-03
+
+### Changed
+- Clean, professional UI
+- Inter font, SVG icons, slate color palette
 
 ---
 
 ## [2.0.0] - 2026-02-01
 
 ### Added
-
-#### Desktop Application
-- **Modern GUI** - Beautiful interface built with Electron + React
-- **Main Menu** - Easy navigation between features
-- **Drag & Drop** - Simply drag PDF files into the application
-- **Running Horse Animation** - Fun visual feedback during processing
-- **Progress Bar** - Real-time progress indicator
-- **ZIP Download** - Download all signature packets as a single ZIP file
-
-#### New Feature: Execution Version Creator
-- Merge signed pages back into original documents
-- Automatic DocuSign PDF unlocking
-- Specify exact page insertion point
-- Creates final execution version ready for filing
-
-### Technical
-- Cross-platform support (Windows, Mac)
-- Portable application (no installation required)
-- 100% local processing (no network calls)
+- Desktop GUI with Electron
+- Drag & drop file upload
+- Execution Version creator
+- ZIP downloads
 
 ---
 
@@ -57,10 +86,9 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 ### Added
 - Initial release
-- Automatic signature page detection
-- Person-centric packet generation
-- Excel tracking tables
-- Command-line interface with batch launcher
+- Signature page detection
+- Person-centric packets
+- Excel tracking
 
 ---
 
@@ -68,9 +96,11 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| 2.2.0 | 2026-02-03 | Clean, professional UI redesign |
-| 2.1.0 | 2026-02-02 | One-click download & run |
-| 2.0.0 | 2026-02-01 | Desktop GUI, Execution Version creator |
+| 5.0.1 | 2026-02-09 | Format preservation (DOCX in = DOCX out) |
+| 5.0.0 | 2026-02-09 | Major UI redesign, email/time tracking, history |
+| 4.1.x | 2026-02 | DOCX support, collation |
+| 3.x | 2026-02 | Signature blocks from checklist |
+| 2.x | 2026-02 | Desktop GUI |
 | 1.0.0 | 2026-01-31 | Initial release |
 
 ---

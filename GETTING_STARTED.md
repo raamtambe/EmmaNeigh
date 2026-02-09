@@ -8,132 +8,90 @@
 
 ### Use the tool (End User)
 
-👉 **Read:** [USER_GUIDE.md](USER_GUIDE.md)
+**Read:** [USER_GUIDE.md](USER_GUIDE.md)
 
 **Quick start:**
-1. Download latest release ZIP
-2. Extract anywhere
-3. Drag folder of PDFs onto `run_signature_packets.bat`
-4. Find output in `signature_packets_output/`
-
-**Need help?** See [USER_GUIDE.md](USER_GUIDE.md) for detailed step-by-step instructions.
-
----
-
-### Review security/privacy (IT/Security)
-
-👉 **Read:** [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md)
-
-**Key facts:**
-- ✅ All processing is local
-- ✅ No network calls
-- ✅ No data transmission
-- ✅ Auditable source code
-
-**Deployment approved at:** Kirkland & Ellis LLP
+1. Download from [Releases](https://github.com/raamtambe/EmmaNeigh/releases)
+2. Install (or run portable version)
+3. Drag & drop your documents
+4. Download the processed output
 
 ---
 
 ### Install or deploy (IT/Admin)
 
-👉 **Read:** [INSTALLATION.md](INSTALLATION.md)
+**Read:** [INSTALLATION.md](INSTALLATION.md)
 
-**Deployment options:**
-- Self-service download
-- Centralized network location
-- Individual workstation deployment
+**Options:**
+- **EmmaNeigh-Setup.exe** - Windows installer with auto-updates
+- **EmmaNeigh-Portable.exe** - No installation, runs anywhere
+- **.dmg** - Mac installer
 
-**Requirements:** Windows 10+, no admin rights needed
+**Requirements:** Windows 10+ or macOS 10.15+, no admin rights for portable
+
+---
+
+### Review security/privacy (IT/Security)
+
+**Read:** [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md)
+
+**Key facts:**
+- All processing is local
+- No data transmission (except optional update check)
+- Auditable source code
+- 100% offline capable
 
 ---
 
 ### Understand how it works (Technical)
 
-👉 **Read:** [ARCHITECTURE.md](ARCHITECTURE.md)
+**Read:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
 **Core technologies:**
-- Python 3.11.2 (portable)
-- PyMuPDF for PDF parsing
-- Two-tier signer detection
-- Name normalization
-
----
-
-### Contribute or modify (Developer)
-
-👉 **Read:** [CONTRIBUTING.md](CONTRIBUTING.md)
-
-**Setup:**
-```bash
-git clone https://github.com/raamtambe/EmmaNeigh.git
-pip install pymupdf pandas openpyxl
-```
-
-**Areas for contribution:**
-- Signer detection improvements
-- New features (see roadmap)
-- Documentation
-- Testing
+- Electron desktop framework
+- Python processors (PyMuPDF, python-docx, pandas)
+- sql.js for local SQLite history
 
 ---
 
 ### See what's new (Everyone)
 
-👉 **Read:** [CHANGELOG.md](CHANGELOG.md)
+**Read:** [CHANGELOG.md](CHANGELOG.md)
 
-**Latest version:** 1.0.0 (January 31, 2026)
+**Latest:** v5.0.1 (February 2026)
+- Format preservation (DOCX in = DOCX out)
+- Email search and time tracking
+- Redesigned sidebar navigation
+- Usage history tracking
 
 ---
 
-## Documentation Structure
+## Features Overview
 
-```
-docs/
-├── README.md                    # Project overview
-├── USER_GUIDE.md                # For attorneys/staff
-├── INSTALLATION.md              # Setup and deployment
-├── ARCHITECTURE.md              # Technical design
-├── SECURITY_AND_PRIVACY.md      # Security guarantees
-├── CONTRIBUTING.md              # For contributors
-└── CHANGELOG.md                 # Version history
-```
+| Feature | Description |
+|---------|-------------|
+| Signature Packets | Extract signature pages, organized by signer |
+| Execution Versions | Merge signed DocuSign pages into originals |
+| Signature Blocks | Generate blocks from checklists |
+| Document Collation | Merge track changes from reviewers |
+| Email Search | Parse and search Outlook exports |
+| Activity Summary | Time tracking from emails + calendar |
 
 ---
 
 ## Common Questions
 
-### What does this tool do?
+**Do I need Python?**
+No. Everything is bundled.
 
-Creates individualized signature packets for M&A deals. Each person gets one PDF with only their signature pages from all documents.
+**Is it secure?**
+Yes. 100% local processing. No cloud uploads.
 
-### Do I need to install Python?
+**Does it work offline?**
+Yes. Only update checks need internet.
 
-No. Everything needed is included in the ZIP file.
-
-### Is it secure for client files?
-
-Yes. All processing happens locally on your computer. No data is transmitted.
-
-### Can I use this on my work laptop?
-
-Yes. Designed for locked-down corporate Windows environments.
-
-### How do I get help?
-
-- End users: See [USER_GUIDE.md](USER_GUIDE.md)
-- Technical issues: Open a GitHub issue
-- Security questions: See [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md)
-
----
-
-## Project Information
-
-**Name:** EmmaNeigh  
-**Purpose:** Signature packet automation for M&A transactions  
-**Version:** 1.0.0  
-**License:** MIT  
-**Maintainer:** Raam Tambe  
-**Repository:** https://github.com/raamtambe/EmmaNeigh
+**What's the difference between Setup and Portable?**
+Setup installs and auto-updates. Portable needs no installation.
 
 ---
 
@@ -141,31 +99,8 @@ Yes. Designed for locked-down corporate Windows environments.
 
 - **Download:** [GitHub Releases](https://github.com/raamtambe/EmmaNeigh/releases)
 - **Report Bug:** [Open Issue](https://github.com/raamtambe/EmmaNeigh/issues)
-- **Request Feature:** [Open Issue](https://github.com/raamtambe/EmmaNeigh/issues)
-- **Email Maintainer:** See GitHub profile
+- **Source Code:** [GitHub Repository](https://github.com/raamtambe/EmmaNeigh)
 
 ---
 
-## Next Steps
-
-**For end users:**
-1. Download the latest release
-2. Read [USER_GUIDE.md](USER_GUIDE.md)
-3. Try on test PDFs
-4. Use on real deals
-
-**For IT/security:**
-1. Review [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md)
-2. Read [INSTALLATION.md](INSTALLATION.md)
-3. Test in isolated environment
-4. Approve for deployment
-
-**For developers:**
-1. Read [ARCHITECTURE.md](ARCHITECTURE.md)
-2. Review [CONTRIBUTING.md](CONTRIBUTING.md)
-3. Set up development environment
-4. Pick an issue or feature
-
----
-
-**Welcome to EmmaNeigh! Let's automate those signature packets.**
+**Welcome to EmmaNeigh!**

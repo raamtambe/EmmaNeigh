@@ -2,586 +2,333 @@
 
 ## Overview
 
-This document explains the technical design, implementation choices, and architecture of EmmaNeigh. It's intended for developers who want to understand, modify, or extend the tool.
-
----
-
-## Design Philosophy
-
-### Core Principles
-
-1. **Zero Dependencies on User's System**
-   - Portable Python runtime included
-   - All libraries pre-packaged
-   - No system PATH modifications
-   - No registry changes
-
-2. **Offline-First Architecture**
-   - No network calls
-   - No cloud dependencies
-   - No telemetry
-   - Client data never leaves local machine
-
-3. **Fail-Safe Detection**
-   - Prioritize precision over recall
-   - Better to miss a signature than create a false positive
-   - Explicit is better than implicit
-
-4. **Person-Centric Organization**
-   - Group by individual signer, not entity
-   - Combine all obligations per person across all documents
-   - Support multiple signers on same page
+This document explains the technical design and architecture of EmmaNeigh. Intended for developers who want to understand, modify, or extend the tool.
 
 ---
 
 ## Technology Stack
 
-### Core Components
+### Frontend (Electron)
 
-**Python 3.11.2** (Portable/Embeddable)
-- Chosen for: wide library support, PDF manipulation capabilities
-- Deployment: Embeddable ZIP distribution (no installer)
-- Constraints: No tkinter/GUI libraries on locked-down systems
+- **Electron 28** - Cross-platform desktop framework
+- **HTML/CSS/JavaScript** - UI rendering
+- **sql.js** - In-browser SQLite for history
 
-**Key Libraries:**
-- **PyMuPDF (fitz)** - PDF parsing and page extraction
-- **pandas** - Data manipulation and Excel output
+### Backend (Python Processors)
+
+- **Python 3.11** - Core processing language
+- **PyMuPDF (fitz)** - PDF parsing and manipulation
+- **python-docx** - Word document processing
+- **pandas** - Data manipulation
 - **openpyxl** - Excel file creation
-- **re** - Regular expressions for name normalization
 
-### Distribution Model
+### Build System
 
-**BAT Launcher** (not EXE)
-- Avoids PyInstaller/tkinter complications
-- Works on locked corporate Windows machines
-- Provides visible logging for debugging
-- Easier to audit and understand
+- **PyInstaller** - Bundle Python to executables
+- **electron-builder** - Package Electron app
+- **GitHub Actions** - CI/CD pipeline
 
 ---
 
-## System Architecture
-
-### High-Level Flow
+## Application Architecture
 
 ```
-┌─────────────────┐
-│  User Action    │  Drag folder onto .bat
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  BAT Launcher   │  Validates folder, calls Python
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  PDF Scanner    │  Iterate through all PDFs
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Page Classifier │  Identify signature pages
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Signer Extractor│  Parse individual names
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Name Normalizer │  Canonicalize names
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Packet Builder  │  Group pages by person
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Output Generator│  Create PDFs and Excel files
-└─────────────────┘
+┌─────────────────────────────────────────┐
+│           Electron Main Process          │
+│  ┌─────────────────────────────────┐    │
+│  │         main.js                  │    │
+│  │  - Window management             │    │
+│  │  - IPC handlers                  │    │
+│  │  - SQLite database               │    │
+│  │  - Auto-updater                  │    │
+│  └─────────────────────────────────┘    │
+└───────────────┬─────────────────────────┘
+                │ IPC
+┌───────────────▼─────────────────────────┐
+│          Electron Renderer               │
+│  ┌─────────────────────────────────┐    │
+│  │         index.html               │    │
+│  │  - Sidebar navigation            │    │
+│  │  - Feature tabs                  │    │
+│  │  - Progress indicators           │    │
+│  │  - File uploads                  │    │
+│  └─────────────────────────────────┘    │
+└───────────────┬─────────────────────────┘
+                │ spawn
+┌───────────────▼─────────────────────────┐
+│          Python Processors               │
+│  ┌─────────────────────────────────┐    │
+│  │  signature_packets.py            │    │
+│  │  execution_version.py            │    │
+│  │  sigblock_workflow.py            │    │
+│  │  document_collator.py            │    │
+│  │  email_csv_parser.py             │    │
+│  │  time_tracker.py                 │    │
+│  └─────────────────────────────────┘    │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## Directory Structure
+
+```
+EmmaNeigh/
+├── desktop-app/
+│   ├── main.js              # Electron main process
+│   ├── index.html           # UI (HTML/CSS/JS)
+│   ├── package.json         # Electron dependencies
+│   ├── python/
+│   │   ├── signature_packets.py
+│   │   ├── execution_version.py
+│   │   ├── sigblock_workflow.py
+│   │   ├── sigblock_generator.py
+│   │   ├── checklist_parser.py
+│   │   ├── incumbency_parser.py
+│   │   ├── document_collator.py
+│   │   ├── email_csv_parser.py
+│   │   ├── time_tracker.py
+│   │   └── requirements.txt
+│   └── resources/
+│       ├── win/             # Windows executables
+│       └── mac/             # macOS executables
+├── .github/
+│   └── workflows/
+│       └── build.yml        # CI/CD pipeline
+├── README.md
+├── CHANGELOG.md
+├── USER_GUIDE.md
+├── INSTALLATION.md
+├── ARCHITECTURE.md
+└── SECURITY_AND_PRIVACY.md
 ```
 
 ---
 
 ## Core Algorithms
 
-### 1. Signature Page Detection
+### Signature Detection
 
-**Purpose:** Identify which pages contain signature blocks
+Detects signature blocks using pattern matching:
 
-**Algorithm:**
 ```python
-def is_signature_page(text):
-    """
-    Returns True if page contains a signature block
-    """
-    SIGNATURE_KEYWORDS = [
-        "IN WITNESS WHEREOF",
-        "BY:",
-        "NAME:",
-        "TITLE:",
-        "DATE:",
-        "SIGNATURE",
-        "________________"
-    ]
+# Keywords indicating signature content
+BY_MARKER = "BY:"
+NAME_FIELD = "NAME:"
+TITLE_FIELD = "TITLE:"
+
+# Table-based detection
+NAME_HEADERS = ["NAME", "PRINTED NAME", "SIGNATORY"]
+SIGNATURE_HEADERS = ["SIGNATURE", "SIGN", "BY"]
+```
+
+**Two-tier approach:**
+1. **BY:/Name: blocks** - Traditional signature format
+2. **Signature tables** - Grid-based signature pages
+
+### Signer Extraction
+
+```python
+def extract_signer(text):
+    # 1. Look for explicit "Name:" field
+    if "NAME:" in text:
+        return parse_name_field(text)
     
-    hits = sum(1 for keyword in SIGNATURE_KEYWORDS 
-               if keyword in text.upper())
-    
-    return hits >= 2  # Require multiple markers
-```
+    # 2. Look for probable person name near "BY:"
+    return find_person_near_by_marker(text)
 
-**Rationale:**
-- Single keyword could be false positive
-- Standard signature blocks have multiple consistent markers
-- Uppercase comparison handles case variations
-
-**Known Limitations:**
-- Non-standard signature blocks may be missed
-- Initial-only blocks not currently detected
-- Scanned PDFs without OCR won't have text layer
-
-### 2. Signer Extraction
-
-**Purpose:** Extract individual person names from signature blocks
-
-**Two-Tier Approach:**
-
-**Tier 1: Explicit Name Field (Preferred)**
-```python
-def extract_from_name_field(lines, by_index):
-    """
-    Look downward from BY: for explicit Name: field
-    """
-    for j in range(1, 7):  # Search next 6 lines
-        if by_index + j >= len(lines):
-            break
-        candidate = lines[by_index + j]
-        if candidate.upper().startswith("NAME:"):
-            # Extract everything after "Name:"
-            return normalize_name(candidate.split(":", 1)[1])
-    return None
-```
-
-**Tier 2: Proximity-Based Fallback**
-```python
-def extract_from_proximity(lines, by_index):
-    """
-    If no Name: field, look for probable person name
-    """
-    for j in range(1, 7):
-        if by_index + j >= len(lines):
-            break
-        candidate = normalize_name(lines[by_index + j])
-        if is_probable_person(candidate):
-            return candidate
-    return None
-```
-
-**Filtering Entity Names:**
-```python
 def is_probable_person(name):
-    """
-    Heuristic: persons have 2-4 words, no entity suffixes
-    """
-    ENTITY_TERMS = ["LLC", "INC", "CORP", "LP", "LLP", "TRUST"]
-    
+    # Filter out entities
+    ENTITY_TERMS = ["LLC", "INC", "CORP", "LP"]
     if any(term in name for term in ENTITY_TERMS):
         return False
-    
-    word_count = len(name.split())
     return 2 <= word_count <= 4
 ```
 
-**Why This Works:**
-- Tier 1 matches 90%+ of financing documents
-- Tier 2 catches edge cases
-- Entity filtering prevents "ABC Holdings LLC" from becoming a packet
+### Name Normalization
 
-### 3. Name Normalization
-
-**Purpose:** Ensure same person gets one packet despite variations
-
-**Algorithm:**
 ```python
 def normalize_name(name):
-    """
-    Canonicalize name to avoid duplicates
-    """
-    name = name.upper()                    # "John Smith" → "JOHN SMITH"
-    name = re.sub(r"[.,]", "", name)       # Remove punctuation
-    name = re.sub(r"\s+", " ", name)       # Collapse whitespace
-    name = name.strip()                     # Trim edges
-    return name
+    name = name.upper()           # JOHN SMITH
+    name = re.sub(r"[.,]", "", name)  # Remove punctuation
+    name = re.sub(r"\s+", " ", name)  # Collapse whitespace
+    return name.strip()
 ```
 
-**Handles:**
-- `"John Smith"` → `"JOHN SMITH"`
-- `"JOHN  SMITH"` → `"JOHN SMITH"` (extra spaces)
-- `"John Smith,"` → `"JOHN SMITH"` (trailing comma)
-- `"john smith"` → `"JOHN SMITH"` (lowercase)
+### Format Preservation
 
-**Known Edge Cases:**
-- Different people with same name (e.g., two John Smiths)
-- Misspellings in source PDFs
-- Hyphenated names with inconsistent hyphens
+```python
+def get_output_format(input_path):
+    ext = os.path.splitext(input_path)[1].lower()
+    return ext  # '.pdf' or '.docx'
+
+# DOCX in = DOCX out
+# PDF in = PDF out
+```
 
 ---
 
-## Data Model
+## IPC Communication
 
-### Internal Representation
+### Electron ↔ Python
 
-**Row Structure:**
+```javascript
+// main.js - IPC handler
+ipcMain.handle('create-signature-packets', async (event, files) => {
+    // Write config to temp file
+    const configPath = path.join(tempDir, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({ files }));
+    
+    // Spawn Python process
+    const proc = spawn(processorPath, ['--config', configPath]);
+    
+    // Parse JSON output
+    proc.stdout.on('data', (data) => {
+        const msg = JSON.parse(data);
+        if (msg.type === 'progress') {
+            event.sender.send('progress', msg);
+        }
+    });
+});
+```
+
+### Python Output Protocol
+
 ```python
+def emit(msg_type, **kwargs):
+    """Output JSON message to stdout."""
+    print(json.dumps({"type": msg_type, **kwargs}), flush=True)
+
+# Usage:
+emit("progress", percent=50, message="Processing...")
+emit("result", success=True, outputPath="/path/to/output")
+emit("error", message="Something went wrong")
+```
+
+---
+
+## Build Process
+
+### GitHub Actions Workflow
+
+```yaml
+jobs:
+  build-windows:
+    - Install Python dependencies
+    - Build Python executables (PyInstaller)
+    - Install npm dependencies
+    - Copy executables to resources/win
+    - Build Electron app (electron-builder)
+    - Upload to Release
+
+  build-mac:
+    - Same process for macOS
+    - Upload .dmg to Release
+```
+
+### PyInstaller Configuration
+
+```bash
+pyinstaller --onefile --name signature_packets signature_packets.py
+```
+
+### Electron Builder Configuration
+
+```json
 {
-    "Signer Name": "JOHN SMITH",      # Normalized
-    "Document": "Credit_Agreement.pdf",
-    "Page": 87
+  "win": {
+    "target": ["nsis", "portable"]
+  },
+  "mac": {
+    "target": "dmg"
+  },
+  "extraResources": [
+    {
+      "from": "resources/${os}",
+      "to": "processor"
+    }
+  ]
 }
 ```
 
-**Master Table:**
-- One row per signature obligation
-- Sorted by: Signer Name, Document, Page
-- Used for: QC, audit trail, completeness checks
+---
 
-**Grouping Logic:**
-```python
-for signer, group in df.groupby("Signer Name"):
-    # group contains all pages for this person
-    # across all documents
+## Data Storage
+
+### SQLite History Database
+
+```sql
+-- Location: %APPDATA%/emmaneigh/history.db
+
+CREATE TABLE usage_history (
+    id INTEGER PRIMARY KEY,
+    timestamp TEXT,
+    feature TEXT,
+    input_count INTEGER,
+    output_count INTEGER,
+    duration_ms INTEGER
+);
 ```
 
-### Output Files
+### Access Pattern
 
-**PDF Packets:**
-- Filename: `signature_packet - {NORMALIZED_NAME}.pdf`
-- Contents: Extracted pages in document order
-- Format: Exact copy of original pages (no reformatting)
+```javascript
+// Using sql.js (in-memory SQLite)
+const SQL = await initSqlJs();
+const db = new SQL.Database(existingData);
 
-**Excel Tables:**
-- Master index: All obligations
-- Per-person tables: Filtered view for that signer
-- Columns: Signer Name | Document | Page
+db.run(`
+    INSERT INTO usage_history (timestamp, feature, ...)
+    VALUES (?, ?, ...)
+`, [new Date().toISOString(), 'signature_packets', ...]);
+```
 
 ---
 
-## File System Design
+## Performance
 
-### Directory Structure
+### Typical Processing Times
 
-```
-Tool Distribution:
-Signature_Packet_Tool/
-├── run_signature_packets.bat    # Entry point
-├── python/                       # Portable runtime
-│   ├── python.exe
-│   ├── python311.dll
-│   ├── Lib/                      # Standard library
-│   └── site-packages/            # Installed packages
-└── src/
-    └── build_signature_packets.py
+| Document Size | Pages | Processing Time |
+|--------------|-------|-----------------|
+| 10 PDFs, 100 pages | ~15 sec |
+| 50 PDFs, 500 pages | ~45 sec |
+| 100+ PDFs | 1-2 min |
 
-After Processing:
-user_pdf_folder/
-├── document1.pdf
-├── document2.pdf
-└── signature_packets_output/     # Auto-created
-    ├── packets/
-    │   └── signature_packet - JOHN SMITH.pdf
-    └── tables/
-        ├── MASTER_SIGNATURE_INDEX.xlsx
-        └── signature_packet - JOHN SMITH.xlsx
-```
+### Memory Usage
 
-### Path Handling
-
-**Input Folder:**
-```python
-INPUT_DIR = sys.argv[1]  # Passed from BAT file
-```
-
-**Output Folders:**
-```python
-OUTPUT_BASE = os.path.join(INPUT_DIR, "signature_packets_output")
-OUTPUT_PDF_DIR = os.path.join(OUTPUT_BASE, "packets")
-OUTPUT_TABLE_DIR = os.path.join(OUTPUT_BASE, "tables")
-
-os.makedirs(OUTPUT_PDF_DIR, exist_ok=True)
-os.makedirs(OUTPUT_TABLE_DIR, exist_ok=True)
-```
-
-**Why This Design:**
-- Output alongside input (easy to find)
-- Namespace separation (`signature_packets_output/`)
-- Idempotent (can run multiple times safely)
-
----
-
-## Error Handling
-
-### Validation Strategy
-
-**Pre-Execution Checks:**
-```python
-if not os.path.isdir(INPUT_DIR):
-    raise RuntimeError(f"Invalid folder: {INPUT_DIR}")
-
-if len(rows) == 0:
-    raise RuntimeError("No signers detected")
-```
-
-**Runtime Logging:**
-- Print each document as it's scanned
-- Print each packet as it's built
-- Final message with output location
-
-### Known Failure Modes
-
-1. **No signers detected**
-   - Cause: Non-standard signature blocks
-   - Mitigation: Adjust SIGNATURE_KEYWORDS or detection logic
-
-2. **Duplicate packets (name collisions)**
-   - Cause: Two different people with identical names
-   - Current behavior: Combined into one packet
-   - Future: Add disambiguation logic
-
-3. **Missing pages**
-   - Cause: Scanned PDFs without text layer
-   - Mitigation: User must OCR files first
-
----
-
-## Performance Characteristics
-
-### Complexity Analysis
-
-**Time Complexity:**
-- PDF scanning: O(n × m) where n = documents, m = avg pages
-- Signer extraction: O(p) where p = signature pages
-- Packet building: O(s × p) where s = unique signers
-
-**Space Complexity:**
-- In-memory: O(p) - signature page metadata only
-- Disk I/O: Streaming page extraction (constant memory)
-
-### Benchmarks
-
-**Typical Deal:**
-- 25 documents
-- 500 total pages
-- 100 signature pages
-- 20 unique signers
-
-**Processing Time:** ~15-30 seconds on modern laptop
-
-**Scaling:**
-- Handles 100+ documents comfortably
-- Hundreds of signers is fine (linear scaling)
-- Bottleneck is PDF parsing, not Python logic
-
----
-
-## Security Considerations
-
-### Threat Model
-
-**Assumptions:**
-- User has legitimate access to PDFs
-- PDFs may contain confidential client data
-- Processing happens on potentially locked-down corporate machines
-
-**Guarantees:**
-1. No network I/O
-2. No file system access outside specified folder
-3. No logging to external systems
-4. Source code is auditable
-
-### Data Flow Diagram
-
-```
-┌──────────────┐
-│  User PDFs   │  (Input)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Read Files  │  (Local disk only)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│   Process    │  (In-memory)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│ Write Output │  (Same directory)
-└──────────────┘
-
-No external systems touched
-```
+- Electron: ~100-150 MB
+- Python processor: Varies with document size
+- Large PDFs: May spike to 500 MB+
 
 ---
 
 ## Extending the Tool
 
-### Adding New Features
+### Adding a New Processor
 
-**1. Initial-Only Page Detection**
+1. Create `desktop-app/python/new_feature.py`
+2. Implement `emit()` protocol for progress/results
+3. Add IPC handler in `main.js`
+4. Add UI tab in `index.html`
+5. Update `build.yml` to include in build
 
-Add to signature keywords:
-```python
-INITIAL_KEYWORDS = ["Initial:", "Initials:", "_______ (initials)"]
-```
+### Modifying Signature Detection
 
-Modify classification:
-```python
-def is_initial_page(text):
-    return any(kw in text for kw in INITIAL_KEYWORDS)
-```
-
-**2. Capacity Extraction (Borrower/Guarantor)**
-
-After extracting signer name, look upward for capacity:
-```python
-def extract_capacity(lines, by_index):
-    """
-    Look upward for 'BORROWER:', 'GUARANTOR:', etc.
-    """
-    for j in range(1, 10):
-        if by_index - j < 0:
-            break
-        line = lines[by_index - j].upper()
-        if any(cap in line for cap in ["BORROWER", "GUARANTOR", "LENDER"]):
-            return line.strip()
-    return "UNKNOWN"
-```
-
-**3. Cover Sheets**
-
-Generate a cover page per packet:
-```python
-from reportlab.pdfgen import canvas
-
-def create_cover_sheet(signer_name, obligations):
-    """
-    Create PDF cover page listing all obligations
-    """
-    # Use reportlab to generate first page
-    # Then prepend to packet
-```
-
-### Testing Recommendations
-
-**Test Cases:**
-
-1. **Standard signature blocks** (most common)
-2. **Multiple signers per page**
-3. **Same person across multiple documents**
-4. **Entity vs. individual disambiguation**
-5. **Edge cases**: unusual formatting, OCR'd text
-6. **Performance**: large deals (100+ docs)
-
-**Test Data:**
-- Create sanitized sample PDFs
-- Include various signature block formats
-- Test name normalization edge cases
+Edit `signature_packets.py`:
+- `extract_person_signers()` - Main detection logic
+- `NAME_HEADERS` / `SIGNATURE_HEADERS` - Keywords
+- `is_probable_person()` - Entity filtering
 
 ---
 
-## Deployment
-
-### Building a Release
-
-1. **Ensure portable Python is packaged:**
-   ```bash
-   cd EmmaNeigh
-   # Verify python/ folder contains full runtime
-   ```
-
-2. **Create ZIP:**
-   ```bash
-   zip -r Signature_Packet_Tool_v1.0.zip \
-       run_signature_packets.bat \
-       python/ \
-       src/ \
-       docs/
-   ```
-
-3. **Test on clean machine:**
-   - Unzip
-   - Run on sample PDFs
-   - Verify output
-
-4. **Upload to GitHub Releases:**
-   - Tag version (v1.0.0)
-   - Upload ZIP
-   - Add release notes
-
-### Version Numbering
-
-Follow Semantic Versioning:
-- **Major (1.0.0):** Breaking changes
-- **Minor (1.1.0):** New features
-- **Patch (1.0.1):** Bug fixes
-
----
-
-## Future Roadmap
-
-### Planned Enhancements
-
-**Short Term:**
-- Initial-only page detection
-- Capacity field extraction
-- Better duplicate name handling
-- Self-check/validation mode
-
-**Medium Term:**
-- Cover sheet generation
-- DocuSign envelope ordering
-- Batch processing mode
-- Configuration file for custom keywords
-
-**Long Term:**
-- Machine learning for non-standard blocks
-- Integration with deal management systems
-- Automated quality control checks
-- Multi-language support
-
----
-
-## Lessons Learned
-
-### Design Decisions That Worked
-
-1. **BAT over EXE** - Avoided tkinter complexity, better debuggability
-2. **Person-centric logic** - Matches how lawyers actually work
-3. **Portable Python** - Bypasses IT restrictions
-4. **Name normalization** - Handles real-world inconsistencies
-
-### Design Decisions to Reconsider
-
-1. **No GUI** - Could add optional web UI for power users
-2. **Simple heuristics** - Could use ML for better detection
-3. **Excel output** - Could support CSV or JSON for automation
-
----
-
-## Contributing Guidelines
+## Contributing
 
 ### Code Standards
 
-- **Type hints** preferred
-- **Docstrings** for all functions
-- **Comments** for non-obvious logic
-- **Error messages** must be user-friendly
+- Python: Type hints, docstrings, PEP 8
+- JavaScript: ES6+, clear variable names
+- Comments for non-obvious logic
 
 ### Pull Request Process
 
@@ -589,24 +336,17 @@ Follow Semantic Versioning:
 2. Create feature branch
 3. Add tests if applicable
 4. Update documentation
-5. Submit PR with clear description
-
-### Code Review Criteria
-
-- Does it solve a real problem?
-- Is it maintainable?
-- Does it preserve security guarantees?
-- Is documentation updated?
+5. Submit PR with description
 
 ---
 
 ## References
 
+- [Electron Documentation](https://www.electronjs.org/docs)
 - [PyMuPDF Documentation](https://pymupdf.readthedocs.io/)
-- [pandas Documentation](https://pandas.pydata.org/docs/)
-- [Python Embeddable Package](https://docs.python.org/3/using/windows.html#the-embeddable-package)
+- [python-docx Documentation](https://python-docx.readthedocs.io/)
 
 ---
 
-**Last Updated:** January 2026  
+**Last Updated:** February 2026
 **Maintainer:** Raam Tambe

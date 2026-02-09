@@ -2,237 +2,197 @@
 
 ## For Attorneys and Staff
 
-This guide is for people who need to **use** the Signature Packet Builder, not modify it. No technical knowledge required.
+This guide is for people who need to **use** EmmaNeigh. No technical knowledge required.
 
 ---
 
 ## What This Tool Does
 
-**In Plain English:**
+EmmaNeigh automates document processing for M&A transactions and complex closings:
 
-You give it a folder full of transaction documents (PDFs).  
-It automatically creates one signature packet for each person who needs to sign.  
-Each packet contains only the pages that person must sign.
-
-**Example:**
-
-If you have:
-- Credit Agreement (100 pages, 5 people sign)
-- Guaranty (20 pages, 3 people sign)  
-- Security Agreement (50 pages, 4 people sign)
-
-The tool creates:
-- One PDF for each unique person
-- Each PDF has only their signature pages from all documents
-- One Excel table per person showing which documents they're signing
+1. **Signature Packets** - Extract signature pages from documents, organized by signer
+2. **Execution Versions** - Merge signed DocuSign pages back into original documents
+3. **Signature Blocks** - Generate signature blocks from transaction checklists
+4. **Document Collation** - Merge track changes from multiple reviewers
+5. **Email Search** - Parse and search Outlook email exports
+6. **Time Tracking** - Generate activity summaries from emails and calendar
 
 ---
 
-## Step-by-Step Instructions
+## Getting Started
 
-### Step 1: Download the Tool
+### Download & Install
 
-1. Go to: [GitHub Releases](https://github.com/raamtambe/EmmaNeigh/releases)
-2. Download the latest ZIP file (e.g., `Signature_Packet_Tool_v1.0.zip`)
-3. Save it somewhere you can find it (Desktop or Documents folder)
+**Windows:**
+1. Go to [GitHub Releases](https://github.com/raamtambe/EmmaNeigh/releases)
+2. Download **EmmaNeigh-Setup.exe** (recommended) or **EmmaNeigh-Portable.exe**
+3. Run the installer or portable executable
 
-### Step 2: Unzip the File
+**Mac:**
+1. Download the **.dmg** file from Releases
+2. Open and drag EmmaNeigh to Applications
 
-1. Right-click the ZIP file
-2. Choose "Extract All..."
-3. Pick a location and click "Extract"
+### First Launch
 
-You now have a folder with:
-- `run_signature_packets.bat` (this is what you'll click)
-- `python` folder (don't touch this)
-- `docs` folder (optional reading)
-
-### Step 3: Prepare Your PDFs
-
-1. Create a new folder anywhere on your computer
-2. Put ALL transaction PDFs into that folder
-3. Make sure PDFs have text (not just scanned images)
-
-**Tip:** Name the folder something clear like "Smith Deal Closing Docs"
-
-### Step 4: Run the Tool
-
-**Option A: Drag & Drop (Easiest)**
-1. Click and drag your PDF folder
-2. Drop it onto `run_signature_packets.bat`
-3. A black window opens (don't close it!)
-
-**Option B: Double-Click**
-1. Double-click `run_signature_packets.bat`
-2. When prompted, paste the path to your PDF folder
-3. Press Enter
-
-### Step 5: Wait for Processing
-
-You'll see messages like:
-```
-Processing PDFs in:
-C:\Users\You\Desktop\Smith Deal Closing Docs
-
-Scanning Credit_Agreement.pdf
-Scanning Guaranty.pdf
-Built packet for JOHN SMITH
-Built packet for JANE DOE
-
-DONE.
-Signature packets saved to:
-C:\Users\You\Desktop\Smith Deal Closing Docs\signature_packets_output
-```
-
-**Don't close the window until it says "DONE."**
-
-### Step 6: Find Your Output
-
-Go to your original PDF folder. You'll now see a new folder:
-
-```
-signature_packets_output/
-├── packets/         ← PDFs ready to send
-└── tables/          ← Excel files for tracking
-```
+When you open EmmaNeigh, you'll see a sidebar with four categories:
+- **Closing** - Signature packets, execution versions, signature blocks
+- **Document Processing** - Document collation
+- **Project Management** - Email search
+- **Time Management** - Activity summaries
 
 ---
 
-## Understanding the Output
+## Feature Guides
 
-### PDF Packets (in `packets/` folder)
+### 1. Create Signature Packets
 
-**File naming:**
-- `signature_packet - JOHN SMITH.pdf`
-- `signature_packet - JANE DOE.pdf`
+**What it does:** Extracts signature pages from PDFs/DOCX and creates individual packets per signer.
 
-**What's inside:**
-- Only the pages that person needs to sign
-- Pages are in the order they appeared in the original documents
-- Original formatting preserved (no weird reformatting)
+**How to use:**
+1. Click "Create Sig Packets" in the sidebar
+2. Drag & drop your document files (PDF or DOCX)
+3. Click "Create Signature Packets"
+4. Download the ZIP file when complete
 
-### Excel Tables (in `tables/` folder)
+**Output:**
+- One PDF/DOCX packet per signer (format matches input)
+- Excel tracking sheets
+- Master signature index
 
-**MASTER_SIGNATURE_INDEX.xlsx**
-- Shows every signature obligation across all documents
-- Use this for quality control
+### 2. Create Execution Versions
 
-**Individual Tables (e.g., `signature_packet - JOHN SMITH.xlsx`)**
-- Lists exactly which documents and pages John Smith must sign
-- Columns: Signer Name | Document | Page
+**What it does:** Merges signed pages from DocuSign back into original documents.
 
----
+**How to use:**
+1. Click "Execution Versions" in the sidebar
+2. Upload original documents (PDF or DOCX)
+3. Upload the signed PDF from DocuSign
+4. Click "Create Execution Versions"
+5. Download the executed documents
 
-## What to Do Next
+**Note:** Output format matches input - DOCX in = DOCX out, PDF in = PDF out.
 
-### Quality Control (Recommended)
+### 3. Signature Blocks from Checklist
 
-1. Open `MASTER_SIGNATURE_INDEX.xlsx`
-2. Quickly scan to ensure all signers were detected
-3. Spot-check 2-3 PDF packets to confirm pages are correct
+**What it does:** Generates signature blocks from a transaction checklist and incumbency certificates.
 
-### Send to Signers
+**How to use:**
+1. Click "Sig Blocks from Checklist" in the sidebar
+2. Upload your transaction checklist (Excel)
+3. Upload incumbency certificates
+4. Map entities to their roles
+5. Upload documents to add signature pages to
+6. Click "Generate Signature Blocks"
 
-1. Email each person their PDF packet
-2. Include their Excel table if they want page references
-3. Track signatures using the master index
+### 4. Collate Documents
 
----
+**What it does:** Merges track changes from multiple reviewer versions into a single document.
 
-## Common Questions
+**How to use:**
+1. Click "Collate Documents" in the sidebar
+2. Upload the base document
+3. Upload reviewer versions
+4. Click "Collate"
+5. Download the merged document
 
-### Q: Do I need to install Python?
-**No.** Everything you need is in the ZIP file.
+### 5. Email Search
 
-### Q: Does this upload my files anywhere?
-**No.** All processing happens on your computer. No internet required.
+**What it does:** Parses Outlook CSV exports for searching and analysis.
 
-### Q: Can I use this on my work laptop?
-**Yes.** It works on locked-down corporate computers with no admin rights.
+**How to use:**
+1. Click "Email Search" in the sidebar
+2. Export emails from Outlook as CSV
+3. Upload the CSV file
+4. Search by keyword, sender, or date
 
-### Q: What if two people have the same name?
-The tool will create one packet. You'll need to manually separate if they're different people.
+### 6. Activity Summary
 
-### Q: Can I run this multiple times?
-**Yes.** Each run creates a fresh output folder. Previous outputs are not deleted.
+**What it does:** Generates time tracking summaries from email and calendar data.
 
-### Q: What if it doesn't detect a signer?
-Check that the PDF has a standard signature block with "BY:" and "Name:" fields. Scanned PDFs without text won't work.
-
-### Q: Can I use this for non-M&A deals?
-**Yes.** Any transaction with signature pages works (real estate, litigation settlements, etc.).
-
----
-
-## When to Contact IT/Support
-
-You should contact support if:
-- The tool crashes immediately
-- Error messages you don't understand
-- Signature pages are consistently missed
-- You need to process hundreds of documents at once
-
-**Not bugs:**
-- Scanned PDFs without OCR (get them OCRed first)
-- Unusual signature block formats (tool is tuned for standard blocks)
+**How to use:**
+1. Click "Activity Summary" in the sidebar
+2. Upload email CSV (from Outlook export)
+3. Upload calendar file (ICS or CSV)
+4. Select date range
+5. View activity breakdown by matter/client
 
 ---
 
 ## Tips for Best Results
 
-### ✅ Do This:
-- Use searchable PDFs (with text layer)
-- Ensure signature blocks have "Name:" fields
-- Keep all PDFs in one folder
-- Review the master index after each run
+### Document Preparation
+- Use searchable PDFs (with text layer, not scanned images)
+- Ensure signature blocks have "BY:" and "Name:" fields
+- Standard signature table formats work best
 
-### ❌ Avoid This:
-- Mixing scanned and native PDFs (OCR the scanned ones first)
-- Running on partially downloaded files
-- Interrupting the process mid-run
-- Renaming files during processing
+### File Formats
+- **PDF** - Standard PDFs with text layers
+- **DOCX** - Microsoft Word documents
+- **Format preservation** - Input format = Output format
+
+### Quality Control
+- Review the master signature index after processing
+- Spot-check a few packets before distributing
+- Verify all signers were detected
 
 ---
 
-## Security Reminder
+## Common Questions
 
-- **All files stay on your computer**
-- **No data is transmitted**
-- **Safe to use with confidential client documents**
-- **Complies with attorney-client privilege requirements**
+**Q: Do I need to install anything else?**
+A: No. Just download and run. Everything is bundled.
+
+**Q: Does it work offline?**
+A: Yes. Only the update check requires internet.
+
+**Q: What if a signer isn't detected?**
+A: Check that the PDF has standard "BY:" and "Name:" fields. Scanned documents without OCR won't work.
+
+**Q: Can two people have the same name?**
+A: They'll be combined into one packet. You may need to manually separate if they're different people.
+
+**Q: Is my data sent anywhere?**
+A: No. All processing is 100% local on your machine.
+
+---
+
+## Viewing History
+
+Click the **History** button in the top-right to see:
+- Recent operations
+- Statistics by feature
+- Export history to CSV
+
+---
+
+## Updating
+
+**Windows Installer (EmmaNeigh-Setup.exe):**
+- Automatic update notifications
+- Click "Download" when prompted
+- Click "Install & Restart" when ready
+
+**Portable/Mac:**
+- Check [Releases](https://github.com/raamtambe/EmmaNeigh/releases) for new versions
+- Download and replace the old version
 
 ---
 
 ## Getting Help
 
-**For basic questions:** See [Troubleshooting](#troubleshooting) in main README
-
-**For bugs or issues:**
+**For issues or bugs:**
 - Open a GitHub issue: https://github.com/raamtambe/EmmaNeigh/issues
 - Include: what you tried, what happened, any error messages
 
-**For feature requests:**
-- Contact the project maintainer
-- Describe your use case and why it matters
+---
+
+## Security
+
+- All files stay on your computer
+- No data is transmitted
+- Safe for confidential client documents
+- Complies with attorney-client privilege requirements
 
 ---
 
-## Version Information
-
-Check which version you're using:
-- Look at the ZIP filename (e.g., `v1.0.zip`)
-- Check the `docs/` folder for a VERSION file
-
-Always use the latest version for bug fixes and improvements.
-
----
-
-## Legal Notice
-
-This is an internal productivity tool. It:
-- Does not provide legal advice
-- Does not replace attorney judgment
-- Should be used for administrative tasks only
-- Is not a substitute for document review
-
-Always review signature packets before sending to clients or counterparties.
+**Last Updated:** February 2026
