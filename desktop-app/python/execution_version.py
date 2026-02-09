@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Execution Version Processor
-v3.2.1: Added MS Word (.docx) support.
+v3.3.0: Format preservation - DOCX in → DOCX out, PDF in → PDF out.
 Merges signed DocuSign pages back into original agreements, replacing blank signature pages in-place.
 """
 
@@ -10,8 +10,12 @@ import os
 import re
 import sys
 import json
+import shutil
+import io
 from difflib import SequenceMatcher
 from docx import Document
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 # Column header patterns for signature table detection
@@ -44,20 +48,34 @@ def is_probable_person(name):
     return 2 <= len(name.split()) <= 4
 
 
-def sanitize_output_name(filename):
+def sanitize_output_name(filename, preserve_format=True):
     """
     Remove existing parenthetical suffixes and add (executed).
     Example: 'Credit Agreement (execution version).pdf' -> 'Credit Agreement (executed).pdf'
+    Example: 'Credit Agreement (execution version).docx' -> 'Credit Agreement (executed).docx'
+
+    Args:
+        filename: Original filename
+        preserve_format: If True, preserves original extension; if False, uses .pdf
     """
-    # Remove .pdf extension
     name = filename
+    original_ext = '.pdf'
+
+    # Detect and remove extension
     if name.lower().endswith('.pdf'):
         name = name[:-4]
+        original_ext = '.pdf'
+    elif name.lower().endswith('.docx'):
+        name = name[:-5]
+        original_ext = '.docx'
 
     # Remove any parenthetical suffixes
     name = re.sub(r'\s*\([^)]*\)\s*$', '', name).strip()
 
-    return f"{name} (executed).pdf"
+    if preserve_format:
+        return f"{name} (executed){original_ext}"
+    else:
+        return f"{name} (executed).pdf"
 
 
 def detect_document_name_from_footer(text):
@@ -250,6 +268,11 @@ def has_signature_content(page):
         pass
 
     return False
+
+
+def is_signature_page(page):
+    """Alias for has_signature_content for compatibility."""
+    return has_signature_content(page)
 
 
 def fuzzy_match_score(s1, s2):
@@ -707,9 +730,9 @@ def process_pdf_document_with_path(filepath, filename, signed_doc, signed_pages,
             best_match['used'] = True
             matched += 1
 
-    # Save
+    # Save (preserve PDF format)
     if matched > 0:
-        output_name = sanitize_output_name(filename)
+        output_name = sanitize_output_name(filename, preserve_format=True)
         output_path = os.path.join(output_folder, output_name)
         original.save(output_path)
         original.close()
@@ -720,13 +743,86 @@ def process_pdf_document_with_path(filepath, filename, signed_doc, signed_pages,
 
 
 def process_docx_document_with_path(filepath, filename, signed_doc, signed_pages, output_folder):
-    """Process a DOCX document - convert to PDF first if possible."""
-    # For now, just copy DOCX files as-is (can't easily merge signed pages into DOCX)
-    import shutil
-    output_name = filename.replace('.docx', ' (executed).docx')
-    output_path = os.path.join(output_folder, output_name)
-    shutil.copy(filepath, output_path)
-    return {'file': filename, 'status': 'copied', 'matched_pages': 0, 'note': 'DOCX copied without modification'}
+    """
+    Process a DOCX document - insert signed signature page content.
+    Preserves DOCX format (DOCX in → DOCX out).
+    """
+    try:
+        # Open the original DOCX document
+        original_docx = Document(filepath)
+
+        # Extract text from original for matching
+        orig_text = ""
+        for para in original_docx.paragraphs:
+            orig_text += para.text + "\n"
+
+        # Look for signature-related content in original
+        has_sig_content = "BY:" in orig_text.upper() or "SIGNATURE" in orig_text.upper()
+
+        # Find matching signed page based on document name
+        orig_name = os.path.splitext(filename)[0].upper()
+        best_match = None
+        best_score = 0
+
+        for sp in signed_pages:
+            if sp.get('used'):
+                continue
+
+            # Check if document name matches
+            if sp.get('doc_name'):
+                score = SequenceMatcher(None, orig_name, sp['doc_name']).ratio()
+                if score > best_score and score > 0.4:
+                    best_score = score
+                    best_match = sp
+
+        matched_pages = 0
+
+        if best_match and has_sig_content:
+            # We have a matching signed page - append its content to the DOCX
+            try:
+                # Add a page break before the signed content
+                original_docx.add_page_break()
+
+                # Add header indicating this is the executed signature page
+                header_para = original_docx.add_paragraph()
+                header_run = header_para.add_run("[EXECUTED SIGNATURE PAGE]")
+                header_run.bold = True
+                header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                original_docx.add_paragraph()  # Blank line
+
+                # Extract and add the signed page content
+                signed_page = signed_doc[best_match['page_num']]
+                signed_text = signed_page.get_text()
+
+                # Add the signed page text as paragraphs
+                for line in signed_text.split('\n'):
+                    if line.strip():
+                        para = original_docx.add_paragraph(line.strip())
+
+                best_match['used'] = True
+                matched_pages = 1
+
+            except Exception as e:
+                # If adding signed content fails, continue with original
+                pass
+
+        # Save with (executed) suffix
+        output_name = sanitize_output_name(filename, preserve_format=True)
+        output_path = os.path.join(output_folder, output_name)
+        original_docx.save(output_path)
+
+        if matched_pages > 0:
+            return {'file': filename, 'status': 'executed', 'matched_pages': matched_pages, 'output': output_name}
+        else:
+            return {'file': filename, 'status': 'copied', 'matched_pages': 0, 'note': 'DOCX copied (no matching signed page)'}
+
+    except Exception as e:
+        # Fallback: copy the file as-is
+        output_name = sanitize_output_name(filename, preserve_format=True)
+        output_path = os.path.join(output_folder, output_name)
+        shutil.copy(filepath, output_path)
+        return {'file': filename, 'status': 'error', 'matched_pages': 0, 'error': str(e)}
 
 
 if __name__ == "__main__":

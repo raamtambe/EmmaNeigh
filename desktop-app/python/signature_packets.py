@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Signature Packet Processor
-v3.2.1: Added MS Word (.docx) support.
+v3.3.0: Format preservation - DOCX in → DOCX out, PDF in → PDF out.
 """
 
 import fitz
@@ -10,7 +10,10 @@ import pandas as pd
 import re
 import sys
 import json
+import shutil
 from docx import Document
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 # Column header patterns for signature table detection
@@ -210,6 +213,133 @@ def extract_signers_from_docx(docx_path):
     return signers
 
 
+def create_docx_packet(signer_name, docs_for_signer, output_folder):
+    """
+    Create a DOCX signature packet for a signer from DOCX source documents.
+
+    Args:
+        signer_name: Name of the signer
+        docs_for_signer: List of (filename, filepath) tuples for this signer
+        output_folder: Where to save the packet
+
+    Returns:
+        Path to created packet, or None if failed
+    """
+    try:
+        # Create new document for the packet
+        packet_doc = Document()
+
+        # Add header
+        header_para = packet_doc.add_paragraph()
+        header_run = header_para.add_run(f"SIGNATURE PACKET FOR {signer_name}")
+        header_run.bold = True
+        header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        packet_doc.add_paragraph()  # Blank line
+
+        docs_added = 0
+
+        for filename, filepath in docs_for_signer:
+            if not filepath.lower().endswith('.docx'):
+                continue
+
+            try:
+                # Open source document
+                source_doc = Document(filepath)
+
+                # Add document separator
+                sep_para = packet_doc.add_paragraph()
+                sep_run = sep_para.add_run(f"─" * 50)
+                packet_doc.add_paragraph()
+
+                doc_title = packet_doc.add_paragraph()
+                title_run = doc_title.add_run(f"Document: {filename}")
+                title_run.bold = True
+
+                packet_doc.add_paragraph()  # Blank line
+
+                # Copy content from source document
+                for para in source_doc.paragraphs:
+                    new_para = packet_doc.add_paragraph()
+                    new_para.style = para.style
+
+                    for run in para.runs:
+                        new_run = new_para.add_run(run.text)
+                        new_run.bold = run.bold
+                        new_run.italic = run.italic
+                        if run.font.size:
+                            new_run.font.size = run.font.size
+
+                # Copy tables
+                for table in source_doc.tables:
+                    # Create table with same dimensions
+                    new_table = packet_doc.add_table(rows=len(table.rows), cols=len(table.columns))
+                    new_table.style = 'Table Grid'
+
+                    for i, row in enumerate(table.rows):
+                        for j, cell in enumerate(row.cells):
+                            new_table.rows[i].cells[j].text = cell.text
+
+                docs_added += 1
+
+                # Add page break between documents
+                packet_doc.add_page_break()
+
+            except Exception as e:
+                # Skip problematic documents
+                continue
+
+        if docs_added > 0:
+            packet_path = os.path.join(output_folder, f"signature_packet - {signer_name}.docx")
+            packet_doc.save(packet_path)
+            return packet_path
+
+    except Exception as e:
+        pass
+
+    return None
+
+
+def create_pdf_packet(signer_name, docs_for_signer, output_folder, filepath_lookup):
+    """
+    Create a PDF signature packet for a signer from PDF source documents.
+
+    Args:
+        signer_name: Name of the signer
+        docs_for_signer: DataFrame rows for this signer
+        output_folder: Where to save the packet
+        filepath_lookup: Dict mapping filename -> filepath
+
+    Returns:
+        Tuple of (path, page_count) or (None, 0) if failed
+    """
+    try:
+        packet = fitz.open()
+
+        for _, r in docs_for_signer.iterrows():
+            if r["Document"].lower().endswith('.pdf'):
+                try:
+                    doc_path = filepath_lookup.get(r["Document"], r["Document"])
+                    src = fitz.open(doc_path)
+                    packet.insert_pdf(src, from_page=r["Page"] - 1, to_page=r["Page"] - 1)
+                    src.close()
+                except Exception:
+                    pass
+
+        if packet.page_count > 0:
+            pdf_path = os.path.join(output_folder, f"signature_packet - {signer_name}.pdf")
+            packet.save(pdf_path)
+            page_count = packet.page_count
+            packet.close()
+            return pdf_path, page_count
+
+        packet.close()
+    except Exception:
+        pass
+
+    return None, 0
+
+
 # ========== MAIN ==========
 
 def main():
@@ -315,7 +445,7 @@ def main():
     emit("progress", percent=55, message="Creating master index...")
     df.to_excel(os.path.join(output_table_dir, "MASTER_SIGNATURE_INDEX.xlsx"), index=False)
 
-    # Create individual packets
+    # Create individual packets with format preservation
     signers = df.groupby("Signer Name")
     total_signers = len(signers)
     packets_created = []
@@ -330,27 +460,36 @@ def main():
             index=False
         )
 
-        # Create PDF packet (only from PDF sources)
-        packet = fitz.open()
-        for _, r in group.iterrows():
-            if r["Document"].lower().endswith('.pdf'):
-                try:
-                    # Use filepath_lookup if available, otherwise build from input_dir
-                    doc_path = filepath_lookup.get(r["Document"], os.path.join(input_dir, r["Document"]))
-                    src = fitz.open(doc_path)
-                    packet.insert_pdf(src, from_page=r["Page"] - 1, to_page=r["Page"] - 1)
-                    src.close()
-                except Exception:
-                    pass
+        # Separate PDF and DOCX documents for this signer
+        pdf_docs = group[group["Document"].str.lower().str.endswith('.pdf')]
+        docx_docs = group[group["Document"].str.lower().str.endswith('.docx')]
 
-        if packet.page_count > 0:
-            pdf_path = os.path.join(output_pdf_dir, f"signature_packet - {signer}.pdf")
-            packet.save(pdf_path)
-            packets_created.append({
-                "name": signer,
-                "pages": packet.page_count
-            })
-        packet.close()
+        # Create PDF packet from PDF sources
+        if len(pdf_docs) > 0:
+            pdf_path, page_count = create_pdf_packet(
+                signer, pdf_docs, output_pdf_dir, filepath_lookup
+            )
+            if pdf_path:
+                packets_created.append({
+                    "name": signer,
+                    "pages": page_count,
+                    "format": "pdf"
+                })
+
+        # Create DOCX packet from DOCX sources (format preservation)
+        if len(docx_docs) > 0:
+            docx_files = []
+            for _, r in docx_docs.iterrows():
+                doc_path = filepath_lookup.get(r["Document"], os.path.join(input_dir, r["Document"]))
+                docx_files.append((r["Document"], doc_path))
+
+            docx_path = create_docx_packet(signer, docx_files, output_pdf_dir)
+            if docx_path:
+                packets_created.append({
+                    "name": signer,
+                    "pages": len(docx_files),
+                    "format": "docx"
+                })
 
     emit("progress", percent=100, message="Complete!")
     emit("result",
