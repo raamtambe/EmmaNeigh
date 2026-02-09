@@ -103,13 +103,25 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  // Setup auto-updater
+  // Setup auto-updater with enhanced progress reporting
   if (autoUpdater) {
-    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.autoDownload = false; // Don't auto-download, let user decide
+    autoUpdater.checkForUpdates();
 
     autoUpdater.on('update-available', (info) => {
       if (mainWindow) {
         mainWindow.webContents.send('update-available', info);
+      }
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('update-progress', {
+          percent: Math.round(progress.percent),
+          bytesPerSecond: progress.bytesPerSecond,
+          transferred: progress.transferred,
+          total: progress.total
+        });
       }
     });
 
@@ -118,7 +130,22 @@ app.whenReady().then(async () => {
         mainWindow.webContents.send('update-downloaded');
       }
     });
+
+    autoUpdater.on('error', (err) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('update-error', err.message);
+      }
+    });
   }
+});
+
+// IPC handler to start download
+ipcMain.handle('download-update', async () => {
+  if (autoUpdater) {
+    await autoUpdater.downloadUpdate();
+    return true;
+  }
+  return false;
 });
 
 app.on('window-all-closed', () => {
@@ -681,6 +708,226 @@ ipcMain.handle('redline-documents', async (event, config) => {
         resolve(result);
       } else if (!result) {
         reject(new Error('Document redline failed with code ' + code));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
+// ========== EMAIL CSV PARSING ==========
+
+ipcMain.handle('parse-email-csv', async (event, csvPath) => {
+  const processorPath = getProcessorPath('email_csv_parser');
+
+  if (!processorPath) {
+    // In development, parse CSV directly with Node.js
+    try {
+      const csvContent = fs.readFileSync(csvPath, 'utf-8');
+      const lines = csvContent.split('\n');
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+
+      const emails = [];
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+
+        // Simple CSV parsing (doesn't handle quoted commas perfectly)
+        const values = lines[i].split(',');
+        const email = {
+          subject: '',
+          from: '',
+          to: '',
+          date_sent: null,
+          date_received: null,
+          body: ''
+        };
+
+        headers.forEach((header, idx) => {
+          const value = values[idx] ? values[idx].trim() : '';
+          if (header.includes('subject')) email.subject = value;
+          else if (header.includes('from')) email.from = value;
+          else if (header.includes('to')) email.to = value;
+          else if (header.includes('body') || header.includes('content')) email.body = value;
+          else if (header.includes('sent')) email.date_sent = value;
+          else if (header.includes('received') || header === 'date') email.date_received = value;
+        });
+
+        emails.push(email);
+      }
+
+      const uniqueSenders = new Set(emails.map(e => e.from).filter(f => f));
+      const dates = emails.map(e => e.date_sent || e.date_received).filter(d => d).sort();
+
+      return {
+        success: true,
+        emails: emails,
+        summary: {
+          total_emails: emails.length,
+          unique_senders: uniqueSenders.size,
+          date_range: {
+            earliest: dates[0] || null,
+            latest: dates[dates.length - 1] || null
+          }
+        }
+      };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  // Production: Use Python processor
+  const configPath = path.join(app.getPath('temp'), `email_config_${Date.now()}.json`);
+  const config = {
+    action: 'parse',
+    csv_path: csvPath
+  };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(processorPath, [configPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('email-progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.on('close', (code) => {
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Email parsing failed with code ' + code));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
+// ========== TIME TRACKING ==========
+
+ipcMain.handle('generate-time-summary', async (event, config) => {
+  const processorPath = getProcessorPath('time_tracker');
+
+  // In development, use simplified local processing
+  if (!processorPath) {
+    try {
+      const emails = config.emails || [];
+      const period = config.period || 'day';
+
+      // Simple summary without calendar
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+
+      // Filter emails for today/this week
+      const filteredEmails = emails.filter(email => {
+        const dateStr = email.date_sent || email.date_received;
+        if (!dateStr) return false;
+        try {
+          const emailDate = new Date(dateStr);
+          if (period === 'day') {
+            return emailDate.toISOString().split('T')[0] === todayStr;
+          } else {
+            const weekAgo = new Date(today);
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            return emailDate >= weekAgo;
+          }
+        } catch (e) {
+          return false;
+        }
+      });
+
+      // Simple categorization
+      const byMatter = {};
+      filteredEmails.forEach(email => {
+        const subject = email.subject || '';
+        // Simple extraction - look for [brackets] or first few words
+        let matter = 'General';
+        const bracketMatch = subject.match(/\[([^\]]+)\]/);
+        if (bracketMatch) {
+          matter = bracketMatch[1];
+        } else if (subject.startsWith('Re:') || subject.startsWith('RE:')) {
+          matter = subject.substring(4, 30).trim() || 'General';
+        }
+
+        if (!byMatter[matter]) {
+          byMatter[matter] = { emails: 0, minutes: 0 };
+        }
+        byMatter[matter].emails++;
+        byMatter[matter].minutes += 3; // Assume 3 min per email
+      });
+
+      const totalMinutes = filteredEmails.length * 3;
+      const mattersArray = Object.entries(byMatter).map(([name, data]) => ({
+        name,
+        hours: Math.round(data.minutes / 60 * 10) / 10,
+        percent: Math.round(data.minutes / Math.max(totalMinutes, 1) * 100),
+        emails_sent: Math.floor(data.emails / 2),
+        emails_received: Math.ceil(data.emails / 2),
+        meetings: 0
+      })).sort((a, b) => b.hours - a.hours);
+
+      return {
+        success: true,
+        summary: {
+          period,
+          date: todayStr,
+          total_active_hours: Math.round(totalMinutes / 60 * 10) / 10,
+          total_meetings: 0,
+          total_emails: filteredEmails.length,
+          by_matter: mattersArray,
+          timeline: []
+        }
+      };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  // Production: Use Python processor
+  const configPath = path.join(app.getPath('temp'), `timetrack_config_${Date.now()}.json`);
+  fs.writeFileSync(configPath, JSON.stringify(config));
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(processorPath, [configPath]);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('timetrack-progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.on('close', (code) => {
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Time tracking failed with code ' + code));
       }
     });
 

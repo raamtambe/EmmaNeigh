@@ -32,7 +32,8 @@ jobs:
           pyinstaller --onefile --name incumbency_parser incumbency_parser.py
           pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
           pyinstaller --onefile --name document_collator document_collator.py
-          pyinstaller --onefile --name document_redline document_redline.py
+          pyinstaller --onefile --name email_csv_parser email_csv_parser.py
+          pyinstaller --onefile --name time_tracker time_tracker.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -53,19 +54,22 @@ jobs:
           cp desktop-app/python/dist/incumbency_parser.exe desktop-app/resources/win/
           cp desktop-app/python/dist/sigblock_workflow.exe desktop-app/resources/win/
           cp desktop-app/python/dist/document_collator.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/document_redline.exe desktop-app/resources/win/
+          cp desktop-app/python/dist/email_csv_parser.exe desktop-app/resources/win/
+          cp desktop-app/python/dist/time_tracker.exe desktop-app/resources/win/
         shell: bash
 
-      - name: Build Electron app
+      - name: Build Electron app (NSIS + Portable)
         run: |
           cd desktop-app
-          npx electron-builder --win portable --publish never
+          npx electron-builder --win --publish never
 
-      - name: Upload artifact
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: EmmaNeigh-Windows
-          path: desktop-app/dist/EmmaNeigh-Portable.exe
+          path: |
+            desktop-app/dist/EmmaNeigh-Setup.exe
+            desktop-app/dist/EmmaNeigh-Portable.exe
 
   build-mac:
     runs-on: macos-latest
@@ -92,7 +96,8 @@ jobs:
           pyinstaller --onefile --name incumbency_parser incumbency_parser.py
           pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
           pyinstaller --onefile --name document_collator document_collator.py
-          pyinstaller --onefile --name document_redline document_redline.py
+          pyinstaller --onefile --name email_csv_parser email_csv_parser.py
+          pyinstaller --onefile --name time_tracker time_tracker.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -113,14 +118,16 @@ jobs:
           cp desktop-app/python/dist/incumbency_parser desktop-app/resources/mac/
           cp desktop-app/python/dist/sigblock_workflow desktop-app/resources/mac/
           cp desktop-app/python/dist/document_collator desktop-app/resources/mac/
-          cp desktop-app/python/dist/document_redline desktop-app/resources/mac/
+          cp desktop-app/python/dist/email_csv_parser desktop-app/resources/mac/
+          cp desktop-app/python/dist/time_tracker desktop-app/resources/mac/
           chmod +x desktop-app/resources/mac/signature_packets
           chmod +x desktop-app/resources/mac/execution_version
           chmod +x desktop-app/resources/mac/checklist_parser
           chmod +x desktop-app/resources/mac/incumbency_parser
           chmod +x desktop-app/resources/mac/sigblock_workflow
           chmod +x desktop-app/resources/mac/document_collator
-          chmod +x desktop-app/resources/mac/document_redline
+          chmod +x desktop-app/resources/mac/email_csv_parser
+          chmod +x desktop-app/resources/mac/time_tracker
 
       - name: Build Electron app
         run: |
@@ -158,52 +165,41 @@ jobs:
           files: |
             artifacts/*
           body: |
-            ## EmmaNeigh v4.1.3 - Redline & Collate Fix
+            ## EmmaNeigh v5.0.0 - Major Update
 
             ### Downloads
-            - **Windows**: Download `EmmaNeigh-Portable.exe` - just double-click to run
+            - **Windows Installer**: `EmmaNeigh-Setup.exe` - Recommended, supports auto-updates
+            - **Windows Portable**: `EmmaNeigh-Portable.exe` - No installation needed
             - **Mac**: Download the `.dmg` file
 
-            ### What's New in v4.1.3
-            - **Redline Tab**: Compare two Word documents side-by-side with color-coded differences
-              - Deleted text: Red with strikethrough
-              - Added text: Blue
-              - Moved text: Green
-              - Summary statistics included
-            - **Collate Fix**: The Collate feature now properly merges changes from commented documents into the base document (previously just copied the base)
-            - **ZIP Naming**: Download filenames now match the feature (EmmaNeigh-Signature-Packets.zip, EmmaNeigh-Redline.zip, etc.)
+            ### What's New in v5.0.0
 
-            ### Previous Features
-            - **Individual PDF Support**: Signature Packets and Execution Version tabs accept individual PDF files (v4.1.2)
-            - **Collate Tab**: Merge track changes and comments from multiple document versions (v4.1.1)
-            - **Signature Blocks Tab**: Generate signature blocks from checklists and incumbency certificates
-            - **Signature Packets Tab**: Extract and organize signature pages by signer
-            - **Execution Version Tab**: Merge signed DocuSign pages back into originals
+            **🎨 Redesigned Navigation**
+            - New sidebar with collapsible categories
+            - Organized into: Closing Docs, Document Updates, Checklists, Time Tracking
+            - Wider window (800px) for better workspace
 
-            ### How to Use
+            **📊 Usage History Tracking**
+            - Track all document processing operations
+            - View recent activity and statistics
+            - Export history to CSV
+            - All data stored locally for privacy
 
-            **Redline Tab:**
-            1. Upload the original document (.docx)
-            2. Upload the modified document (.docx)
-            3. Click "Compare Documents"
-            4. Download the redlined document showing all differences
+            **🔄 Auto-Update Support**
+            - Windows Installer version now supports automatic updates
+            - Download progress indicator
+            - One-click install and restart
 
-            **Collate Tab:**
-            1. Upload your base document (.docx)
-            2. Upload commented versions from different reviewers
-            3. Click "Collate Documents"
-            4. Download merged document with all changes incorporated
+            ### All Features
+            - **Signature Packets**: Extract and organize signature pages by signer
+            - **Execution Version**: Merge signed DocuSign pages into originals
+            - **Signature Blocks**: Generate signature blocks from checklists
+            - **Collate Documents**: Merge track changes from multiple reviewers
+            - **Email → Checklist**: Parse Outlook CSV exports and search emails
+            - **Time Tracking**: Generate activity summaries from emails + calendar
 
-            **Signature Packets Tab:**
-            1. Drop a folder OR individual PDF files onto the app
-            2. Wait for processing
-            3. Download your ZIP file with signature packets organized by signer
-
-            **Execution Version Tab:**
-            1. Select folder OR individual PDF files as original agreements
-            2. Select the signed PDF from DocuSign
-            3. Click "Create Execution Versions"
-            4. Download ZIP with executed documents
+            ### Coming Soon
+            - Claude AI integration for smart queries
 
             ### Security
             - 100% local processing - no data leaves your machine

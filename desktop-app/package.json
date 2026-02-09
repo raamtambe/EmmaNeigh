@@ -1,11 +1,12 @@
 {
   "name": "emmaneigh",
-  "version": "4.1.3",
-  "description": "Signature Packet Automation",
+  "version": "5.0.0",
+  "description": "Transaction Management & Document Automation",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win portable",
+    "build:win": "electron-builder --win",
+    "build:win:portable": "electron-builder --win portable",
     "build:mac": "electron-builder --mac"
   },
   "author": "Raam Tambe",
@@ -38,12 +39,18 @@
       "repo": "EmmaNeigh"
     },
     "win": {
-      "target": "portable",
+      "target": ["nsis", "portable"],
       "icon": "icon.ico"
     },
     "mac": {
       "target": "dmg",
       "icon": "icon.icns"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "EmmaNeigh-Setup.exe",
+      "deleteAppDataOnUninstall": false
     },
     "portable": {
       "artifactName": "EmmaNeigh-Portable.exe"

@@ -733,19 +733,58 @@
       border-radius: 8px;
       padding: 12px 20px;
       display: flex;
-      align-items: center;
-      gap: 12px;
+      flex-direction: column;
+      gap: 8px;
       z-index: 900;
       -webkit-app-region: no-drag;
+      min-width: 300px;
     }
 
     .update-banner.hidden {
       display: none;
     }
 
+    .update-banner-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
     .update-banner p {
       font-size: 13px;
       color: #888;
+      flex: 1;
+    }
+
+    .update-progress-container {
+      display: none;
+      width: 100%;
+    }
+
+    .update-progress-container.visible {
+      display: block;
+    }
+
+    .update-progress-bar {
+      width: 100%;
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .update-progress-fill {
+      height: 100%;
+      background: #22c55e;
+      transition: width 0.3s;
+      width: 0%;
+    }
+
+    .update-progress-text {
+      font-size: 11px;
+      color: #666;
+      margin-top: 4px;
+      text-align: center;
     }
 
     .update-banner .btn {
@@ -1091,6 +1130,220 @@
       color: #22c55e;
       margin-top: 4px;
     }
+
+    /* Email Tab Styles */
+    #emailTab {
+      overflow-y: auto;
+      flex: 1;
+      padding-bottom: 40px;
+    }
+
+    .email-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .email-search {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .email-search-input {
+      flex: 1;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 14px;
+      color: #fff;
+      -webkit-app-region: no-drag;
+    }
+
+    .email-search-input:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    .email-search-input::placeholder {
+      color: #555;
+    }
+
+    .email-results {
+      margin-top: 16px;
+    }
+
+    .email-results h3 {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 12px;
+    }
+
+    .email-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .email-item {
+      background: #111;
+      border-radius: 8px;
+      padding: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .email-item:hover {
+      background: #1a1a1a;
+    }
+
+    .email-item-subject {
+      font-size: 13px;
+      font-weight: 500;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .email-item-meta {
+      font-size: 11px;
+      color: #666;
+    }
+
+    .email-item-match {
+      font-size: 10px;
+      color: #22c55e;
+      margin-top: 4px;
+    }
+
+    .privacy-toggle {
+      margin-top: 16px;
+      padding: 12px;
+      background: #111;
+      border-radius: 8px;
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #888;
+      cursor: pointer;
+    }
+
+    .toggle-label input {
+      -webkit-app-region: no-drag;
+    }
+
+    .blurred {
+      filter: blur(4px);
+      user-select: none;
+    }
+
+    /* Time Tracking Tab Styles */
+    #timetrackTab {
+      overflow-y: auto;
+      flex: 1;
+      padding-bottom: 40px;
+    }
+
+    .timetrack-summary-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .timetrack-matters {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .matter-item {
+      background: #111;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .matter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .matter-name {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .matter-hours {
+      font-size: 14px;
+      color: #22c55e;
+    }
+
+    .matter-bar {
+      height: 4px;
+      background: #222;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .matter-bar-fill {
+      height: 100%;
+      background: #22c55e;
+    }
+
+    .matter-details {
+      font-size: 11px;
+      color: #666;
+    }
+
+    .timetrack-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .timeline-item {
+      display: flex;
+      gap: 12px;
+      font-size: 12px;
+      padding: 8px;
+      background: #111;
+      border-radius: 6px;
+    }
+
+    .timeline-time {
+      color: #888;
+      min-width: 70px;
+    }
+
+    .timeline-icon {
+      width: 16px;
+      text-align: center;
+    }
+
+    .timeline-desc {
+      flex: 1;
+      color: #ccc;
+    }
+
+    .timetrack-options {
+      display: flex;
+      align-items: center;
+    }
+
+    .timetrack-options input {
+      -webkit-app-region: no-drag;
+    }
   </style>
 </head>
 <body>
@@ -1157,9 +1410,17 @@
 
   <!-- Update Banner -->
   <div class="update-banner hidden" id="updateBanner">
-    <p id="updateMessage">A new version is available!</p>
-    <button class="btn btn-primary" id="updateBtn">Update Now</button>
-    <button class="btn btn-secondary" id="dismissUpdateBtn" style="margin-top: 0;">Later</button>
+    <div class="update-banner-row">
+      <p id="updateMessage">A new version is available!</p>
+      <button class="btn btn-primary" id="updateBtn">Download</button>
+      <button class="btn btn-secondary" id="dismissUpdateBtn" style="margin-top: 0;">Later</button>
+    </div>
+    <div class="update-progress-container" id="updateProgressContainer">
+      <div class="update-progress-bar">
+        <div class="update-progress-fill" id="updateProgressFill"></div>
+      </div>
+      <p class="update-progress-text" id="updateProgressText">Downloading...</p>
+    </div>
   </div>
 
   <div class="container">
@@ -1213,7 +1474,6 @@
           </button>
           <div class="nav-items">
             <button class="nav-item" data-tab="collate">Collate Documents</button>
-            <button class="nav-item" data-tab="redline">Redline Compare</button>
           </div>
         </div>
 
@@ -1225,11 +1485,11 @@
             <span class="arrow">▼</span>
           </button>
           <div class="nav-items">
-            <button class="nav-item disabled" data-tab="email" title="Coming in v5.0">Email → Checklist</button>
+            <button class="nav-item" data-tab="email">Email → Checklist</button>
           </div>
         </div>
 
-        <!-- Time Tracking (placeholder for Phase 4) -->
+        <!-- Time Tracking -->
         <div class="nav-category">
           <button class="nav-category-header">
             <span class="icon">⏱️</span>
@@ -1237,7 +1497,7 @@
             <span class="arrow">▼</span>
           </button>
           <div class="nav-items">
-            <button class="nav-item disabled" data-tab="timetrack" title="Coming in v5.0">Activity Summary</button>
+            <button class="nav-item" data-tab="timetrack">Activity Summary</button>
           </div>
         </div>
       </div>
@@ -1664,56 +1924,57 @@
       </div>
     </div><!-- End collateTab -->
 
-    <!-- Redline Tab -->
-    <div id="redlineTab" style="display: none;">
-      <!-- Redline Inputs -->
-      <div id="redlineInputs" class="exec-inputs">
-        <p class="subtitle" style="margin-bottom: 8px;">Compare two documents and highlight differences</p>
-        <p class="subtitle" style="margin-bottom: 16px; font-size: 12px;">
-          <span style="color: #ff4444;">Deleted text</span> |
-          <span style="color: #4488ff;">Added text</span> |
-          <span style="color: #44aa44;">Moved text</span>
-        </p>
+    <!-- Email Tab -->
+    <div id="emailTab" style="display: none;">
+      <!-- Upload State -->
+      <div class="email-upload" id="emailUpload">
+        <div class="input-section" id="emailCsvDrop">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
+          </svg>
+          <p class="input-label">Upload Email CSV</p>
+          <p class="input-hint">Export emails from Outlook as CSV</p>
+          <p class="input-selected" id="emailCsvSelected"></p>
+        </div>
 
-        <!-- Original Document -->
-        <div class="sigblock-step">
-          <div class="sigblock-step-header" id="originalDocHeader">
-            <span class="step-number">1</span>
-            Original Document
+        <div class="email-stats" id="emailStats" style="display: none;">
+          <div class="stat-box">
+            <div class="stat-value" id="emailTotalCount">0</div>
+            <div class="stat-label">Total Emails</div>
           </div>
-          <div class="input-section" id="originalDocInput">
-            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
-            </svg>
-            <p class="input-label">Drop original document here (.docx)</p>
-            <p class="input-hint">The earlier version to compare from</p>
-            <p class="input-selected" id="originalDocSelected"></p>
+          <div class="stat-box">
+            <div class="stat-value" id="emailSenderCount">0</div>
+            <div class="stat-label">Unique Senders</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="emailDateRange">-</div>
+            <div class="stat-label">Date Range</div>
           </div>
         </div>
 
-        <!-- Modified Document -->
-        <div class="sigblock-step">
-          <div class="sigblock-step-header" id="modifiedDocHeader">
-            <span class="step-number">2</span>
-            Modified Document
-          </div>
-          <div class="input-section" id="modifiedDocInput">
-            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
-            </svg>
-            <p class="input-label">Drop modified document here (.docx)</p>
-            <p class="input-hint">The newer version to compare to</p>
-            <p class="input-selected" id="modifiedDocSelected"></p>
-          </div>
+        <!-- Search Box -->
+        <div class="email-search" id="emailSearchBox" style="display: none;">
+          <input type="text" class="email-search-input" id="emailSearchInput" placeholder="Search emails by keyword...">
+          <button class="btn btn-primary" id="emailSearchBtn">Search</button>
         </div>
 
-        <div class="exec-actions">
-          <button class="btn btn-primary" id="redlineBtn" disabled>Compare Documents</button>
+        <!-- Search Results -->
+        <div class="email-results" id="emailResults" style="display: none;">
+          <h3 id="emailResultsTitle">Search Results</h3>
+          <div class="email-list" id="emailList"></div>
+        </div>
+
+        <!-- Privacy Toggle -->
+        <div class="privacy-toggle" id="emailPrivacyToggle" style="display: none;">
+          <label class="toggle-label">
+            <input type="checkbox" id="emailBlurToggle">
+            <span>Blur sensitive info</span>
+          </label>
         </div>
       </div>
 
       <!-- Processing -->
-      <div class="processing" id="redlineProcessing">
+      <div class="processing" id="emailProcessing">
         <div class="horse-container">
           <div class="horse">
             <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
@@ -1721,17 +1982,12 @@
               <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
               <ellipse cx="88" cy="8" rx="11" ry="7"/>
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
-              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
-              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <g class="front-legs">
-                <rect x="62" y="46" width="5" height="14" rx="2"/>
-                <rect x="54" y="46" width="5" height="14" rx="2"/>
-              </g>
-              <g class="back-legs">
-                <rect x="38" y="46" width="5" height="14" rx="2"/>
-                <rect x="30" y="46" width="5" height="14" rx="2"/>
-              </g>
+              <ellipse cx="80" cy="6" rx="2" ry="2"/>
+              <path d="M 18 40 Q 8 42 5 55"/>
+              <path d="M 28 45 Q 22 52 25 60"/>
+              <path d="M 62 45 Q 68 52 65 60"/>
+              <path d="M 72 40 Q 78 48 75 58"/>
+              <path d="M 22 32 Q 10 38 2 32 Q 8 28 22 32"/>
             </svg>
           </div>
           <div class="dust">
@@ -1740,55 +1996,125 @@
             <div class="dust-particle"></div>
           </div>
         </div>
-        <p class="progress-text" id="redlineProgressText">Comparing documents...</p>
+        <p class="progress-text" id="emailProgressText">Processing emails...</p>
         <div class="progress-bar">
-          <div class="progress-fill" id="redlineProgressFill" style="width: 0%"></div>
+          <div class="progress-fill" id="emailProgressFill" style="width: 0%"></div>
         </div>
       </div>
 
-      <!-- Complete -->
-      <div class="complete" id="redlineComplete">
-        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-        </svg>
-        <h2>Comparison Complete</h2>
-        <p id="redlineResultText">Analyzed differences between documents</p>
-
-        <div class="collate-stats">
-          <div class="stat-box">
-            <div class="stat-value" id="parasDeletedValue">0</div>
-            <div class="stat-label">Paragraphs Deleted</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-value" id="parasAddedValue">0</div>
-            <div class="stat-label">Paragraphs Added</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-value" id="parasModifiedValue">0</div>
-            <div class="stat-label">Paragraphs Modified</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-value" id="parasMovedValue">0</div>
-            <div class="stat-label">Paragraphs Moved</div>
-          </div>
-        </div>
-
-        <div class="btn-row">
-          <button class="btn btn-primary" id="redlineDownloadBtn">Download Redline</button>
-        </div>
-        <button class="btn btn-secondary" id="redlineResetBtn">Compare Another</button>
-      </div>
-
-      <!-- Error -->
-      <div class="error" id="redlineError">
+      <!-- Error State -->
+      <div class="error" id="emailError">
         <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+          <path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
         </svg>
         <h2>Error</h2>
-        <p id="redlineErrorText">Something went wrong</p>
-        <button class="btn btn-secondary" id="redlineRetryBtn">Try Again</button>
+        <p id="emailErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="emailRetryBtn">Try Again</button>
       </div>
-    </div><!-- End redlineTab -->
+    </div><!-- End emailTab -->
+
+    <!-- Time Tracking Tab -->
+    <div id="timetrackTab" style="display: none;">
+      <div class="timetrack-setup" id="timetrackSetup">
+        <h3 style="font-size: 14px; color: #888; margin-bottom: 16px;">Generate Activity Summary</h3>
+
+        <!-- Email CSV Input -->
+        <div class="input-section" id="timetrackEmailDrop">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
+          </svg>
+          <p class="input-label">Upload Email CSV</p>
+          <p class="input-hint">Outlook email export</p>
+          <p class="input-selected" id="timetrackEmailSelected"></p>
+        </div>
+
+        <!-- Calendar Input -->
+        <div class="input-section" id="timetrackCalendarDrop" style="margin-top: 12px;">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/>
+          </svg>
+          <p class="input-label">Upload Calendar (Optional)</p>
+          <p class="input-hint">.ics or .csv from Outlook/Google</p>
+          <p class="input-selected" id="timetrackCalendarSelected"></p>
+        </div>
+
+        <!-- Period Selection -->
+        <div class="timetrack-options" style="margin-top: 16px;">
+          <label style="font-size: 13px; color: #888;">
+            <input type="radio" name="timetrackPeriod" value="day" checked> Today
+          </label>
+          <label style="font-size: 13px; color: #888; margin-left: 16px;">
+            <input type="radio" name="timetrackPeriod" value="week"> This Week
+          </label>
+        </div>
+
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn btn-primary" id="timetrackGenerateBtn" disabled>Generate Summary</button>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="timetrackProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+            </svg>
+          </div>
+        </div>
+        <p class="progress-text" id="timetrackProgressText">Analyzing activity...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="timetrackProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div class="timetrack-results" id="timetrackResults" style="display: none;">
+        <h3 style="font-size: 16px; margin-bottom: 16px;">
+          <span id="timetrackResultsTitle">Activity Summary</span>
+        </h3>
+
+        <!-- Summary Stats -->
+        <div class="timetrack-summary-stats">
+          <div class="stat-box">
+            <div class="stat-value" id="ttTotalHours">0</div>
+            <div class="stat-label">Active Hours</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="ttTotalMeetings">0</div>
+            <div class="stat-label">Meetings</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="ttTotalEmails">0</div>
+            <div class="stat-label">Emails</div>
+          </div>
+        </div>
+
+        <!-- By Matter -->
+        <h4 style="font-size: 13px; color: #888; margin: 20px 0 12px;">By Matter</h4>
+        <div class="timetrack-matters" id="timetrackMatters"></div>
+
+        <!-- Timeline -->
+        <h4 style="font-size: 13px; color: #888; margin: 20px 0 12px;">Timeline</h4>
+        <div class="timetrack-timeline" id="timetrackTimeline"></div>
+
+        <div class="btn-row" style="margin-top: 20px;">
+          <button class="btn btn-secondary" id="timetrackResetBtn">New Summary</button>
+        </div>
+      </div>
+
+      <!-- Error State -->
+      <div class="error" id="timetrackError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="timetrackErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="timetrackRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End timetrackTab -->
 
       </div><!-- End content-area -->
     </div><!-- End main-layout -->
@@ -1992,19 +2318,53 @@
     const updateMessage = document.getElementById('updateMessage');
     const updateBtn = document.getElementById('updateBtn');
     const dismissUpdateBtn = document.getElementById('dismissUpdateBtn');
+    const updateProgressContainer = document.getElementById('updateProgressContainer');
+    const updateProgressFill = document.getElementById('updateProgressFill');
+    const updateProgressText = document.getElementById('updateProgressText');
+    let updateDownloaded = false;
 
     ipcRenderer.on('update-available', (event, info) => {
       updateMessage.textContent = `Version ${info.version} is available!`;
       updateBanner.classList.remove('hidden');
+      updateBtn.textContent = 'Download';
+      updateBtn.disabled = false;
+    });
+
+    ipcRenderer.on('update-progress', (event, progress) => {
+      updateProgressContainer.classList.add('visible');
+      updateProgressFill.style.width = progress.percent + '%';
+      const mbTransferred = (progress.transferred / 1024 / 1024).toFixed(1);
+      const mbTotal = (progress.total / 1024 / 1024).toFixed(1);
+      const speed = (progress.bytesPerSecond / 1024 / 1024).toFixed(1);
+      updateProgressText.textContent = `${mbTransferred}MB / ${mbTotal}MB (${speed} MB/s)`;
+      updateBtn.textContent = `${progress.percent}%`;
+      updateBtn.disabled = true;
     });
 
     ipcRenderer.on('update-downloaded', () => {
-      updateMessage.textContent = 'Update downloaded. Restart to install.';
+      updateDownloaded = true;
+      updateProgressContainer.classList.remove('visible');
+      updateMessage.textContent = 'Update ready! Restart to install.';
       updateBtn.textContent = 'Restart Now';
+      updateBtn.disabled = false;
+      dismissUpdateBtn.style.display = 'none';
+    });
+
+    ipcRenderer.on('update-error', (event, message) => {
+      updateProgressContainer.classList.remove('visible');
+      updateMessage.textContent = 'Update failed: ' + message;
+      updateBtn.textContent = 'Retry';
+      updateBtn.disabled = false;
     });
 
     updateBtn.addEventListener('click', async () => {
-      await ipcRenderer.invoke('install-update');
+      if (updateDownloaded) {
+        await ipcRenderer.invoke('install-update');
+      } else {
+        updateBtn.textContent = 'Starting...';
+        updateBtn.disabled = true;
+        await ipcRenderer.invoke('download-update');
+      }
     });
 
     dismissUpdateBtn.addEventListener('click', () => {
@@ -2018,7 +2378,8 @@
     const executionTab = document.getElementById('executionTab');
     const sigblocksTab = document.getElementById('sigblocksTab');
     const collateTab = document.getElementById('collateTab');
-    const redlineTab = document.getElementById('redlineTab');
+    const emailTab = document.getElementById('emailTab');
+    const timetrackTab = document.getElementById('timetrackTab');
 
     // Category accordion toggle
     navCategoryHeaders.forEach(header => {
@@ -2040,7 +2401,8 @@
       executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
       sigblocksTab.style.display = tabName === 'sigblocks' ? 'block' : 'none';
       collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
-      redlineTab.style.display = tabName === 'redline' ? 'block' : 'none';
+      emailTab.style.display = tabName === 'email' ? 'block' : 'none';
+      timetrackTab.style.display = tabName === 'timetrack' ? 'block' : 'none';
     }
 
     navItems.forEach(item => {
@@ -2993,183 +3355,360 @@
     collateResetBtn.addEventListener('click', resetCollateState);
     collateRetryBtn.addEventListener('click', resetCollateState);
 
-    // ========== REDLINE TAB ==========
-    const originalDocInput = document.getElementById('originalDocInput');
-    const originalDocSelected = document.getElementById('originalDocSelected');
-    const originalDocHeader = document.getElementById('originalDocHeader');
-    const modifiedDocInput = document.getElementById('modifiedDocInput');
-    const modifiedDocSelected = document.getElementById('modifiedDocSelected');
-    const modifiedDocHeader = document.getElementById('modifiedDocHeader');
-    const redlineBtn = document.getElementById('redlineBtn');
-    const redlineInputs = document.getElementById('redlineInputs');
-    const redlineProcessing = document.getElementById('redlineProcessing');
-    const redlineComplete = document.getElementById('redlineComplete');
-    const redlineError = document.getElementById('redlineError');
-    const redlineProgressText = document.getElementById('redlineProgressText');
-    const redlineProgressFill = document.getElementById('redlineProgressFill');
-    const redlineResultText = document.getElementById('redlineResultText');
-    const parasDeletedValue = document.getElementById('parasDeletedValue');
-    const parasAddedValue = document.getElementById('parasAddedValue');
-    const parasModifiedValue = document.getElementById('parasModifiedValue');
-    const parasMovedValue = document.getElementById('parasMovedValue');
-    const redlineErrorText = document.getElementById('redlineErrorText');
-    const redlineDownloadBtn = document.getElementById('redlineDownloadBtn');
-    const redlineResetBtn = document.getElementById('redlineResetBtn');
-    const redlineRetryBtn = document.getElementById('redlineRetryBtn');
+    // ========== EMAIL TAB ==========
+    const emailCsvDrop = document.getElementById('emailCsvDrop');
+    const emailCsvSelected = document.getElementById('emailCsvSelected');
+    const emailStats = document.getElementById('emailStats');
+    const emailTotalCount = document.getElementById('emailTotalCount');
+    const emailSenderCount = document.getElementById('emailSenderCount');
+    const emailDateRange = document.getElementById('emailDateRange');
+    const emailSearchBox = document.getElementById('emailSearchBox');
+    const emailSearchInput = document.getElementById('emailSearchInput');
+    const emailSearchBtn = document.getElementById('emailSearchBtn');
+    const emailResults = document.getElementById('emailResults');
+    const emailResultsTitle = document.getElementById('emailResultsTitle');
+    const emailList = document.getElementById('emailList');
+    const emailPrivacyToggle = document.getElementById('emailPrivacyToggle');
+    const emailBlurToggle = document.getElementById('emailBlurToggle');
+    const emailUpload = document.getElementById('emailUpload');
+    const emailProcessing = document.getElementById('emailProcessing');
+    const emailError = document.getElementById('emailError');
+    const emailProgressText = document.getElementById('emailProgressText');
+    const emailProgressFill = document.getElementById('emailProgressFill');
+    const emailErrorText = document.getElementById('emailErrorText');
+    const emailRetryBtn = document.getElementById('emailRetryBtn');
 
-    let originalDocPath = null;
-    let modifiedDocPath = null;
-    let redlineResult = null;
-    let redlineOutputPath = null;
+    let emailData = []; // Parsed emails
+    let emailCsvPath = null;
 
-    function showRedlineState(state) {
-      redlineInputs.style.display = state === 'idle' ? 'flex' : 'none';
-      redlineProcessing.classList.toggle('visible', state === 'processing');
-      redlineComplete.classList.toggle('visible', state === 'complete');
-      redlineError.classList.toggle('visible', state === 'error');
+    function showEmailState(state) {
+      emailUpload.style.display = state === 'idle' || state === 'loaded' ? 'block' : 'none';
+      emailProcessing.classList.toggle('visible', state === 'processing');
+      emailError.classList.toggle('visible', state === 'error');
     }
 
-    function updateRedlineButton() {
-      redlineBtn.disabled = !(originalDocPath && modifiedDocPath);
-    }
-
-    // Original document selection
-    originalDocInput.addEventListener('click', async () => {
-      const path = await ipcRenderer.invoke('select-docx');
-      if (path) {
-        originalDocPath = path;
-        originalDocSelected.textContent = truncatePath(path);
-        originalDocInput.classList.add('selected');
-        originalDocHeader.classList.add('done');
-        updateRedlineButton();
-      }
-    });
-
-    originalDocInput.addEventListener('dragover', (e) => {
+    // CSV Drop handlers
+    emailCsvDrop.addEventListener('dragover', (e) => {
       e.preventDefault();
-      originalDocInput.classList.add('active');
+      emailCsvDrop.classList.add('active');
     });
 
-    originalDocInput.addEventListener('dragleave', () => {
-      originalDocInput.classList.remove('active');
+    emailCsvDrop.addEventListener('dragleave', () => {
+      emailCsvDrop.classList.remove('active');
     });
 
-    originalDocInput.addEventListener('drop', (e) => {
+    emailCsvDrop.addEventListener('drop', async (e) => {
       e.preventDefault();
-      originalDocInput.classList.remove('active');
+      emailCsvDrop.classList.remove('active');
       const files = e.dataTransfer.files;
-      if (files.length > 0 && files[0].name.toLowerCase().endsWith('.docx')) {
-        originalDocPath = files[0].path;
-        originalDocSelected.textContent = truncatePath(originalDocPath);
-        originalDocInput.classList.add('selected');
-        originalDocHeader.classList.add('done');
-        updateRedlineButton();
+      if (files.length > 0 && files[0].name.toLowerCase().endsWith('.csv')) {
+        await processEmailCsv(files[0].path);
       }
     });
 
-    // Modified document selection
-    modifiedDocInput.addEventListener('click', async () => {
-      const path = await ipcRenderer.invoke('select-docx');
-      if (path) {
-        modifiedDocPath = path;
-        modifiedDocSelected.textContent = truncatePath(path);
-        modifiedDocInput.classList.add('selected');
-        modifiedDocHeader.classList.add('done');
-        updateRedlineButton();
+    emailCsvDrop.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('select-file', {
+        title: 'Select Email CSV',
+        filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+      });
+      if (result) {
+        await processEmailCsv(result);
       }
     });
 
-    modifiedDocInput.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      modifiedDocInput.classList.add('active');
-    });
+    async function processEmailCsv(csvPath) {
+      emailCsvPath = csvPath;
+      emailCsvSelected.textContent = csvPath.split(/[/\\]/).pop();
+      emailCsvDrop.classList.add('selected');
+      showEmailState('processing');
 
-    modifiedDocInput.addEventListener('dragleave', () => {
-      modifiedDocInput.classList.remove('active');
-    });
-
-    modifiedDocInput.addEventListener('drop', (e) => {
-      e.preventDefault();
-      modifiedDocInput.classList.remove('active');
-      const files = e.dataTransfer.files;
-      if (files.length > 0 && files[0].name.toLowerCase().endsWith('.docx')) {
-        modifiedDocPath = files[0].path;
-        modifiedDocSelected.textContent = truncatePath(modifiedDocPath);
-        modifiedDocInput.classList.add('selected');
-        modifiedDocHeader.classList.add('done');
-        updateRedlineButton();
-      }
-    });
-
-    // Compare documents
-    redlineBtn.addEventListener('click', async () => {
-      if (!originalDocPath || !modifiedDocPath) return;
-
-      showRedlineState('processing');
-      redlineProgressFill.style.width = '0%';
-      redlineProgressText.textContent = 'Starting comparison...';
+      const startTime = Date.now();
 
       try {
-        const startTime = Date.now();
-        const result = await ipcRenderer.invoke('redline-documents', {
-          original_document: originalDocPath,
-          modified_document: modifiedDocPath
-        });
+        const result = await ipcRenderer.invoke('parse-email-csv', csvPath);
 
-        redlineResult = result;
-        redlineOutputPath = result.output_document;
+        if (result.success) {
+          emailData = result.emails;
 
-        // Update results UI
-        redlineResultText.textContent = 'Document comparison complete';
-        parasDeletedValue.textContent = result.paragraphs_deleted || 0;
-        parasAddedValue.textContent = result.paragraphs_added || 0;
-        parasModifiedValue.textContent = result.paragraphs_modified || 0;
-        parasMovedValue.textContent = result.paragraphs_moved || 0;
+          // Update stats
+          emailTotalCount.textContent = result.summary.total_emails;
+          emailSenderCount.textContent = result.summary.unique_senders;
 
-        // Log usage
-        await logUsage('redline', 'process', 2, 1, Date.now() - startTime);
+          if (result.summary.date_range.earliest && result.summary.date_range.latest) {
+            const earliest = new Date(result.summary.date_range.earliest).toLocaleDateString();
+            const latest = new Date(result.summary.date_range.latest).toLocaleDateString();
+            emailDateRange.textContent = `${earliest} - ${latest}`;
+          }
 
-        showRedlineState('complete');
+          // Show UI elements
+          emailStats.style.display = 'grid';
+          emailSearchBox.style.display = 'flex';
+          emailPrivacyToggle.style.display = 'block';
+
+          // Log usage
+          await logUsage('email', 'parse', 1, result.summary.total_emails, Date.now() - startTime);
+
+          showEmailState('loaded');
+        } else {
+          emailErrorText.textContent = result.error || 'Failed to parse CSV';
+          showEmailState('error');
+        }
       } catch (err) {
-        redlineErrorText.textContent = err.message;
-        showRedlineState('error');
+        emailErrorText.textContent = err.message;
+        showEmailState('error');
       }
-    });
-
-    // Listen for redline progress
-    ipcRenderer.on('redline-progress', (event, data) => {
-      redlineProgressText.textContent = data.message;
-      redlineProgressFill.style.width = data.percent + '%';
-    });
-
-    redlineDownloadBtn.addEventListener('click', async () => {
-      if (redlineResult && redlineResult.output_folder) {
-        // Create a ZIP of the output folder and save it
-        const zipPath = await ipcRenderer.invoke('create-zip', redlineResult.output_folder);
-        if (zipPath) await ipcRenderer.invoke('save-zip', zipPath, 'EmmaNeigh-Redline.zip');
-      }
-    });
-
-    function resetRedlineState() {
-      originalDocPath = null;
-      modifiedDocPath = null;
-      redlineResult = null;
-      redlineOutputPath = null;
-
-      originalDocSelected.textContent = '';
-      modifiedDocSelected.textContent = '';
-
-      originalDocInput.classList.remove('selected');
-      modifiedDocInput.classList.remove('selected');
-      originalDocHeader.classList.remove('done');
-      modifiedDocHeader.classList.remove('done');
-
-      updateRedlineButton();
-      showRedlineState('idle');
     }
 
-    redlineResetBtn.addEventListener('click', resetRedlineState);
-    redlineRetryBtn.addEventListener('click', resetRedlineState);
+    // Search functionality
+    emailSearchBtn.addEventListener('click', () => {
+      performEmailSearch();
+    });
+
+    emailSearchInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        performEmailSearch();
+      }
+    });
+
+    function performEmailSearch() {
+      const query = emailSearchInput.value.trim();
+      if (!query || emailData.length === 0) return;
+
+      const queryLower = query.toLowerCase();
+      const results = emailData.filter(email => {
+        return (email.subject && email.subject.toLowerCase().includes(queryLower)) ||
+               (email.body && email.body.toLowerCase().includes(queryLower)) ||
+               (email.from && email.from.toLowerCase().includes(queryLower)) ||
+               (email.to && email.to.toLowerCase().includes(queryLower));
+      });
+
+      emailResultsTitle.textContent = `Search Results (${results.length} found)`;
+      emailList.innerHTML = '';
+
+      const blur = emailBlurToggle.checked;
+
+      results.slice(0, 50).forEach(email => {
+        const item = document.createElement('div');
+        item.className = 'email-item';
+
+        const subject = document.createElement('div');
+        subject.className = 'email-item-subject' + (blur ? ' blurred' : '');
+        subject.textContent = email.subject || '(No Subject)';
+
+        const meta = document.createElement('div');
+        meta.className = 'email-item-meta' + (blur ? ' blurred' : '');
+        const date = email.date_sent || email.date_received || '';
+        const dateStr = date ? new Date(date).toLocaleDateString() : '';
+        meta.textContent = `From: ${email.from || 'Unknown'} | ${dateStr}`;
+
+        item.appendChild(subject);
+        item.appendChild(meta);
+        emailList.appendChild(item);
+      });
+
+      emailResults.style.display = 'block';
+    }
+
+    // Privacy blur toggle
+    emailBlurToggle.addEventListener('change', () => {
+      if (emailResults.style.display !== 'none') {
+        performEmailSearch(); // Re-render with blur
+      }
+    });
+
+    emailRetryBtn.addEventListener('click', () => {
+      emailData = [];
+      emailCsvPath = null;
+      emailCsvSelected.textContent = '';
+      emailCsvDrop.classList.remove('selected');
+      emailStats.style.display = 'none';
+      emailSearchBox.style.display = 'none';
+      emailResults.style.display = 'none';
+      emailPrivacyToggle.style.display = 'none';
+      showEmailState('idle');
+    });
+
+    // Listen for email progress
+    ipcRenderer.on('email-progress', (event, data) => {
+      emailProgressText.textContent = data.message;
+      emailProgressFill.style.width = data.percent + '%';
+    });
+
+    // ========== TIME TRACKING TAB ==========
+    const timetrackEmailDrop = document.getElementById('timetrackEmailDrop');
+    const timetrackEmailSelected = document.getElementById('timetrackEmailSelected');
+    const timetrackCalendarDrop = document.getElementById('timetrackCalendarDrop');
+    const timetrackCalendarSelected = document.getElementById('timetrackCalendarSelected');
+    const timetrackGenerateBtn = document.getElementById('timetrackGenerateBtn');
+    const timetrackSetup = document.getElementById('timetrackSetup');
+    const timetrackProcessing = document.getElementById('timetrackProcessing');
+    const timetrackResults = document.getElementById('timetrackResults');
+    const timetrackError = document.getElementById('timetrackError');
+    const timetrackProgressText = document.getElementById('timetrackProgressText');
+    const timetrackProgressFill = document.getElementById('timetrackProgressFill');
+    const timetrackErrorText = document.getElementById('timetrackErrorText');
+    const timetrackRetryBtn = document.getElementById('timetrackRetryBtn');
+    const timetrackResetBtn = document.getElementById('timetrackResetBtn');
+    const timetrackResultsTitle = document.getElementById('timetrackResultsTitle');
+    const timetrackMatters = document.getElementById('timetrackMatters');
+    const timetrackTimeline = document.getElementById('timetrackTimeline');
+    const ttTotalHours = document.getElementById('ttTotalHours');
+    const ttTotalMeetings = document.getElementById('ttTotalMeetings');
+    const ttTotalEmails = document.getElementById('ttTotalEmails');
+
+    let ttEmailData = [];
+    let ttEmailPath = null;
+    let ttCalendarPath = null;
+
+    function showTimetrackState(state) {
+      timetrackSetup.style.display = state === 'idle' ? 'block' : 'none';
+      timetrackProcessing.classList.toggle('visible', state === 'processing');
+      timetrackResults.style.display = state === 'results' ? 'block' : 'none';
+      timetrackError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateTimetrackButton() {
+      timetrackGenerateBtn.disabled = ttEmailData.length === 0;
+    }
+
+    // Email drop for time tracking
+    timetrackEmailDrop.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('select-file', {
+        title: 'Select Email CSV',
+        filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+      });
+      if (result) {
+        ttEmailPath = result;
+        timetrackEmailSelected.textContent = result.split(/[/\\]/).pop();
+        timetrackEmailDrop.classList.add('selected');
+
+        // Parse emails
+        try {
+          const parseResult = await ipcRenderer.invoke('parse-email-csv', result);
+          if (parseResult.success) {
+            ttEmailData = parseResult.emails;
+            updateTimetrackButton();
+          }
+        } catch (e) {
+          console.error('Failed to parse emails:', e);
+        }
+      }
+    });
+
+    // Calendar drop
+    timetrackCalendarDrop.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('select-file', {
+        title: 'Select Calendar File',
+        filters: [{ name: 'Calendar Files', extensions: ['ics', 'csv'] }]
+      });
+      if (result) {
+        ttCalendarPath = result;
+        timetrackCalendarSelected.textContent = result.split(/[/\\]/).pop();
+        timetrackCalendarDrop.classList.add('selected');
+      }
+    });
+
+    // Generate summary
+    timetrackGenerateBtn.addEventListener('click', async () => {
+      if (ttEmailData.length === 0) return;
+
+      showTimetrackState('processing');
+      const startTime = Date.now();
+
+      const period = document.querySelector('input[name="timetrackPeriod"]:checked').value;
+
+      try {
+        const result = await ipcRenderer.invoke('generate-time-summary', {
+          emails: ttEmailData,
+          calendar_path: ttCalendarPath,
+          period: period
+        });
+
+        if (result.success) {
+          const summary = result.summary;
+
+          // Update title
+          const dateStr = new Date(summary.date).toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          });
+          timetrackResultsTitle.textContent = period === 'week' ? `Week of ${dateStr}` : dateStr;
+
+          // Update stats
+          ttTotalHours.textContent = summary.total_active_hours + 'h';
+          ttTotalMeetings.textContent = summary.total_meetings;
+          ttTotalEmails.textContent = summary.total_emails;
+
+          // Render matters
+          timetrackMatters.innerHTML = '';
+          summary.by_matter.forEach(matter => {
+            const item = document.createElement('div');
+            item.className = 'matter-item';
+            item.innerHTML = `
+              <div class="matter-header">
+                <span class="matter-name">${matter.name}</span>
+                <span class="matter-hours">${matter.hours}h (${matter.percent}%)</span>
+              </div>
+              <div class="matter-bar">
+                <div class="matter-bar-fill" style="width: ${matter.percent}%"></div>
+              </div>
+              <div class="matter-details">
+                ${matter.emails_sent + matter.emails_received} emails · ${matter.meetings} meetings
+              </div>
+            `;
+            timetrackMatters.appendChild(item);
+          });
+
+          // Render timeline
+          timetrackTimeline.innerHTML = '';
+          summary.timeline.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'timeline-item';
+            const icon = item.type === 'meeting' ? '📅' : '✉️';
+            el.innerHTML = `
+              <span class="timeline-time">${item.time}</span>
+              <span class="timeline-icon">${icon}</span>
+              <span class="timeline-desc">${item.description}</span>
+            `;
+            timetrackTimeline.appendChild(el);
+          });
+
+          // Log usage
+          await logUsage('timetrack', 'generate', ttEmailData.length, 1, Date.now() - startTime);
+
+          showTimetrackState('results');
+        } else {
+          timetrackErrorText.textContent = result.error || 'Failed to generate summary';
+          showTimetrackState('error');
+        }
+      } catch (err) {
+        timetrackErrorText.textContent = err.message;
+        showTimetrackState('error');
+      }
+    });
+
+    function resetTimetrackState() {
+      ttEmailData = [];
+      ttEmailPath = null;
+      ttCalendarPath = null;
+      timetrackEmailSelected.textContent = '';
+      timetrackCalendarSelected.textContent = '';
+      timetrackEmailDrop.classList.remove('selected');
+      timetrackCalendarDrop.classList.remove('selected');
+      updateTimetrackButton();
+      showTimetrackState('idle');
+    }
+
+    timetrackResetBtn.addEventListener('click', resetTimetrackState);
+    timetrackRetryBtn.addEventListener('click', resetTimetrackState);
+
+    // Listen for timetrack progress
+    ipcRenderer.on('timetrack-progress', (event, data) => {
+      timetrackProgressText.textContent = data.message;
+      timetrackProgressFill.style.width = data.percent + '%';
+    });
   </script>
 </body>
 </html>
