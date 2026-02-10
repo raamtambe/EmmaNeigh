@@ -505,6 +505,40 @@
       max-width: 100%;
     }
 
+    .input-selected-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .input-selected-wrapper .input-selected {
+      margin-top: 0;
+    }
+
+    .clear-file-btn {
+      background: none;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      padding: 2px 6px;
+      font-size: 16px;
+      line-height: 1;
+      border-radius: 4px;
+      -webkit-app-region: no-drag;
+      display: none;
+    }
+
+    .clear-file-btn:hover {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .clear-file-btn.visible {
+      display: inline-block;
+    }
+
     .exec-actions {
       margin-top: 16px;
       display: flex;
@@ -2339,7 +2373,10 @@
           </svg>
           <p class="input-label">Upload Closing Checklist</p>
           <p class="input-hint">Word document (.docx) with transaction checklist</p>
-          <p class="input-selected" id="checklistDocSelected"></p>
+          <div class="input-selected-wrapper">
+            <p class="input-selected" id="checklistDocSelected"></p>
+            <button class="clear-file-btn" id="clearChecklistDoc">×</button>
+          </div>
         </div>
 
         <!-- Email CSV Input -->
@@ -2349,7 +2386,10 @@
           </svg>
           <p class="input-label">Upload Email CSV</p>
           <p class="input-hint">Outlook email export from today's activity</p>
-          <p class="input-selected" id="checklistEmailSelected"></p>
+          <div class="input-selected-wrapper">
+            <p class="input-selected" id="checklistEmailSelected"></p>
+            <button class="clear-file-btn" id="clearChecklistEmail">×</button>
+          </div>
         </div>
 
         <div class="btn-row" style="margin-top: 16px;">
@@ -2409,7 +2449,10 @@
           </svg>
           <p class="input-label">Upload Closing Checklist</p>
           <p class="input-hint">Word document (.docx) with transaction checklist</p>
-          <p class="input-selected" id="punchlistChecklistSelected"></p>
+          <div class="input-selected-wrapper">
+            <p class="input-selected" id="punchlistChecklistSelected"></p>
+            <button class="clear-file-btn" id="clearPunchlistChecklist">×</button>
+          </div>
         </div>
 
         <!-- Output Options -->
@@ -4122,6 +4165,8 @@
     const checklistEmailDrop = document.getElementById('checklistEmailDrop');
     const checklistDocSelected = document.getElementById('checklistDocSelected');
     const checklistEmailSelected = document.getElementById('checklistEmailSelected');
+    const clearChecklistDoc = document.getElementById('clearChecklistDoc');
+    const clearChecklistEmail = document.getElementById('clearChecklistEmail');
     const updateChecklistBtn = document.getElementById('updateChecklistBtn');
     const checklistSetup = document.getElementById('checklistSetup');
     const checklistProcessing = document.getElementById('checklistProcessing');
@@ -4151,12 +4196,14 @@
     }
 
     // Checklist doc drop
-    checklistDocDrop.addEventListener('click', async () => {
+    checklistDocDrop.addEventListener('click', async (e) => {
+      if (e.target === clearChecklistDoc) return; // Don't open picker when clearing
       const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'Word Documents', extensions: ['docx'] }] });
       if (result) {
         checklistDocPath = result;
         checklistDocSelected.textContent = result.split(/[\\/]/).pop();
         checklistDocDrop.classList.add('selected');
+        clearChecklistDoc.classList.add('visible');
         updateChecklistButton();
       }
     });
@@ -4171,17 +4218,30 @@
         checklistDocPath = file.path;
         checklistDocSelected.textContent = file.name;
         checklistDocDrop.classList.add('selected');
+        clearChecklistDoc.classList.add('visible');
         updateChecklistButton();
       }
     });
 
+    // Clear checklist doc
+    clearChecklistDoc.addEventListener('click', (e) => {
+      e.stopPropagation();
+      checklistDocPath = null;
+      checklistDocSelected.textContent = '';
+      checklistDocDrop.classList.remove('selected');
+      clearChecklistDoc.classList.remove('visible');
+      updateChecklistButton();
+    });
+
     // Checklist email drop
-    checklistEmailDrop.addEventListener('click', async () => {
+    checklistEmailDrop.addEventListener('click', async (e) => {
+      if (e.target === clearChecklistEmail) return;
       const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'CSV Files', extensions: ['csv'] }] });
       if (result) {
         checklistEmailPath = result;
         checklistEmailSelected.textContent = result.split(/[\\/]/).pop();
         checklistEmailDrop.classList.add('selected');
+        clearChecklistEmail.classList.add('visible');
         updateChecklistButton();
       }
     });
@@ -4196,8 +4256,19 @@
         checklistEmailPath = file.path;
         checklistEmailSelected.textContent = file.name;
         checklistEmailDrop.classList.add('selected');
+        clearChecklistEmail.classList.add('visible');
         updateChecklistButton();
       }
+    });
+
+    // Clear checklist email
+    clearChecklistEmail.addEventListener('click', (e) => {
+      e.stopPropagation();
+      checklistEmailPath = null;
+      checklistEmailSelected.textContent = '';
+      checklistEmailDrop.classList.remove('selected');
+      clearChecklistEmail.classList.remove('visible');
+      updateChecklistButton();
     });
 
     // Update checklist button
@@ -4243,6 +4314,8 @@
       checklistEmailSelected.textContent = '';
       checklistDocDrop.classList.remove('selected');
       checklistEmailDrop.classList.remove('selected');
+      clearChecklistDoc.classList.remove('visible');
+      clearChecklistEmail.classList.remove('visible');
       updateChecklistButton();
       showChecklistState('idle');
     }
@@ -4258,6 +4331,7 @@
     // ========== GENERATE PUNCHLIST TAB ==========
     const punchlistChecklistDrop = document.getElementById('punchlistChecklistDrop');
     const punchlistChecklistSelected = document.getElementById('punchlistChecklistSelected');
+    const clearPunchlistChecklist = document.getElementById('clearPunchlistChecklist');
     const generatePunchlistBtn = document.getElementById('generatePunchlistBtn');
     const punchlistSetup = document.getElementById('punchlistSetup');
     const punchlistProcessing = document.getElementById('punchlistProcessing');
@@ -4286,12 +4360,14 @@
     }
 
     // Punchlist checklist drop
-    punchlistChecklistDrop.addEventListener('click', async () => {
+    punchlistChecklistDrop.addEventListener('click', async (e) => {
+      if (e.target === clearPunchlistChecklist) return;
       const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'Word Documents', extensions: ['docx'] }] });
       if (result) {
         punchlistChecklistPath = result;
         punchlistChecklistSelected.textContent = result.split(/[\\/]/).pop();
         punchlistChecklistDrop.classList.add('selected');
+        clearPunchlistChecklist.classList.add('visible');
         updatePunchlistButton();
       }
     });
@@ -4306,8 +4382,19 @@
         punchlistChecklistPath = file.path;
         punchlistChecklistSelected.textContent = file.name;
         punchlistChecklistDrop.classList.add('selected');
+        clearPunchlistChecklist.classList.add('visible');
         updatePunchlistButton();
       }
+    });
+
+    // Clear punchlist checklist
+    clearPunchlistChecklist.addEventListener('click', (e) => {
+      e.stopPropagation();
+      punchlistChecklistPath = null;
+      punchlistChecklistSelected.textContent = '';
+      punchlistChecklistDrop.classList.remove('selected');
+      clearPunchlistChecklist.classList.remove('visible');
+      updatePunchlistButton();
     });
 
     // Generate punchlist button
@@ -4354,6 +4441,7 @@
       punchlistOutputPath = null;
       punchlistChecklistSelected.textContent = '';
       punchlistChecklistDrop.classList.remove('selected');
+      clearPunchlistChecklist.classList.remove('visible');
       updatePunchlistButton();
       showPunchlistState('idle');
     }

@@ -1121,13 +1121,20 @@ ipcMain.handle('update-checklist', async (event, config) => {
   const outputFolder = path.join(app.getPath('temp'), 'emmaneigh_checklist_' + Date.now());
   fs.mkdirSync(outputFolder, { recursive: true });
 
-  // Get Python executable path
-  let pythonPath;
-  if (app.isPackaged) {
-    pythonPath = path.join(process.resourcesPath, 'python', 'checklist_updater');
-    if (process.platform === 'win32') pythonPath += '.exe';
-  } else {
-    pythonPath = 'python';
+  // Get processor path using existing helper
+  const processorPath = getProcessorPath('checklist_updater');
+
+  if (!processorPath) {
+    return { success: false, error: 'Checklist updater not available' };
+  }
+
+  if (app.isPackaged && !fs.existsSync(processorPath)) {
+    return { success: false, error: 'Processor not found: ' + processorPath };
+  }
+
+  // Set executable permission on Mac/Linux
+  if (process.platform !== 'win32' && app.isPackaged) {
+    try { fs.chmodSync(processorPath, '755'); } catch (e) {}
   }
 
   return new Promise((resolve) => {
@@ -1135,13 +1142,12 @@ ipcMain.handle('update-checklist', async (event, config) => {
     if (app.isPackaged) {
       args = [checklistPath, emailPath, outputFolder];
     } else {
-      const scriptPath = path.join(__dirname, 'python', 'checklist_updater.py');
-      args = [scriptPath, checklistPath, emailPath, outputFolder];
+      args = [path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder];
     }
 
     mainWindow.webContents.send('checklist-progress', { message: 'Analyzing emails...', percent: 20 });
 
-    const proc = spawn(pythonPath, args);
+    const proc = spawn(processorPath, args);
     let stdout = '';
     let stderr = '';
 
@@ -1189,13 +1195,20 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   const outputFolder = path.join(app.getPath('temp'), 'emmaneigh_punchlist_' + Date.now());
   fs.mkdirSync(outputFolder, { recursive: true });
 
-  // Get Python executable path
-  let pythonPath;
-  if (app.isPackaged) {
-    pythonPath = path.join(process.resourcesPath, 'python', 'punchlist_generator');
-    if (process.platform === 'win32') pythonPath += '.exe';
-  } else {
-    pythonPath = 'python';
+  // Get processor path using existing helper
+  const processorPath = getProcessorPath('punchlist_generator');
+
+  if (!processorPath) {
+    return { success: false, error: 'Punchlist generator not available' };
+  }
+
+  if (app.isPackaged && !fs.existsSync(processorPath)) {
+    return { success: false, error: 'Processor not found: ' + processorPath };
+  }
+
+  // Set executable permission on Mac/Linux
+  if (process.platform !== 'win32' && app.isPackaged) {
+    try { fs.chmodSync(processorPath, '755'); } catch (e) {}
   }
 
   return new Promise((resolve) => {
@@ -1205,13 +1218,12 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
     if (app.isPackaged) {
       args = [checklistPath, outputFolder, filtersJson];
     } else {
-      const scriptPath = path.join(__dirname, 'python', 'punchlist_generator.py');
-      args = [scriptPath, checklistPath, outputFolder, filtersJson];
+      args = [path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson];
     }
 
     mainWindow.webContents.send('punchlist-progress', { message: 'Analyzing checklist...', percent: 30 });
 
-    const proc = spawn(pythonPath, args);
+    const proc = spawn(processorPath, args);
     let stdout = '';
     let stderr = '';
 
