@@ -722,6 +722,170 @@
       text-align: center;
     }
 
+    /* Login Modal */
+    .login-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1100;
+      -webkit-app-region: no-drag;
+    }
+
+    .login-modal.hidden {
+      display: none;
+    }
+
+    .login-box {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 400px;
+      width: 90%;
+      text-align: center;
+    }
+
+    .login-box h2 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+
+    .login-box .subtitle {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 32px;
+    }
+
+    .login-options {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .login-option {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .login-option:hover {
+      border-color: #555;
+      background: #222;
+    }
+
+    .login-option.selected {
+      border-color: #fff;
+      background: #222;
+    }
+
+    .login-option-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-option-icon svg {
+      width: 20px;
+      height: 20px;
+      stroke: #888;
+    }
+
+    .login-option.selected .login-option-icon {
+      background: #fff;
+    }
+
+    .login-option.selected .login-option-icon svg {
+      stroke: #000;
+    }
+
+    .login-option-text {
+      text-align: left;
+      flex: 1;
+    }
+
+    .login-option-text h3 {
+      font-size: 15px;
+      font-weight: 500;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .login-option-text p {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .login-name-input {
+      margin-top: 20px;
+      display: none;
+    }
+
+    .login-name-input.visible {
+      display: block;
+    }
+
+    .login-name-input input {
+      width: 100%;
+      padding: 14px 16px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .login-name-input input:focus {
+      border-color: #555;
+    }
+
+    .login-name-input input::placeholder {
+      color: #555;
+    }
+
+    .login-continue-btn {
+      margin-top: 24px;
+      width: 100%;
+      padding: 14px 24px;
+      font-size: 15px;
+      font-weight: 500;
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .login-continue-btn:hover {
+      background: #e5e5e5;
+    }
+
+    .login-continue-btn:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+    }
+
     /* Update banner */
     .update-banner {
       position: fixed;
@@ -1347,6 +1511,50 @@
   </style>
 </head>
 <body>
+  <!-- Login Modal -->
+  <div class="login-modal" id="loginModal">
+    <div class="login-box">
+      <h2>Welcome to EmmaNeigh</h2>
+      <p class="subtitle">Choose how you'd like to continue</p>
+
+      <div class="login-options">
+        <div class="login-option" data-mode="guest">
+          <div class="login-option-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div class="login-option-text">
+            <h3>Continue as Guest</h3>
+            <p>Use the app without saving your name</p>
+          </div>
+        </div>
+
+        <div class="login-option" data-mode="login">
+          <div class="login-option-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div class="login-option-text">
+            <h3>Enter Your Name</h3>
+            <p>Your name will be saved for usage tracking</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="login-name-input" id="loginNameInput">
+        <input type="text" id="loginNameField" placeholder="Enter your name (e.g., John Smith)">
+      </div>
+
+      <button class="login-continue-btn" id="loginContinueBtn">Continue</button>
+    </div>
+  </div>
+
   <!-- Disclaimer Modal -->
   <div class="modal-overlay" id="disclaimerModal">
     <div class="modal">
@@ -1486,6 +1694,8 @@
           </button>
           <div class="nav-items">
             <button class="nav-item" data-tab="email">Email Search</button>
+            <button class="nav-item" data-tab="updatechecklist">Update Checklist</button>
+            <button class="nav-item" data-tab="punchlist">Generate Punchlist</button>
           </div>
         </div>
 
@@ -2116,6 +2326,150 @@
       </div>
     </div><!-- End timetrackTab -->
 
+    <!-- Update Checklist Tab -->
+    <div id="updatechecklistTab" style="display: none;">
+      <div class="checklist-setup" id="checklistSetup">
+        <h3 style="font-size: 14px; color: #888; margin-bottom: 16px;">Update Transaction Checklist</h3>
+        <p class="subtitle" style="margin-bottom: 16px;">Upload your email activity CSV and checklist to auto-update document statuses</p>
+
+        <!-- Checklist Input -->
+        <div class="input-section" id="checklistDocDrop">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z"/>
+          </svg>
+          <p class="input-label">Upload Closing Checklist</p>
+          <p class="input-hint">Word document (.docx) with transaction checklist</p>
+          <p class="input-selected" id="checklistDocSelected"></p>
+        </div>
+
+        <!-- Email CSV Input -->
+        <div class="input-section" id="checklistEmailDrop" style="margin-top: 12px;">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
+          </svg>
+          <p class="input-label">Upload Email CSV</p>
+          <p class="input-hint">Outlook email export from today's activity</p>
+          <p class="input-selected" id="checklistEmailSelected"></p>
+        </div>
+
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn btn-primary" id="updateChecklistBtn" disabled>Update Checklist</button>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="checklistProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+            </svg>
+          </div>
+        </div>
+        <p class="progress-text" id="checklistProgressText">Analyzing emails and updating checklist...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="checklistProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Complete State -->
+      <div class="complete" id="checklistComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Checklist Updated</h2>
+        <p id="checklistResultText">Updated 0 items based on email activity</p>
+        <button class="btn btn-primary" id="downloadChecklistBtn">Download Updated Checklist</button>
+        <button class="btn btn-secondary" id="checklistResetBtn">Process Another</button>
+      </div>
+
+      <!-- Error State -->
+      <div class="error" id="checklistError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="checklistErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="checklistRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End updatechecklistTab -->
+
+    <!-- Generate Punchlist Tab -->
+    <div id="punchlistTab" style="display: none;">
+      <div class="punchlist-setup" id="punchlistSetup">
+        <h3 style="font-size: 14px; color: #888; margin-bottom: 16px;">Generate Daily Punchlist</h3>
+        <p class="subtitle" style="margin-bottom: 16px;">Convert your closing checklist into a focused daily punchlist of open items</p>
+
+        <!-- Checklist Input -->
+        <div class="input-section" id="punchlistChecklistDrop">
+          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z"/>
+          </svg>
+          <p class="input-label">Upload Closing Checklist</p>
+          <p class="input-hint">Word document (.docx) with transaction checklist</p>
+          <p class="input-selected" id="punchlistChecklistSelected"></p>
+        </div>
+
+        <!-- Output Options -->
+        <div class="punchlist-options" style="margin-top: 16px;">
+          <label style="font-size: 13px; color: #888; display: block; margin-bottom: 8px;">Include items with status:</label>
+          <label style="font-size: 13px; color: #888; margin-right: 16px;">
+            <input type="checkbox" name="punchlistStatus" value="pending" checked> Pending / To Be Drafted
+          </label>
+          <label style="font-size: 13px; color: #888; margin-right: 16px;">
+            <input type="checkbox" name="punchlistStatus" value="review" checked> Under Review / With Opposing Counsel
+          </label>
+          <label style="font-size: 13px; color: #888;">
+            <input type="checkbox" name="punchlistStatus" value="signature" checked> Awaiting Signature
+          </label>
+        </div>
+
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn btn-primary" id="generatePunchlistBtn" disabled>Generate Punchlist</button>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="punchlistProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+            </svg>
+          </div>
+        </div>
+        <p class="progress-text" id="punchlistProgressText">Generating punchlist...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="punchlistProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Complete State -->
+      <div class="complete" id="punchlistComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Punchlist Generated</h2>
+        <p id="punchlistResultText">Created punchlist with 0 open items</p>
+        <button class="btn btn-primary" id="downloadPunchlistBtn">Download Punchlist</button>
+        <button class="btn btn-secondary" id="punchlistResetBtn">Process Another</button>
+      </div>
+
+      <!-- Error State -->
+      <div class="error" id="punchlistError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="punchlistErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="punchlistRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End punchlistTab -->
+
       </div><!-- End content-area -->
     </div><!-- End main-layout -->
 
@@ -2289,28 +2643,77 @@
     // ========== USER INFO / LOGIN ==========
     const userInfo = document.getElementById('userInfo');
     const userName = document.getElementById('userName');
+    const loginModal = document.getElementById('loginModal');
+    const loginOptions = document.querySelectorAll('.login-option');
+    const loginNameInput = document.getElementById('loginNameInput');
+    const loginNameField = document.getElementById('loginNameField');
+    const loginContinueBtn = document.getElementById('loginContinueBtn');
 
-    // Check for stored user
+    let selectedLoginMode = null;
+
+    // Check for stored user - show login modal if no user
     const storedUser = localStorage.getItem('emmaneigh_user');
     if (storedUser) {
       try {
         const user = JSON.parse(storedUser);
         userName.textContent = user.name || 'Guest';
+        loginModal.classList.add('hidden');
       } catch (e) {
         userName.textContent = 'Guest';
+        // Show login modal for first time users
       }
     }
 
-    userInfo.addEventListener('click', () => {
-      // Simple prompt for name (in future could be full login modal)
-      const currentName = userName.textContent;
-      const newName = prompt('Enter your name (or leave blank for Guest):', currentName === 'Guest' ? '' : currentName);
+    // Login option selection
+    loginOptions.forEach(option => {
+      option.addEventListener('click', () => {
+        loginOptions.forEach(o => o.classList.remove('selected'));
+        option.classList.add('selected');
+        selectedLoginMode = option.dataset.mode;
 
-      if (newName !== null) {
-        const displayName = newName.trim() || 'Guest';
-        userName.textContent = displayName;
-        localStorage.setItem('emmaneigh_user', JSON.stringify({ name: displayName }));
+        if (selectedLoginMode === 'login') {
+          loginNameInput.classList.add('visible');
+          loginContinueBtn.disabled = loginNameField.value.trim() === '';
+        } else {
+          loginNameInput.classList.remove('visible');
+          loginContinueBtn.disabled = false;
+        }
+      });
+    });
+
+    // Name input validation
+    loginNameField.addEventListener('input', () => {
+      if (selectedLoginMode === 'login') {
+        loginContinueBtn.disabled = loginNameField.value.trim() === '';
       }
+    });
+
+    // Continue button
+    loginContinueBtn.addEventListener('click', () => {
+      if (!selectedLoginMode) {
+        // Default to guest if nothing selected
+        selectedLoginMode = 'guest';
+      }
+
+      let displayName = 'Guest';
+      if (selectedLoginMode === 'login') {
+        displayName = loginNameField.value.trim() || 'Guest';
+      }
+
+      userName.textContent = displayName;
+      localStorage.setItem('emmaneigh_user', JSON.stringify({ name: displayName, mode: selectedLoginMode }));
+      loginModal.classList.add('hidden');
+    });
+
+    // Click on user info to change name
+    userInfo.addEventListener('click', () => {
+      // Show login modal again
+      loginModal.classList.remove('hidden');
+      loginOptions.forEach(o => o.classList.remove('selected'));
+      loginNameInput.classList.remove('visible');
+      loginNameField.value = '';
+      selectedLoginMode = null;
+      loginContinueBtn.disabled = true;
     });
 
     // ========== AUTO-UPDATE ==========
@@ -2380,6 +2783,8 @@
     const collateTab = document.getElementById('collateTab');
     const emailTab = document.getElementById('emailTab');
     const timetrackTab = document.getElementById('timetrackTab');
+    const updatechecklistTab = document.getElementById('updatechecklistTab');
+    const punchlistTab = document.getElementById('punchlistTab');
 
     // Category accordion toggle
     navCategoryHeaders.forEach(header => {
@@ -2403,6 +2808,8 @@
       collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
       emailTab.style.display = tabName === 'email' ? 'block' : 'none';
       timetrackTab.style.display = tabName === 'timetrack' ? 'block' : 'none';
+      updatechecklistTab.style.display = tabName === 'updatechecklist' ? 'block' : 'none';
+      punchlistTab.style.display = tabName === 'punchlist' ? 'block' : 'none';
     }
 
     navItems.forEach(item => {
@@ -3708,6 +4115,255 @@
     ipcRenderer.on('timetrack-progress', (event, data) => {
       timetrackProgressText.textContent = data.message;
       timetrackProgressFill.style.width = data.percent + '%';
+    });
+
+    // ========== UPDATE CHECKLIST TAB ==========
+    const checklistDocDrop = document.getElementById('checklistDocDrop');
+    const checklistEmailDrop = document.getElementById('checklistEmailDrop');
+    const checklistDocSelected = document.getElementById('checklistDocSelected');
+    const checklistEmailSelected = document.getElementById('checklistEmailSelected');
+    const updateChecklistBtn = document.getElementById('updateChecklistBtn');
+    const checklistSetup = document.getElementById('checklistSetup');
+    const checklistProcessing = document.getElementById('checklistProcessing');
+    const checklistComplete = document.getElementById('checklistComplete');
+    const checklistError = document.getElementById('checklistError');
+    const checklistProgressText = document.getElementById('checklistProgressText');
+    const checklistProgressFill = document.getElementById('checklistProgressFill');
+    const checklistResultText = document.getElementById('checklistResultText');
+    const checklistErrorText = document.getElementById('checklistErrorText');
+    const downloadChecklistBtn = document.getElementById('downloadChecklistBtn');
+    const checklistResetBtn = document.getElementById('checklistResetBtn');
+    const checklistRetryBtn = document.getElementById('checklistRetryBtn');
+
+    let checklistDocPath = null;
+    let checklistEmailPath = null;
+    let checklistOutputPath = null;
+
+    function showChecklistState(state) {
+      checklistSetup.style.display = state === 'idle' ? 'block' : 'none';
+      checklistProcessing.classList.toggle('visible', state === 'processing');
+      checklistComplete.classList.toggle('visible', state === 'complete');
+      checklistError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateChecklistButton() {
+      updateChecklistBtn.disabled = !(checklistDocPath && checklistEmailPath);
+    }
+
+    // Checklist doc drop
+    checklistDocDrop.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'Word Documents', extensions: ['docx'] }] });
+      if (result) {
+        checklistDocPath = result;
+        checklistDocSelected.textContent = result.split(/[\\/]/).pop();
+        checklistDocDrop.classList.add('selected');
+        updateChecklistButton();
+      }
+    });
+
+    checklistDocDrop.addEventListener('dragover', (e) => { e.preventDefault(); checklistDocDrop.classList.add('drag-over'); });
+    checklistDocDrop.addEventListener('dragleave', () => { checklistDocDrop.classList.remove('drag-over'); });
+    checklistDocDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      checklistDocDrop.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.toLowerCase().endsWith('.docx')) {
+        checklistDocPath = file.path;
+        checklistDocSelected.textContent = file.name;
+        checklistDocDrop.classList.add('selected');
+        updateChecklistButton();
+      }
+    });
+
+    // Checklist email drop
+    checklistEmailDrop.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'CSV Files', extensions: ['csv'] }] });
+      if (result) {
+        checklistEmailPath = result;
+        checklistEmailSelected.textContent = result.split(/[\\/]/).pop();
+        checklistEmailDrop.classList.add('selected');
+        updateChecklistButton();
+      }
+    });
+
+    checklistEmailDrop.addEventListener('dragover', (e) => { e.preventDefault(); checklistEmailDrop.classList.add('drag-over'); });
+    checklistEmailDrop.addEventListener('dragleave', () => { checklistEmailDrop.classList.remove('drag-over'); });
+    checklistEmailDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      checklistEmailDrop.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.toLowerCase().endsWith('.csv')) {
+        checklistEmailPath = file.path;
+        checklistEmailSelected.textContent = file.name;
+        checklistEmailDrop.classList.add('selected');
+        updateChecklistButton();
+      }
+    });
+
+    // Update checklist button
+    updateChecklistBtn.addEventListener('click', async () => {
+      if (!checklistDocPath || !checklistEmailPath) return;
+
+      showChecklistState('processing');
+      checklistProgressFill.style.width = '0%';
+      checklistProgressText.textContent = 'Analyzing emails...';
+
+      try {
+        const result = await ipcRenderer.invoke('update-checklist', {
+          checklistPath: checklistDocPath,
+          emailPath: checklistEmailPath
+        });
+
+        if (result.success) {
+          checklistOutputPath = result.outputPath;
+          checklistResultText.textContent = `Updated ${result.itemsUpdated || 0} checklist items based on email activity`;
+          showChecklistState('complete');
+          logUsage('update_checklist', 'complete', 2, result.itemsUpdated || 0);
+        } else {
+          checklistErrorText.textContent = result.error || 'Failed to update checklist';
+          showChecklistState('error');
+        }
+      } catch (err) {
+        checklistErrorText.textContent = err.message || 'An error occurred';
+        showChecklistState('error');
+      }
+    });
+
+    downloadChecklistBtn.addEventListener('click', async () => {
+      if (checklistOutputPath) {
+        await ipcRenderer.invoke('open-file', checklistOutputPath);
+      }
+    });
+
+    function resetChecklistState() {
+      checklistDocPath = null;
+      checklistEmailPath = null;
+      checklistOutputPath = null;
+      checklistDocSelected.textContent = '';
+      checklistEmailSelected.textContent = '';
+      checklistDocDrop.classList.remove('selected');
+      checklistEmailDrop.classList.remove('selected');
+      updateChecklistButton();
+      showChecklistState('idle');
+    }
+
+    checklistResetBtn.addEventListener('click', resetChecklistState);
+    checklistRetryBtn.addEventListener('click', resetChecklistState);
+
+    ipcRenderer.on('checklist-progress', (event, data) => {
+      checklistProgressText.textContent = data.message;
+      checklistProgressFill.style.width = data.percent + '%';
+    });
+
+    // ========== GENERATE PUNCHLIST TAB ==========
+    const punchlistChecklistDrop = document.getElementById('punchlistChecklistDrop');
+    const punchlistChecklistSelected = document.getElementById('punchlistChecklistSelected');
+    const generatePunchlistBtn = document.getElementById('generatePunchlistBtn');
+    const punchlistSetup = document.getElementById('punchlistSetup');
+    const punchlistProcessing = document.getElementById('punchlistProcessing');
+    const punchlistComplete = document.getElementById('punchlistComplete');
+    const punchlistError = document.getElementById('punchlistError');
+    const punchlistProgressText = document.getElementById('punchlistProgressText');
+    const punchlistProgressFill = document.getElementById('punchlistProgressFill');
+    const punchlistResultText = document.getElementById('punchlistResultText');
+    const punchlistErrorText = document.getElementById('punchlistErrorText');
+    const downloadPunchlistBtn = document.getElementById('downloadPunchlistBtn');
+    const punchlistResetBtn = document.getElementById('punchlistResetBtn');
+    const punchlistRetryBtn = document.getElementById('punchlistRetryBtn');
+
+    let punchlistChecklistPath = null;
+    let punchlistOutputPath = null;
+
+    function showPunchlistState(state) {
+      punchlistSetup.style.display = state === 'idle' ? 'block' : 'none';
+      punchlistProcessing.classList.toggle('visible', state === 'processing');
+      punchlistComplete.classList.toggle('visible', state === 'complete');
+      punchlistError.classList.toggle('visible', state === 'error');
+    }
+
+    function updatePunchlistButton() {
+      generatePunchlistBtn.disabled = !punchlistChecklistPath;
+    }
+
+    // Punchlist checklist drop
+    punchlistChecklistDrop.addEventListener('click', async () => {
+      const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'Word Documents', extensions: ['docx'] }] });
+      if (result) {
+        punchlistChecklistPath = result;
+        punchlistChecklistSelected.textContent = result.split(/[\\/]/).pop();
+        punchlistChecklistDrop.classList.add('selected');
+        updatePunchlistButton();
+      }
+    });
+
+    punchlistChecklistDrop.addEventListener('dragover', (e) => { e.preventDefault(); punchlistChecklistDrop.classList.add('drag-over'); });
+    punchlistChecklistDrop.addEventListener('dragleave', () => { punchlistChecklistDrop.classList.remove('drag-over'); });
+    punchlistChecklistDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      punchlistChecklistDrop.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.toLowerCase().endsWith('.docx')) {
+        punchlistChecklistPath = file.path;
+        punchlistChecklistSelected.textContent = file.name;
+        punchlistChecklistDrop.classList.add('selected');
+        updatePunchlistButton();
+      }
+    });
+
+    // Generate punchlist button
+    generatePunchlistBtn.addEventListener('click', async () => {
+      if (!punchlistChecklistPath) return;
+
+      // Get selected status filters
+      const statusCheckboxes = document.querySelectorAll('input[name="punchlistStatus"]:checked');
+      const selectedStatuses = Array.from(statusCheckboxes).map(cb => cb.value);
+
+      showPunchlistState('processing');
+      punchlistProgressFill.style.width = '0%';
+      punchlistProgressText.textContent = 'Analyzing checklist...';
+
+      try {
+        const result = await ipcRenderer.invoke('generate-punchlist', {
+          checklistPath: punchlistChecklistPath,
+          statusFilters: selectedStatuses
+        });
+
+        if (result.success) {
+          punchlistOutputPath = result.outputPath;
+          punchlistResultText.textContent = `Generated punchlist with ${result.itemCount || 0} open items`;
+          showPunchlistState('complete');
+          logUsage('generate_punchlist', 'complete', 1, result.itemCount || 0);
+        } else {
+          punchlistErrorText.textContent = result.error || 'Failed to generate punchlist';
+          showPunchlistState('error');
+        }
+      } catch (err) {
+        punchlistErrorText.textContent = err.message || 'An error occurred';
+        showPunchlistState('error');
+      }
+    });
+
+    downloadPunchlistBtn.addEventListener('click', async () => {
+      if (punchlistOutputPath) {
+        await ipcRenderer.invoke('open-file', punchlistOutputPath);
+      }
+    });
+
+    function resetPunchlistState() {
+      punchlistChecklistPath = null;
+      punchlistOutputPath = null;
+      punchlistChecklistSelected.textContent = '';
+      punchlistChecklistDrop.classList.remove('selected');
+      updatePunchlistButton();
+      showPunchlistState('idle');
+    }
+
+    punchlistResetBtn.addEventListener('click', resetPunchlistState);
+    punchlistRetryBtn.addEventListener('click', resetPunchlistState);
+
+    ipcRenderer.on('punchlist-progress', (event, data) => {
+      punchlistProgressText.textContent = data.message;
+      punchlistProgressFill.style.width = data.percent + '%';
     });
   </script>
 </body>

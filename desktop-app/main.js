@@ -1090,6 +1090,168 @@ ipcMain.handle('clear-history', async () => {
   }
 });
 
+// Generic file picker
+ipcMain.handle('select-file', async (event, options) => {
+  const filters = options?.filters || [{ name: 'All Files', extensions: ['*'] }];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: filters
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
+// Open file with default application
+ipcMain.handle('open-file', async (event, filePath) => {
+  try {
+    await shell.openPath(filePath);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Update Checklist - parse emails and update checklist status
+ipcMain.handle('update-checklist', async (event, config) => {
+  const { checklistPath, emailPath } = config;
+
+  // Create temp output folder
+  const outputFolder = path.join(app.getPath('temp'), 'emmaneigh_checklist_' + Date.now());
+  fs.mkdirSync(outputFolder, { recursive: true });
+
+  // Get Python executable path
+  let pythonPath;
+  if (app.isPackaged) {
+    pythonPath = path.join(process.resourcesPath, 'python', 'checklist_updater');
+    if (process.platform === 'win32') pythonPath += '.exe';
+  } else {
+    pythonPath = 'python';
+  }
+
+  return new Promise((resolve) => {
+    let args;
+    if (app.isPackaged) {
+      args = [checklistPath, emailPath, outputFolder];
+    } else {
+      const scriptPath = path.join(__dirname, 'python', 'checklist_updater.py');
+      args = [scriptPath, checklistPath, emailPath, outputFolder];
+    }
+
+    mainWindow.webContents.send('checklist-progress', { message: 'Analyzing emails...', percent: 20 });
+
+    const proc = spawn(pythonPath, args);
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+      console.error('Checklist updater stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      mainWindow.webContents.send('checklist-progress', { message: 'Complete', percent: 100 });
+
+      if (code !== 0) {
+        resolve({ success: false, error: stderr || 'Process exited with code ' + code });
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        resolve({
+          success: result.success,
+          outputPath: result.output_path,
+          itemsUpdated: result.items_updated,
+          error: result.error
+        });
+      } catch (e) {
+        resolve({ success: false, error: 'Failed to parse result: ' + e.message });
+      }
+    });
+
+    proc.on('error', (err) => {
+      resolve({ success: false, error: err.message });
+    });
+  });
+});
+
+// Generate Punchlist - extract open items from checklist
+ipcMain.handle('generate-punchlist', async (event, config) => {
+  const { checklistPath, statusFilters } = config;
+
+  // Create temp output folder
+  const outputFolder = path.join(app.getPath('temp'), 'emmaneigh_punchlist_' + Date.now());
+  fs.mkdirSync(outputFolder, { recursive: true });
+
+  // Get Python executable path
+  let pythonPath;
+  if (app.isPackaged) {
+    pythonPath = path.join(process.resourcesPath, 'python', 'punchlist_generator');
+    if (process.platform === 'win32') pythonPath += '.exe';
+  } else {
+    pythonPath = 'python';
+  }
+
+  return new Promise((resolve) => {
+    let args;
+    const filtersJson = JSON.stringify(statusFilters || ['pending', 'review', 'signature']);
+
+    if (app.isPackaged) {
+      args = [checklistPath, outputFolder, filtersJson];
+    } else {
+      const scriptPath = path.join(__dirname, 'python', 'punchlist_generator.py');
+      args = [scriptPath, checklistPath, outputFolder, filtersJson];
+    }
+
+    mainWindow.webContents.send('punchlist-progress', { message: 'Analyzing checklist...', percent: 30 });
+
+    const proc = spawn(pythonPath, args);
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+      console.error('Punchlist generator stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      mainWindow.webContents.send('punchlist-progress', { message: 'Complete', percent: 100 });
+
+      if (code !== 0) {
+        resolve({ success: false, error: stderr || 'Process exited with code ' + code });
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        resolve({
+          success: result.success,
+          outputPath: result.output_path,
+          itemCount: result.item_count,
+          categories: result.categories,
+          error: result.error
+        });
+      } catch (e) {
+        resolve({ success: false, error: 'Failed to parse result: ' + e.message });
+      }
+    });
+
+    proc.on('error', (err) => {
+      resolve({ success: false, error: err.message });
+    });
+  });
+});
+
 // Save database on app quit
 app.on('before-quit', () => {
   saveDatabase();
