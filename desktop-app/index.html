@@ -1369,6 +1369,110 @@
       color: #555;
     }
 
+    .email-filters {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+      padding: 16px;
+      background: #111;
+      border-radius: 8px;
+      border: 1px solid #222;
+    }
+
+    .email-filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .email-filter-group label {
+      font-size: 11px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .email-filter-input {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #fff;
+      -webkit-app-region: no-drag;
+    }
+
+    .email-filter-input:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    .email-filter-input::placeholder {
+      color: #555;
+    }
+
+    .email-date-range {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .email-date-range span {
+      color: #555;
+      font-size: 12px;
+    }
+
+    .email-date-input {
+      flex: 1;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #fff;
+      -webkit-app-region: no-drag;
+    }
+
+    .email-date-input:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    .email-filter-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .email-filter-toggle input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #fff;
+    }
+
+    .email-filter-toggle span {
+      font-size: 13px;
+      color: #aaa;
+    }
+
+    .email-clear-filters {
+      background: none;
+      border: 1px solid #333;
+      color: #888;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .email-clear-filters:hover {
+      border-color: #555;
+      color: #fff;
+    }
+
     .email-results {
       margin-top: 16px;
     }
@@ -2200,6 +2304,39 @@
         <div class="email-search" id="emailSearchBox" style="display: none;">
           <input type="text" class="email-search-input" id="emailSearchInput" placeholder="Search emails by keyword...">
           <button class="btn btn-primary" id="emailSearchBtn">Search</button>
+        </div>
+
+        <!-- Advanced Filters -->
+        <div class="email-filters" id="emailFilters" style="display: none;">
+          <div class="email-filter-group">
+            <label>Sender Name/Email</label>
+            <input type="text" class="email-filter-input" id="emailFilterSender" placeholder="e.g. john@company.com">
+          </div>
+          <div class="email-filter-group">
+            <label>Subject Contains</label>
+            <input type="text" class="email-filter-input" id="emailFilterSubject" placeholder="e.g. Agreement Draft">
+          </div>
+          <div class="email-filter-group">
+            <label>Attachment Filename</label>
+            <input type="text" class="email-filter-input" id="emailFilterAttachment" placeholder="e.g. contract.pdf">
+          </div>
+          <div class="email-filter-group">
+            <label>Date Range</label>
+            <div class="email-date-range">
+              <input type="date" class="email-date-input" id="emailFilterDateFrom">
+              <span>to</span>
+              <input type="date" class="email-date-input" id="emailFilterDateTo">
+            </div>
+          </div>
+          <div class="email-filter-group">
+            <div class="email-filter-toggle">
+              <input type="checkbox" id="emailFilterHasAttachment">
+              <span>Only emails with attachments</span>
+            </div>
+          </div>
+          <div class="email-filter-group" style="justify-content: flex-end;">
+            <button class="email-clear-filters" id="emailClearFilters">Clear Filters</button>
+          </div>
         </div>
 
         <!-- Search Results -->
@@ -3828,6 +3965,16 @@
     const emailErrorText = document.getElementById('emailErrorText');
     const emailRetryBtn = document.getElementById('emailRetryBtn');
 
+    // Advanced filter elements
+    const emailFilters = document.getElementById('emailFilters');
+    const emailFilterSender = document.getElementById('emailFilterSender');
+    const emailFilterSubject = document.getElementById('emailFilterSubject');
+    const emailFilterAttachment = document.getElementById('emailFilterAttachment');
+    const emailFilterDateFrom = document.getElementById('emailFilterDateFrom');
+    const emailFilterDateTo = document.getElementById('emailFilterDateTo');
+    const emailFilterHasAttachment = document.getElementById('emailFilterHasAttachment');
+    const emailClearFilters = document.getElementById('emailClearFilters');
+
     let emailData = []; // Parsed emails
     let emailCsvPath = null;
 
@@ -3893,6 +4040,7 @@
           // Show UI elements
           emailStats.style.display = 'grid';
           emailSearchBox.style.display = 'flex';
+          emailFilters.style.display = 'grid';
           emailPrivacyToggle.style.display = 'block';
 
           // Log usage
@@ -3922,14 +4070,68 @@
 
     function performEmailSearch() {
       const query = emailSearchInput.value.trim();
-      if (!query || emailData.length === 0) return;
+
+      // Get filter values
+      const senderFilter = emailFilterSender.value.trim().toLowerCase();
+      const subjectFilter = emailFilterSubject.value.trim().toLowerCase();
+      const attachmentFilter = emailFilterAttachment.value.trim().toLowerCase();
+      const dateFrom = emailFilterDateFrom.value ? new Date(emailFilterDateFrom.value) : null;
+      const dateTo = emailFilterDateTo.value ? new Date(emailFilterDateTo.value + 'T23:59:59') : null;
+      const hasAttachmentOnly = emailFilterHasAttachment.checked;
+
+      // Check if we have any search criteria
+      const hasFilters = query || senderFilter || subjectFilter || attachmentFilter || dateFrom || dateTo || hasAttachmentOnly;
+      if (!hasFilters || emailData.length === 0) {
+        if (emailData.length === 0) return;
+        // Show all emails if no filters but data exists
+      }
 
       const queryLower = query.toLowerCase();
       const results = emailData.filter(email => {
-        return (email.subject && email.subject.toLowerCase().includes(queryLower)) ||
-               (email.body && email.body.toLowerCase().includes(queryLower)) ||
-               (email.from && email.from.toLowerCase().includes(queryLower)) ||
-               (email.to && email.to.toLowerCase().includes(queryLower));
+        // Keyword search (if provided)
+        if (query) {
+          const keywordMatch = (email.subject && email.subject.toLowerCase().includes(queryLower)) ||
+                               (email.body && email.body.toLowerCase().includes(queryLower)) ||
+                               (email.from && email.from.toLowerCase().includes(queryLower)) ||
+                               (email.to && email.to.toLowerCase().includes(queryLower));
+          if (!keywordMatch) return false;
+        }
+
+        // Sender filter
+        if (senderFilter) {
+          const senderMatch = email.from && email.from.toLowerCase().includes(senderFilter);
+          if (!senderMatch) return false;
+        }
+
+        // Subject filter
+        if (subjectFilter) {
+          const subjectMatch = email.subject && email.subject.toLowerCase().includes(subjectFilter);
+          if (!subjectMatch) return false;
+        }
+
+        // Attachment filename filter
+        if (attachmentFilter) {
+          const attachmentMatch = email.attachments && email.attachments.toLowerCase().includes(attachmentFilter);
+          if (!attachmentMatch) return false;
+        }
+
+        // Has attachment filter
+        if (hasAttachmentOnly && !email.has_attachments) {
+          return false;
+        }
+
+        // Date range filter
+        const emailDate = email.date_received || email.date_sent;
+        if (emailDate) {
+          const emailDateObj = new Date(emailDate);
+          if (dateFrom && emailDateObj < dateFrom) return false;
+          if (dateTo && emailDateObj > dateTo) return false;
+        } else if (dateFrom || dateTo) {
+          // If date filter set but email has no date, exclude it
+          return false;
+        }
+
+        return true;
       });
 
       emailResultsTitle.textContent = `Search Results (${results.length} found)`;
@@ -3949,7 +4151,16 @@
         meta.className = 'email-item-meta' + (blur ? ' blurred' : '');
         const date = email.date_sent || email.date_received || '';
         const dateStr = date ? new Date(date).toLocaleDateString() : '';
-        meta.textContent = `From: ${email.from || 'Unknown'} | ${dateStr}`;
+
+        // Show attachment info if present
+        let attachmentInfo = '';
+        if (email.has_attachments && email.attachments) {
+          attachmentInfo = ` | 📎 ${email.attachments.substring(0, 30)}${email.attachments.length > 30 ? '...' : ''}`;
+        } else if (email.has_attachments) {
+          attachmentInfo = ' | 📎 Attachment';
+        }
+
+        meta.textContent = `From: ${email.from || 'Unknown'} | ${dateStr}${attachmentInfo}`;
 
         item.appendChild(subject);
         item.appendChild(meta);
@@ -3973,9 +4184,55 @@
       emailCsvDrop.classList.remove('selected');
       emailStats.style.display = 'none';
       emailSearchBox.style.display = 'none';
+      emailFilters.style.display = 'none';
       emailResults.style.display = 'none';
       emailPrivacyToggle.style.display = 'none';
+      clearEmailFilters();
       showEmailState('idle');
+    });
+
+    // Clear filters function
+    function clearEmailFilters() {
+      emailSearchInput.value = '';
+      emailFilterSender.value = '';
+      emailFilterSubject.value = '';
+      emailFilterAttachment.value = '';
+      emailFilterDateFrom.value = '';
+      emailFilterDateTo.value = '';
+      emailFilterHasAttachment.checked = false;
+    }
+
+    // Clear filters button handler
+    emailClearFilters.addEventListener('click', () => {
+      clearEmailFilters();
+      if (emailResults.style.display !== 'none') {
+        performEmailSearch(); // Re-run search with cleared filters
+      }
+    });
+
+    // Allow Enter key on filter inputs to trigger search
+    [emailFilterSender, emailFilterSubject, emailFilterAttachment].forEach(input => {
+      input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          performEmailSearch();
+        }
+      });
+    });
+
+    // Auto-search on date change
+    [emailFilterDateFrom, emailFilterDateTo].forEach(input => {
+      input.addEventListener('change', () => {
+        if (emailData.length > 0) {
+          performEmailSearch();
+        }
+      });
+    });
+
+    // Auto-search on has attachment checkbox change
+    emailFilterHasAttachment.addEventListener('change', () => {
+      if (emailData.length > 0) {
+        performEmailSearch();
+      }
     });
 
     // Listen for email progress
