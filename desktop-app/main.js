@@ -152,7 +152,22 @@ app.whenReady().then(async () => {
   // Setup auto-updater with enhanced progress reporting
   if (autoUpdater) {
     autoUpdater.autoDownload = false; // Don't auto-download, let user decide
-    autoUpdater.checkForUpdates();
+
+    // Explicitly set feed URL for reliable updates
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'raamtambe',
+      repo: 'EmmaNeigh'
+    });
+
+    // Log for debugging
+    autoUpdater.on('checking-for-update', () => {
+      console.log('Checking for updates...');
+    });
+
+    autoUpdater.checkForUpdates().catch(err => {
+      console.error('Failed to check for updates:', err);
+    });
 
     autoUpdater.on('update-available', (info) => {
       if (mainWindow) {
@@ -1468,10 +1483,14 @@ ipcMain.handle('update-checklist', async (event, config) => {
 
   return new Promise((resolve) => {
     let args;
+    const apiKey = getApiKey();  // Get API key for LLM-powered matching
+
     if (app.isPackaged) {
       args = [checklistPath, emailPath, outputFolder];
+      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     } else {
       args = [path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder];
+      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     }
 
     mainWindow.webContents.send('checklist-progress', { message: 'Analyzing emails...', percent: 20 });
@@ -1543,11 +1562,14 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   return new Promise((resolve) => {
     let args;
     const filtersJson = JSON.stringify(statusFilters || ['pending', 'review', 'signature']);
+    const apiKey = getApiKey();  // Get API key for LLM-powered categorization
 
     if (app.isPackaged) {
       args = [checklistPath, outputFolder, filtersJson];
+      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     } else {
       args = [path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson];
+      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     }
 
     mainWindow.webContents.send('punchlist-progress', { message: 'Analyzing checklist...', percent: 30 });
