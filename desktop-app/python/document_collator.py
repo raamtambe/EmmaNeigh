@@ -595,9 +595,16 @@ def generate_summary_table(base_path, commented_versions, changes_by_source, com
         changes = changes_by_source.get(version_path, [])
         comments = comments_by_source.get(version_path, [])
 
+        # Ensure these are lists to prevent type errors
+        if not isinstance(changes, list):
+            changes = []
+        if not isinstance(comments, list):
+            comments = []
+
         num_changes = len(changes)
         num_comments = len(comments)
-        lines_modified = sum(1 for c in changes if c['content'].strip())
+        # Safely handle items that might not be dicts
+        lines_modified = sum(1 for c in changes if isinstance(c, dict) and c.get('content', '').strip())
 
         cells[0].text = filename
         cells[1].text = author

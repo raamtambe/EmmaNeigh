@@ -1215,6 +1215,195 @@
       padding: 40px 20px;
     }
 
+    /* Settings Modal */
+    .settings-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s;
+    }
+
+    .settings-modal.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .settings-content {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 450px;
+      padding: 24px;
+    }
+
+    .settings-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .settings-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .settings-close {
+      background: transparent;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .settings-close:hover {
+      color: #fff;
+    }
+
+    .settings-section {
+      margin-bottom: 20px;
+    }
+
+    .settings-section h3 {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .api-key-input-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .api-key-input {
+      flex: 1;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #fff;
+      font-family: monospace;
+    }
+
+    .api-key-input:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    .api-key-input::placeholder {
+      color: #555;
+    }
+
+    .api-key-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 12px;
+    }
+
+    .api-key-status.connected {
+      color: #22c55e;
+    }
+
+    .api-key-status.error {
+      color: #ef4444;
+    }
+
+    .api-key-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .settings-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .settings-btn-primary {
+      background: #fff;
+      color: #000;
+      border: none;
+    }
+
+    .settings-btn-primary:hover {
+      background: #e5e5e5;
+    }
+
+    .settings-btn-secondary {
+      background: transparent;
+      color: #888;
+      border: 1px solid #333;
+    }
+
+    .settings-btn-secondary:hover {
+      border-color: #555;
+      color: #fff;
+    }
+
+    .settings-btn-danger {
+      background: transparent;
+      color: #ef4444;
+      border: 1px solid #333;
+    }
+
+    .settings-btn-danger:hover {
+      border-color: #ef4444;
+    }
+
+    .settings-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .settings-info {
+      font-size: 11px;
+      color: #555;
+      margin-top: 12px;
+    }
+
+    .settings-info a {
+      color: #888;
+      text-decoration: underline;
+    }
+
+    /* Settings button in header */
+    .settings-btn-header {
+      background: transparent;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s;
+    }
+
+    .settings-btn-header:hover {
+      color: #fff;
+    }
+
     /* Collate Tab Styles */
     .file-list {
       background: #111;
@@ -1343,10 +1532,41 @@
       margin-top: 16px;
     }
 
+    /* Search Mode Toggle */
+    .search-mode-toggle {
+      display: flex;
+      gap: 4px;
+      margin-top: 16px;
+      background: #111;
+      border-radius: 8px;
+      padding: 4px;
+    }
+
+    .search-mode-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      background: transparent;
+      color: #666;
+      font-size: 13px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .search-mode-btn:hover {
+      color: #888;
+    }
+
+    .search-mode-btn.active {
+      background: #222;
+      color: #fff;
+    }
+
     .email-search {
       display: flex;
       gap: 8px;
-      margin-top: 16px;
+      margin-top: 12px;
     }
 
     .email-search-input {
@@ -1471,6 +1691,119 @@
     .email-clear-filters:hover {
       border-color: #555;
       color: #fff;
+    }
+
+    /* AI Search Panel */
+    .ai-search-panel {
+      margin-top: 12px;
+      display: none;
+    }
+
+    .ai-search-panel.visible {
+      display: block;
+    }
+
+    .ai-search-input {
+      width: 100%;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 14px;
+      color: #fff;
+      resize: vertical;
+      min-height: 80px;
+      font-family: inherit;
+      -webkit-app-region: no-drag;
+    }
+
+    .ai-search-input:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    .ai-search-input::placeholder {
+      color: #555;
+    }
+
+    .ai-search-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .ai-search-loading {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: #111;
+      border-radius: 8px;
+      margin-top: 12px;
+      color: #888;
+      font-size: 13px;
+    }
+
+    .ai-search-loading .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid #333;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .ai-answer-box {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 12px;
+    }
+
+    .ai-answer-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .ai-answer-header .ai-icon {
+      font-size: 16px;
+    }
+
+    .ai-answer-text {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #fff;
+    }
+
+    .ai-answer-confidence {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #666;
+    }
+
+    .ai-relevant-emails {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #222;
+    }
+
+    .ai-relevant-emails h4 {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     .email-results {
@@ -1754,6 +2087,38 @@
     </div>
   </div>
 
+  <!-- Settings Modal -->
+  <div class="settings-modal" id="settingsModal">
+    <div class="settings-content">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button class="settings-close" id="settingsClose">&times;</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>Claude API Key</h3>
+        <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+          Required for AI-powered features like natural language search, checklist updates, and punchlist generation.
+        </p>
+        <div class="api-key-input-group">
+          <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-api...">
+        </div>
+        <div class="api-key-status" id="apiKeyStatus">
+          <span>No API key configured</span>
+        </div>
+        <div class="api-key-actions">
+          <button class="settings-btn settings-btn-primary" id="saveApiKeyBtn">Save Key</button>
+          <button class="settings-btn settings-btn-secondary" id="testApiKeyBtn">Test Connection</button>
+          <button class="settings-btn settings-btn-danger" id="deleteApiKeyBtn" style="display: none;">Delete</button>
+        </div>
+        <p class="settings-info">
+          Get your API key from <a href="#" id="anthropicLink">console.anthropic.com</a>.
+          Your key is encrypted and stored locally.
+        </p>
+      </div>
+    </div>
+  </div>
+
   <!-- Update Banner -->
   <div class="update-banner hidden" id="updateBanner">
     <div class="update-banner-row">
@@ -1774,6 +2139,12 @@
       <div class="header-row">
         <div class="logo">EmmaNeigh</div>
         <div class="header-actions">
+          <button class="settings-btn-header" id="settingsBtn" title="Settings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
           <button class="history-btn" id="historyBtn" title="View History">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/>
@@ -2300,10 +2671,44 @@
           </div>
         </div>
 
-        <!-- Search Box -->
+        <!-- Search Mode Toggle -->
+        <div class="search-mode-toggle" id="searchModeToggle" style="display: none;">
+          <button class="search-mode-btn active" id="keywordSearchMode">Keyword Search</button>
+          <button class="search-mode-btn" id="aiSearchMode">🤖 AI Search</button>
+        </div>
+
+        <!-- Keyword Search Box -->
         <div class="email-search" id="emailSearchBox" style="display: none;">
           <input type="text" class="email-search-input" id="emailSearchInput" placeholder="Search emails by keyword...">
           <button class="btn btn-primary" id="emailSearchBtn">Search</button>
+        </div>
+
+        <!-- AI Search Panel -->
+        <div class="ai-search-panel" id="aiSearchPanel">
+          <textarea class="ai-search-input" id="aiSearchInput" placeholder="Ask questions like:&#10;• Did we receive the signed agreement from ABC firm?&#10;• What is the latest version of the Credit Agreement?&#10;• Show all emails about the closing date"></textarea>
+          <div class="ai-search-actions">
+            <button class="btn btn-primary" id="aiSearchBtn">Search with AI</button>
+          </div>
+        </div>
+
+        <!-- AI Search Loading -->
+        <div class="ai-search-loading" id="aiSearchLoading" style="display: none;">
+          <div class="spinner"></div>
+          <span id="aiSearchLoadingText">Analyzing emails with AI...</span>
+        </div>
+
+        <!-- AI Answer Box -->
+        <div class="ai-answer-box" id="aiAnswerBox" style="display: none;">
+          <div class="ai-answer-header">
+            <span class="ai-icon">🤖</span>
+            <span>AI Answer</span>
+          </div>
+          <div class="ai-answer-text" id="aiAnswerText"></div>
+          <div class="ai-answer-confidence" id="aiAnswerConfidence"></div>
+          <div class="ai-relevant-emails" id="aiRelevantEmails" style="display: none;">
+            <h4>Relevant Emails</h4>
+            <div class="email-list" id="aiEmailList"></div>
+          </div>
         </div>
 
         <!-- Advanced Filters -->
@@ -2797,6 +3202,116 @@
         await loadHistory();
         await loadStats();
       }
+    });
+
+    // ========== SETTINGS MODAL ==========
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsModal = document.getElementById('settingsModal');
+    const settingsClose = document.getElementById('settingsClose');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const apiKeyStatus = document.getElementById('apiKeyStatus');
+    const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+    const testApiKeyBtn = document.getElementById('testApiKeyBtn');
+    const deleteApiKeyBtn = document.getElementById('deleteApiKeyBtn');
+    const anthropicLink = document.getElementById('anthropicLink');
+
+    // Check if API key exists on startup
+    async function checkApiKeyStatus() {
+      const result = await ipcRenderer.invoke('get-api-key');
+      if (result.hasKey) {
+        apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ API key configured</span>';
+        apiKeyStatus.className = 'api-key-status connected';
+        deleteApiKeyBtn.style.display = 'inline-block';
+        apiKeyInput.placeholder = '••••••••••••••••';
+      } else {
+        apiKeyStatus.innerHTML = '<span>No API key configured</span>';
+        apiKeyStatus.className = 'api-key-status';
+        deleteApiKeyBtn.style.display = 'none';
+        apiKeyInput.placeholder = 'sk-ant-api...';
+      }
+    }
+
+    settingsBtn.addEventListener('click', async () => {
+      settingsModal.classList.add('visible');
+      await checkApiKeyStatus();
+    });
+
+    settingsClose.addEventListener('click', () => {
+      settingsModal.classList.remove('visible');
+    });
+
+    settingsModal.addEventListener('click', (e) => {
+      if (e.target === settingsModal) {
+        settingsModal.classList.remove('visible');
+      }
+    });
+
+    saveApiKeyBtn.addEventListener('click', async () => {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        apiKeyStatus.innerHTML = '<span style="color: #ef4444;">Please enter an API key</span>';
+        return;
+      }
+
+      saveApiKeyBtn.disabled = true;
+      saveApiKeyBtn.textContent = 'Saving...';
+
+      const result = await ipcRenderer.invoke('set-api-key', key);
+
+      if (result.success) {
+        apiKeyInput.value = '';
+        await checkApiKeyStatus();
+        apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ API key saved successfully</span>';
+      } else {
+        apiKeyStatus.innerHTML = `<span style="color: #ef4444;">${result.error || 'Failed to save key'}</span>`;
+      }
+
+      saveApiKeyBtn.disabled = false;
+      saveApiKeyBtn.textContent = 'Save Key';
+    });
+
+    testApiKeyBtn.addEventListener('click', async () => {
+      let keyToTest = apiKeyInput.value.trim();
+
+      // If no key in input, test the stored key
+      if (!keyToTest) {
+        keyToTest = await ipcRenderer.invoke('get-api-key-value');
+      }
+
+      if (!keyToTest) {
+        apiKeyStatus.innerHTML = '<span style="color: #ef4444;">No API key to test</span>';
+        return;
+      }
+
+      testApiKeyBtn.disabled = true;
+      testApiKeyBtn.textContent = 'Testing...';
+      apiKeyStatus.innerHTML = '<span>Testing connection...</span>';
+
+      const result = await ipcRenderer.invoke('test-api-key', keyToTest);
+
+      if (result.success) {
+        apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ ' + result.message + '</span>';
+        apiKeyStatus.className = 'api-key-status connected';
+      } else {
+        apiKeyStatus.innerHTML = '<span style="color: #ef4444;">' + result.error + '</span>';
+        apiKeyStatus.className = 'api-key-status error';
+      }
+
+      testApiKeyBtn.disabled = false;
+      testApiKeyBtn.textContent = 'Test Connection';
+    });
+
+    deleteApiKeyBtn.addEventListener('click', async () => {
+      if (confirm('Are you sure you want to delete your API key?')) {
+        await ipcRenderer.invoke('delete-api-key');
+        await checkApiKeyStatus();
+        apiKeyStatus.innerHTML = '<span>API key deleted</span>';
+      }
+    });
+
+    anthropicLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      require('electron').shell.openExternal('https://console.anthropic.com/');
     });
 
     // Helper function to log usage (call this after each feature completes)
@@ -3975,8 +4490,24 @@
     const emailFilterHasAttachment = document.getElementById('emailFilterHasAttachment');
     const emailClearFilters = document.getElementById('emailClearFilters');
 
+    // AI Search elements
+    const searchModeToggle = document.getElementById('searchModeToggle');
+    const keywordSearchMode = document.getElementById('keywordSearchMode');
+    const aiSearchMode = document.getElementById('aiSearchMode');
+    const aiSearchPanel = document.getElementById('aiSearchPanel');
+    const aiSearchInput = document.getElementById('aiSearchInput');
+    const aiSearchBtn = document.getElementById('aiSearchBtn');
+    const aiSearchLoading = document.getElementById('aiSearchLoading');
+    const aiSearchLoadingText = document.getElementById('aiSearchLoadingText');
+    const aiAnswerBox = document.getElementById('aiAnswerBox');
+    const aiAnswerText = document.getElementById('aiAnswerText');
+    const aiAnswerConfidence = document.getElementById('aiAnswerConfidence');
+    const aiRelevantEmails = document.getElementById('aiRelevantEmails');
+    const aiEmailList = document.getElementById('aiEmailList');
+
     let emailData = []; // Parsed emails
     let emailCsvPath = null;
+    let currentSearchMode = 'keyword'; // 'keyword' or 'ai'
 
     function showEmailState(state) {
       emailUpload.style.display = state === 'idle' || state === 'loaded' ? 'block' : 'none';
@@ -4039,6 +4570,7 @@
 
           // Show UI elements
           emailStats.style.display = 'grid';
+          searchModeToggle.style.display = 'flex';
           emailSearchBox.style.display = 'flex';
           emailFilters.style.display = 'grid';
           emailPrivacyToggle.style.display = 'block';
@@ -4183,10 +4715,19 @@
       emailCsvSelected.textContent = '';
       emailCsvDrop.classList.remove('selected');
       emailStats.style.display = 'none';
+      searchModeToggle.style.display = 'none';
       emailSearchBox.style.display = 'none';
       emailFilters.style.display = 'none';
       emailResults.style.display = 'none';
       emailPrivacyToggle.style.display = 'none';
+      // Reset AI search
+      aiSearchPanel.classList.remove('visible');
+      aiSearchLoading.style.display = 'none';
+      aiAnswerBox.style.display = 'none';
+      aiSearchInput.value = '';
+      currentSearchMode = 'keyword';
+      keywordSearchMode.classList.add('active');
+      aiSearchMode.classList.remove('active');
       clearEmailFilters();
       showEmailState('idle');
     });
@@ -4239,6 +4780,127 @@
     ipcRenderer.on('email-progress', (event, data) => {
       emailProgressText.textContent = data.message;
       emailProgressFill.style.width = data.percent + '%';
+    });
+
+    // ========== AI SEARCH FUNCTIONALITY ==========
+
+    // Toggle between keyword and AI search modes
+    keywordSearchMode.addEventListener('click', () => {
+      currentSearchMode = 'keyword';
+      keywordSearchMode.classList.add('active');
+      aiSearchMode.classList.remove('active');
+
+      emailSearchBox.style.display = 'flex';
+      emailFilters.style.display = 'grid';
+      aiSearchPanel.classList.remove('visible');
+      aiSearchLoading.style.display = 'none';
+      aiAnswerBox.style.display = 'none';
+    });
+
+    aiSearchMode.addEventListener('click', () => {
+      currentSearchMode = 'ai';
+      aiSearchMode.classList.add('active');
+      keywordSearchMode.classList.remove('active');
+
+      emailSearchBox.style.display = 'none';
+      emailFilters.style.display = 'none';
+      emailResults.style.display = 'none';
+      aiSearchPanel.classList.add('visible');
+    });
+
+    // AI Search handler
+    aiSearchBtn.addEventListener('click', async () => {
+      const query = aiSearchInput.value.trim();
+      if (!query || emailData.length === 0) return;
+
+      // Check if API key is configured
+      const apiKeyResult = await ipcRenderer.invoke('get-api-key');
+      if (!apiKeyResult.hasKey) {
+        alert('Please configure your Claude API key in Settings first.');
+        settingsModal.classList.add('visible');
+        await checkApiKeyStatus();
+        return;
+      }
+
+      // Show loading
+      aiSearchLoading.style.display = 'flex';
+      aiSearchLoadingText.textContent = 'Analyzing emails with AI...';
+      aiAnswerBox.style.display = 'none';
+      aiSearchBtn.disabled = true;
+
+      const startTime = Date.now();
+
+      try {
+        const result = await ipcRenderer.invoke('nl-search-emails', {
+          emails: emailData,
+          query: query
+        });
+
+        aiSearchLoading.style.display = 'none';
+        aiSearchBtn.disabled = false;
+
+        if (result.success) {
+          // Show the answer
+          aiAnswerBox.style.display = 'block';
+          aiAnswerText.textContent = result.answer;
+
+          // Show confidence
+          const confidencePercent = Math.round((result.confidence || 0.5) * 100);
+          aiAnswerConfidence.textContent = `Confidence: ${confidencePercent}%`;
+
+          // Show relevant emails if any
+          const relevantIndices = result.relevant_email_indices || [];
+          if (relevantIndices.length > 0) {
+            aiRelevantEmails.style.display = 'block';
+            const blur = emailBlurToggle.checked;
+
+            aiEmailList.innerHTML = relevantIndices.slice(0, 10).map(idx => {
+              const email = emailData[idx];
+              if (!email) return '';
+
+              const date = email.date_sent || email.date_received || '';
+              const dateStr = date ? new Date(date).toLocaleDateString() : '';
+
+              return `
+                <div class="email-item">
+                  <div class="email-item-subject${blur ? ' blurred' : ''}">${email.subject || '(No Subject)'}</div>
+                  <div class="email-item-meta${blur ? ' blurred' : ''}">From: ${email.from || 'Unknown'} | ${dateStr}</div>
+                </div>
+              `;
+            }).join('');
+          } else {
+            aiRelevantEmails.style.display = 'none';
+          }
+
+          // Log usage
+          await logUsage('email', 'ai_search', 1, relevantIndices.length, Date.now() - startTime);
+        } else {
+          aiAnswerBox.style.display = 'block';
+          aiAnswerText.textContent = result.error || 'Failed to get AI response. Please check your API key.';
+          aiAnswerConfidence.textContent = '';
+          aiRelevantEmails.style.display = 'none';
+        }
+      } catch (err) {
+        aiSearchLoading.style.display = 'none';
+        aiSearchBtn.disabled = false;
+        aiAnswerBox.style.display = 'block';
+        aiAnswerText.textContent = `Error: ${err.message}`;
+        aiAnswerConfidence.textContent = '';
+        aiRelevantEmails.style.display = 'none';
+      }
+    });
+
+    // Allow Enter key (Ctrl+Enter) in AI search textarea
+    aiSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        aiSearchBtn.click();
+      }
+    });
+
+    // Listen for NL search progress
+    ipcRenderer.on('nl-search-progress', (event, data) => {
+      aiSearchLoadingText.textContent = data.message || 'Processing...';
     });
 
     // ========== TIME TRACKING TAB ==========

@@ -19,6 +19,13 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
+# Try to import anthropic for LLM matching
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 # Status detection patterns - order matters (more specific first)
 STATUS_PATTERNS = [
     # Executed/Signed (highest priority)
@@ -246,7 +253,94 @@ def detect_document_status(doc_name, emails):
     return best_status, best_priority, matching_emails
 
 
-def update_checklist(checklist_path, email_csv_path, output_folder):
+def match_documents_with_llm(checklist_items, emails, api_key):
+    """
+    Use Claude API to match emails to documents and infer status.
+
+    Args:
+        checklist_items: List of document names from checklist
+        emails: List of email dicts with subject, body, from, date
+        api_key: Claude API key
+
+    Returns:
+        Dict mapping document_name to {status, matching_emails, confidence}
+    """
+    if not HAS_ANTHROPIC or not api_key:
+        return None
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+
+        # Prepare email context (limit and truncate for token efficiency)
+        email_context = []
+        for i, email in enumerate(emails[:100]):
+            email_context.append({
+                "index": i,
+                "from": email.get("from", "")[:100],
+                "subject": email.get("subject", "")[:200],
+                "body_preview": email.get("body", "")[:200],
+                "date": email.get("date_received") or email.get("date_sent") or ""
+            })
+
+        prompt = f"""You are analyzing emails to update a transaction document checklist.
+
+For each document in the checklist, find relevant emails and determine the current status.
+
+CHECKLIST DOCUMENTS:
+{json.dumps(checklist_items, indent=2)}
+
+RECENT EMAILS:
+{json.dumps(email_context, indent=2)}
+
+For each document that has relevant email activity, determine its status from these options:
+- "Pending Draft" (not started, needs drafting)
+- "Draft Circulated" (initial draft sent out)
+- "With Opposing Counsel" (sent to counterparty for review)
+- "Agreed Form" (parties have agreed on the form)
+- "Execution Version" (ready for signature)
+- "Executed" (fully signed)
+
+Return a JSON object mapping each document name (only those with email activity) to:
+{{
+    "Document Name": {{
+        "status": "Execution Version",
+        "matching_email_indices": [2, 15],
+        "confidence": 0.85,
+        "reasoning": "Email #2 mentions execution version is ready..."
+    }}
+}}
+
+Only include documents that have clear email activity. ONLY return the JSON object, no other text."""
+
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.content[0].text.strip()
+
+        # Handle markdown code blocks
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            json_lines = []
+            in_json = False
+            for line in lines:
+                if line.startswith("```json") or line.startswith("```"):
+                    in_json = not in_json if not line.startswith("```json") else True
+                    continue
+                if in_json:
+                    json_lines.append(line)
+            response_text = "\n".join(json_lines)
+
+        return json.loads(response_text)
+
+    except Exception as e:
+        print(f"LLM matching failed: {e}", file=sys.stderr)
+        return None
+
+
+def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None):
     """
     Main function to update checklist based on email activity.
 
@@ -306,6 +400,20 @@ def update_checklist(checklist_path, email_csv_path, output_folder):
                 result['error'] = 'No status column found and cannot add new column. Please add a Status column to your checklist.'
                 return result
 
+        # Collect all document names for LLM matching
+        doc_names = []
+        for row_data in rows:
+            if doc_col_idx >= len(row_data):
+                continue
+            doc_name = row_data[doc_col_idx]
+            if doc_name.strip():
+                doc_names.append(doc_name)
+
+        # Try LLM matching if API key is available
+        llm_matches = None
+        if api_key and doc_names:
+            llm_matches = match_documents_with_llm(doc_names, emails, api_key)
+
         # Process each row
         items_updated = 0
         details = []
@@ -323,8 +431,22 @@ def update_checklist(checklist_path, email_csv_path, output_folder):
             if status_col_idx < len(row_data):
                 current_status = row_data[status_col_idx]
 
-            # Detect new status from emails
-            new_status, priority, matching_emails = detect_document_status(doc_name, emails)
+            # Try LLM match first, then fall back to regex matching
+            new_status = None
+            matching_emails = []
+
+            if llm_matches and doc_name in llm_matches:
+                llm_result = llm_matches[doc_name]
+                new_status = llm_result.get('status')
+                # Get matching email subjects from indices
+                email_indices = llm_result.get('matching_email_indices', [])
+                for idx in email_indices[:3]:
+                    if idx < len(emails):
+                        matching_emails.append(emails[idx].get('subject', 'No subject'))
+
+            # Fall back to regex if no LLM match
+            if not new_status:
+                new_status, priority, matching_emails = detect_document_status(doc_name, emails)
 
             if new_status and new_status != current_status:
                 # Update the cell in the table
@@ -373,7 +495,7 @@ def main():
     if len(sys.argv) < 4:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: checklist_updater.py <checklist_path> <email_csv_path> <output_folder>'
+            'error': 'Usage: checklist_updater.py <checklist_path> <email_csv_path> <output_folder> [api_key]'
         }))
         sys.exit(1)
 
@@ -381,7 +503,16 @@ def main():
     email_csv_path = sys.argv[2]
     output_folder = sys.argv[3]
 
-    result = update_checklist(checklist_path, email_csv_path, output_folder)
+    # Get API key if provided
+    api_key = None
+    if len(sys.argv) > 4:
+        api_key = sys.argv[4]
+
+    # Also check environment variable
+    if not api_key:
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+
+    result = update_checklist(checklist_path, email_csv_path, output_folder, api_key)
     print(json.dumps(result))
 
 

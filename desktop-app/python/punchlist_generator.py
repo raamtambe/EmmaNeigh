@@ -24,6 +24,13 @@ from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
 
+# Try to import anthropic for LLM categorization
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 # Status categories for grouping (order determines display order)
 STATUS_CATEGORIES = {
     'pending': {
@@ -139,6 +146,77 @@ def categorize_status(status_text):
     return 'pending'
 
 
+def categorize_items_with_llm(items, api_key):
+    """
+    Use Claude API to categorize all items at once.
+
+    Args:
+        items: List of dicts with 'document_name' and 'status' keys
+        api_key: Claude API key
+
+    Returns:
+        Dict mapping document_name to category
+    """
+    if not HAS_ANTHROPIC or not api_key:
+        return None
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+
+        # Prepare items for the prompt
+        items_for_prompt = [
+            {"doc": item.get('document_name', ''), "status": item.get('status', '')}
+            for item in items[:100]  # Limit to 100 items
+        ]
+
+        prompt = f"""You are categorizing legal transaction documents by their current status.
+
+For each document, classify its status into one of these categories:
+- "pending": Needs drafting, not started, to be drafted, TBD
+- "review": Under review, with counsel, sent to counterparty, awaiting comments, circulated
+- "signature": Execution version, agreed form, ready for signature, final form
+- "executed": Fully executed, signed, complete, done
+
+Documents to categorize:
+{json.dumps(items_for_prompt, indent=2)}
+
+Return a JSON object mapping each document name to its category:
+{{
+    "Document Name 1": "pending",
+    "Document Name 2": "signature",
+    ...
+}}
+
+ONLY return the JSON object, no other text."""
+
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.content[0].text.strip()
+
+        # Handle markdown code blocks
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            json_lines = []
+            in_json = False
+            for line in lines:
+                if line.startswith("```json") or line.startswith("```"):
+                    in_json = not in_json if not line.startswith("```json") else True
+                    continue
+                if in_json:
+                    json_lines.append(line)
+            response_text = "\n".join(json_lines)
+
+        return json.loads(response_text)
+
+    except Exception as e:
+        print(f"LLM categorization failed: {e}", file=sys.stderr)
+        return None
+
+
 def parse_checklist_for_punchlist(doc):
     """
     Parse Word document checklist table.
@@ -210,7 +288,7 @@ def extract_transaction_name(checklist_path, doc):
     return base_name.replace('_', ' ').replace('-', ' ').strip()
 
 
-def generate_punchlist(checklist_path, output_folder, status_filters=None):
+def generate_punchlist(checklist_path, output_folder, status_filters=None, api_key=None):
     """
     Generate punchlist document from checklist.
 
@@ -219,6 +297,7 @@ def generate_punchlist(checklist_path, output_folder, status_filters=None):
         output_folder: Folder to save punchlist
         status_filters: List of status categories to include ['pending', 'review', 'signature']
                        If None, includes all except 'executed'
+        api_key: Optional Claude API key for LLM-based categorization
 
     Returns:
         dict with: success, output_path, item_count, categories
@@ -248,9 +327,8 @@ def generate_punchlist(checklist_path, output_folder, status_filters=None):
         # Get transaction name
         transaction_name = extract_transaction_name(checklist_path, doc)
 
-        # Categorize all items
-        categorized_items = {cat: [] for cat in STATUS_CATEGORIES.keys()}
-
+        # Collect all items first
+        all_items = []
         for row in parsed['rows']:
             # Get document name
             doc_name = ''
@@ -275,14 +353,39 @@ def generate_punchlist(checklist_path, output_folder, status_filters=None):
             if parsed['notes_col'] >= 0 and parsed['notes_col'] < len(row):
                 notes = row[parsed['notes_col']]
 
-            # Categorize
-            category = categorize_status(status)
+            all_items.append({
+                'document_name': doc_name,
+                'status': status,
+                'party': party,
+                'notes': notes
+            })
+
+        # Try LLM categorization if API key is available
+        llm_categories = None
+        if api_key and all_items:
+            llm_categories = categorize_items_with_llm(all_items, api_key)
+
+        # Categorize all items
+        categorized_items = {cat: [] for cat in STATUS_CATEGORIES.keys()}
+
+        for item in all_items:
+            doc_name = item['document_name']
+            status = item['status']
+
+            # Use LLM category if available, otherwise fall back to regex
+            if llm_categories and doc_name in llm_categories:
+                category = llm_categories[doc_name]
+                # Validate category
+                if category not in STATUS_CATEGORIES:
+                    category = categorize_status(status)
+            else:
+                category = categorize_status(status)
 
             categorized_items[category].append({
                 'document': doc_name,
                 'status': status,
-                'party': party,
-                'notes': notes
+                'party': item['party'],
+                'notes': item['notes']
             })
 
         # Create punchlist document
@@ -410,7 +513,7 @@ def main():
     if len(sys.argv) < 3:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: punchlist_generator.py <checklist_path> <output_folder> [status_filters_json]'
+            'error': 'Usage: punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] [api_key]'
         }))
         sys.exit(1)
 
@@ -425,7 +528,16 @@ def main():
         except json.JSONDecodeError:
             pass
 
-    result = generate_punchlist(checklist_path, output_folder, status_filters)
+    # Get API key if provided
+    api_key = None
+    if len(sys.argv) > 4:
+        api_key = sys.argv[4]
+
+    # Also check environment variable
+    if not api_key:
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+
+    result = generate_punchlist(checklist_path, output_folder, status_filters, api_key)
     print(json.dumps(result))
 
 

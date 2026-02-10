@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -61,6 +61,52 @@ function saveDatabase() {
     } catch (e) {
       console.error('Failed to save database:', e);
     }
+  }
+}
+
+// API Key storage (encrypted with safeStorage)
+const apiKeyPath = path.join(app.getPath('userData'), 'api_key.enc');
+
+function getApiKey() {
+  try {
+    // First try encrypted storage
+    if (fs.existsSync(apiKeyPath)) {
+      const encrypted = fs.readFileSync(apiKeyPath);
+      if (safeStorage.isEncryptionAvailable()) {
+        return safeStorage.decryptString(encrypted);
+      }
+    }
+    // Fallback to environment variable
+    return process.env.ANTHROPIC_API_KEY || null;
+  } catch (e) {
+    console.error('Failed to get API key:', e);
+    return process.env.ANTHROPIC_API_KEY || null;
+  }
+}
+
+function setApiKey(apiKey) {
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = safeStorage.encryptString(apiKey);
+      fs.writeFileSync(apiKeyPath, encrypted);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.error('Failed to set API key:', e);
+    return false;
+  }
+}
+
+function deleteApiKey() {
+  try {
+    if (fs.existsSync(apiKeyPath)) {
+      fs.unlinkSync(apiKeyPath);
+    }
+    return true;
+  } catch (e) {
+    console.error('Failed to delete API key:', e);
+    return false;
   }
 }
 
@@ -817,6 +863,206 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
   });
 });
 
+// ========== NATURAL LANGUAGE EMAIL SEARCH ==========
+
+ipcMain.handle('nl-search-emails', async (event, config) => {
+  const processorPath = getProcessorPath('email_nl_search');
+
+  // Get the API key
+  const apiKey = config.api_key || getApiKey();
+
+  if (!apiKey) {
+    return { success: false, error: 'No API key configured. Please add your Claude API key in Settings.' };
+  }
+
+  // In development without processor, make direct API call
+  if (!processorPath) {
+    try {
+      const https = require('https');
+
+      const emails = config.emails || [];
+      const query = config.query || '';
+
+      if (!query) {
+        return { success: false, error: 'No query provided' };
+      }
+
+      // Prepare email context (limit to 100 emails, truncate bodies)
+      const emailContext = emails.slice(0, 100).map((email, i) => ({
+        index: i,
+        from: email.from || 'Unknown',
+        to: email.to || '',
+        subject: email.subject || '(No Subject)',
+        body_preview: (email.body || '').substring(0, 300),
+        date: email.date_received || email.date_sent || '',
+        attachments: email.attachments || '',
+        has_attachments: email.has_attachments || false
+      }));
+
+      const prompt = `You are an email assistant analyzing a database of emails from a legal transaction.
+
+User Question: ${query}
+
+Email Database (${emailContext.length} emails):
+${JSON.stringify(emailContext, null, 2)}
+
+Please analyze these emails and answer the user's question. Be specific and cite relevant emails by their index number.
+
+Respond with a JSON object containing:
+{
+    "answer": "Your detailed answer to the question",
+    "relevant_email_indices": [0, 5, 12],
+    "confidence": 0.85,
+    "summary": "One-sentence summary of your finding"
+}
+
+Respond ONLY with the JSON object, no other text.`;
+
+      const requestData = JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }]
+      });
+
+      return new Promise((resolve) => {
+        const options = {
+          hostname: 'api.anthropic.com',
+          path: '/v1/messages',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'Content-Length': Buffer.byteLength(requestData)
+          }
+        };
+
+        const req = https.request(options, (res) => {
+          let body = '';
+          res.on('data', chunk => body += chunk);
+          res.on('end', () => {
+            try {
+              if (res.statusCode !== 200) {
+                resolve({ success: false, error: `API error: ${res.statusCode}` });
+                return;
+              }
+
+              const response = JSON.parse(body);
+              const responseText = response.content[0].text.trim();
+
+              // Try to parse JSON from response
+              let result;
+              try {
+                // Handle markdown code blocks
+                let jsonText = responseText;
+                if (jsonText.startsWith('```')) {
+                  const lines = jsonText.split('\n');
+                  const jsonLines = [];
+                  let inJson = false;
+                  for (const line of lines) {
+                    if (line.startsWith('```json')) { inJson = true; continue; }
+                    if (line.startsWith('```')) { inJson = false; continue; }
+                    if (inJson) jsonLines.push(line);
+                  }
+                  jsonText = jsonLines.join('\n');
+                }
+                result = JSON.parse(jsonText);
+              } catch (e) {
+                result = { answer: responseText, relevant_email_indices: [], confidence: 0.5 };
+              }
+
+              resolve({
+                success: true,
+                answer: result.answer || 'No answer provided',
+                relevant_email_indices: result.relevant_email_indices || [],
+                confidence: result.confidence || 0.5,
+                summary: result.summary || '',
+                query: query
+              });
+            } catch (e) {
+              resolve({ success: false, error: `Parse error: ${e.message}` });
+            }
+          });
+        });
+
+        req.on('error', (e) => {
+          resolve({ success: false, error: `Network error: ${e.message}` });
+        });
+
+        req.setTimeout(60000, () => {
+          req.destroy();
+          resolve({ success: false, error: 'Request timed out' });
+        });
+
+        req.write(requestData);
+        req.end();
+      });
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  // Production: spawn Python subprocess
+  if (app.isPackaged && !fs.existsSync(processorPath)) {
+    return { success: false, error: 'NL search processor not found' };
+  }
+
+  if (process.platform !== 'win32' && app.isPackaged) {
+    try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+  }
+
+  const configPath = path.join(app.getPath('temp'), `nl_search_${Date.now()}.json`);
+  const configData = {
+    emails: config.emails || [],
+    query: config.query || '',
+    api_key: apiKey
+  };
+  fs.writeFileSync(configPath, JSON.stringify(configData));
+
+  return new Promise((resolve, reject) => {
+    let args;
+    if (app.isPackaged) {
+      args = [configPath];
+    } else {
+      args = [path.join(__dirname, 'python', 'email_nl_search.py'), configPath];
+    }
+
+    const proc = spawn(processorPath, args);
+
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'progress') {
+            event.sender.send('nl-search-progress', msg);
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      console.error('NL search stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('NL search failed with code ' + code));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
 // ========== TIME TRACKING ==========
 
 ipcMain.handle('generate-time-summary', async (event, config) => {
@@ -933,6 +1179,89 @@ ipcMain.handle('generate-time-summary', async (event, config) => {
 
     proc.on('error', reject);
   });
+});
+
+// ========== API KEY HANDLERS ==========
+
+// Get stored API key
+ipcMain.handle('get-api-key', async () => {
+  const key = getApiKey();
+  return { success: true, hasKey: !!key };
+});
+
+// Set API key (stores encrypted)
+ipcMain.handle('set-api-key', async (event, apiKey) => {
+  if (!apiKey || typeof apiKey !== 'string') {
+    return { success: false, error: 'Invalid API key' };
+  }
+  const result = setApiKey(apiKey);
+  return { success: result, error: result ? null : 'Encryption not available' };
+});
+
+// Delete stored API key
+ipcMain.handle('delete-api-key', async () => {
+  const result = deleteApiKey();
+  return { success: result };
+});
+
+// Test API key by making a minimal API call
+ipcMain.handle('test-api-key', async (event, apiKey) => {
+  try {
+    const https = require('https');
+
+    return new Promise((resolve) => {
+      const data = JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 10,
+        messages: [{ role: 'user', content: 'Hi' }]
+      });
+
+      const options = {
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(data)
+        }
+      };
+
+      const req = https.request(options, (res) => {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve({ success: true, message: 'API key is valid' });
+          } else if (res.statusCode === 401) {
+            resolve({ success: false, error: 'Invalid API key' });
+          } else {
+            resolve({ success: false, error: `API error: ${res.statusCode}` });
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        resolve({ success: false, error: `Network error: ${e.message}` });
+      });
+
+      req.setTimeout(10000, () => {
+        req.destroy();
+        resolve({ success: false, error: 'Request timed out' });
+      });
+
+      req.write(data);
+      req.end();
+    });
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get API key for use (returns actual key, only for internal use)
+ipcMain.handle('get-api-key-value', async () => {
+  return getApiKey();
 });
 
 // ========== USAGE HISTORY HANDLERS ==========

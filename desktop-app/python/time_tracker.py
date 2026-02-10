@@ -29,6 +29,7 @@ def parse_date(date_str):
         "%m/%d/%Y %H:%M",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",  # ISO with microseconds
         "%Y-%m-%dT%H:%M:%SZ",
         "%d/%m/%Y %H:%M",
         "%m/%d/%y %I:%M %p",
@@ -291,9 +292,11 @@ def generate_activity_summary(emails, calendar_events, target_date=None, period=
                 'duration': event['duration_minutes']
             })
 
-    # Group emails by hour
+    # Group emails by hour (skip emails with no valid timestamp)
     email_by_hour = defaultdict(list)
     for email in filtered_emails:
+        if email.get('timestamp') is None:
+            continue
         hour = email['timestamp'].strftime('%I:00 %p')
         email_by_hour[hour].append(email)
 
