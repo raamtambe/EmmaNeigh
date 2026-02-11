@@ -3,6 +3,20 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
+const crypto = require('crypto');
+
+// Password hashing functions
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [salt, hash] = storedHash.split(':');
+  const verifyHash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return hash === verifyHash;
+}
 
 // SQLite for usage history
 let db = null;
@@ -24,24 +38,29 @@ async function initDatabase() {
 
     // Create tables if they don't exist
     db.run(`
-      CREATE TABLE IF NOT EXISTS usage_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        user_name TEXT,
-        feature TEXT,
-        action TEXT,
-        input_count INTEGER DEFAULT 0,
-        output_count INTEGER DEFAULT 0,
-        duration_ms INTEGER DEFAULT 0
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        display_name TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_login DATETIME,
+        api_key_encrypted TEXT,
+        telemetry_enabled INTEGER DEFAULT 0
       )
     `);
 
     db.run(`
-      CREATE TABLE IF NOT EXISTS user_profile (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        telemetry_enabled INTEGER DEFAULT 0
+      CREATE TABLE IF NOT EXISTS usage_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        user_id TEXT,
+        feature TEXT,
+        action TEXT,
+        input_count INTEGER DEFAULT 0,
+        output_count INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES users(id)
       )
     `);
 
@@ -1277,6 +1296,150 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
 // Get API key for use (returns actual key, only for internal use)
 ipcMain.handle('get-api-key-value', async () => {
   return getApiKey();
+});
+
+// ========== USER ACCOUNT HANDLERS ==========
+
+// Create new user account
+ipcMain.handle('create-user', async (event, { username, password, displayName }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!username || !password) {
+    return { success: false, error: 'Username and password are required' };
+  }
+
+  if (password.length < 4) {
+    return { success: false, error: 'Password must be at least 4 characters' };
+  }
+
+  try {
+    const id = crypto.randomUUID();
+    const passwordHash = hashPassword(password);
+
+    db.run(`INSERT INTO users (id, username, password_hash, display_name) VALUES (?, ?, ?, ?)`,
+      [id, username.toLowerCase().trim(), passwordHash, displayName || username]);
+    saveDatabase();
+
+    return { success: true, userId: id };
+  } catch (e) {
+    if (e.message && e.message.includes('UNIQUE')) {
+      return { success: false, error: 'Username already exists' };
+    }
+    return { success: false, error: e.message };
+  }
+});
+
+// Login with username/password
+ipcMain.handle('login-user', async (event, { username, password }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!username || !password) {
+    return { success: false, error: 'Username and password are required' };
+  }
+
+  try {
+    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted FROM users WHERE username = '${username.toLowerCase().trim()}'`);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const row = result[0].values[0];
+    const [id, uname, passwordHash, displayName, apiKeyEnc] = row;
+
+    if (!verifyPassword(password, passwordHash)) {
+      return { success: false, error: 'Invalid password' };
+    }
+
+    // Update last login
+    db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
+    saveDatabase();
+
+    return {
+      success: true,
+      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Save API key for logged-in user
+ipcMain.handle('set-user-api-key', async (event, { userId, apiKey }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    let encrypted = null;
+    if (apiKey && safeStorage.isEncryptionAvailable()) {
+      const encBuffer = safeStorage.encryptString(apiKey);
+      encrypted = encBuffer.toString('base64');
+    } else if (apiKey) {
+      // Fallback: store as plain text (not ideal but functional)
+      encrypted = apiKey;
+    }
+
+    db.run(`UPDATE users SET api_key_encrypted = '${encrypted || ''}' WHERE id = '${userId}'`);
+    saveDatabase();
+
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get API key for logged-in user
+ipcMain.handle('get-user-api-key', async (event, { userId }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    const result = db.exec(`SELECT api_key_encrypted FROM users WHERE id = '${userId}'`);
+
+    if (result.length === 0 || !result[0].values[0] || !result[0].values[0][0]) {
+      return { success: true, apiKey: null };
+    }
+
+    const encrypted = result[0].values[0][0];
+
+    // Try to decrypt
+    if (safeStorage.isEncryptionAvailable() && encrypted.length > 50) {
+      try {
+        const encBuffer = Buffer.from(encrypted, 'base64');
+        const apiKey = safeStorage.decryptString(encBuffer);
+        return { success: true, apiKey };
+      } catch (decryptErr) {
+        // Might be stored as plain text, return as-is
+        return { success: true, apiKey: encrypted };
+      }
+    }
+
+    // Return as-is (plain text fallback)
+    return { success: true, apiKey: encrypted };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get user by ID (for session restore)
+ipcMain.handle('get-user-by-id', async (event, { userId }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    const result = db.exec(`SELECT id, username, display_name, api_key_encrypted FROM users WHERE id = '${userId}'`);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const row = result[0].values[0];
+    const [id, uname, displayName, apiKeyEnc] = row;
+
+    return {
+      success: true,
+      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // ========== USAGE HISTORY HANDLERS ==========

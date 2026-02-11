@@ -920,6 +920,107 @@
       cursor: not-allowed;
     }
 
+    /* Login Tabs */
+    .login-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+
+    .login-tab {
+      flex: 1;
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 500;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #888;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .login-tab:hover {
+      border-color: #555;
+      color: #fff;
+    }
+
+    .login-tab.active {
+      background: #fff;
+      color: #000;
+      border-color: #fff;
+    }
+
+    /* Login Forms */
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .login-form.hidden {
+      display: none;
+    }
+
+    .login-form input {
+      width: 100%;
+      padding: 14px 16px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+      box-sizing: border-box;
+    }
+
+    .login-form input:focus {
+      border-color: #555;
+    }
+
+    .login-form input::placeholder {
+      color: #555;
+    }
+
+    .login-form button {
+      margin-top: 8px;
+      width: 100%;
+      padding: 14px 24px;
+      font-size: 15px;
+      font-weight: 500;
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .login-form button:hover {
+      background: #e5e5e5;
+    }
+
+    .login-form button:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+    }
+
+    .login-error {
+      color: #ff4444;
+      font-size: 13px;
+      text-align: center;
+      min-height: 20px;
+    }
+
+    .login-form p {
+      color: #888;
+      font-size: 13px;
+      text-align: center;
+      margin: 8px 0;
+    }
+
     /* Update banner */
     .update-banner {
       position: fixed;
@@ -1986,43 +2087,39 @@
   <div class="login-modal" id="loginModal">
     <div class="login-box">
       <h2>Welcome to EmmaNeigh</h2>
-      <p class="subtitle">Choose how you'd like to continue</p>
+      <p class="subtitle">Sign in to save your API key and usage history</p>
 
-      <div class="login-options">
-        <div class="login-option" data-mode="guest">
-          <div class="login-option-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-              <circle cx="12" cy="7" r="4"/>
-            </svg>
-          </div>
-          <div class="login-option-text">
-            <h3>Continue as Guest</h3>
-            <p>Use the app without saving your name</p>
-          </div>
-        </div>
-
-        <div class="login-option" data-mode="login">
-          <div class="login-option-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-              <circle cx="9" cy="7" r="4"/>
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
-              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-            </svg>
-          </div>
-          <div class="login-option-text">
-            <h3>Enter Your Name</h3>
-            <p>Your name will be saved for usage tracking</p>
-          </div>
-        </div>
+      <!-- Tab Toggle -->
+      <div class="login-tabs">
+        <button class="login-tab active" data-tab="login">Login</button>
+        <button class="login-tab" data-tab="create">Create Account</button>
+        <button class="login-tab" data-tab="guest">Guest</button>
       </div>
 
-      <div class="login-name-input" id="loginNameInput">
-        <input type="text" id="loginNameField" placeholder="Enter your name (e.g., John Smith)">
+      <!-- Login Form -->
+      <div class="login-form" id="loginForm">
+        <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
+        <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+        <p class="login-error" id="loginError"></p>
+        <button id="loginBtn">Login</button>
       </div>
 
-      <button class="login-continue-btn" id="loginContinueBtn">Continue</button>
+      <!-- Create Account Form -->
+      <div class="login-form hidden" id="createForm">
+        <input type="text" id="createUsername" placeholder="Username" autocomplete="username">
+        <input type="text" id="createDisplayName" placeholder="Display Name (optional)">
+        <input type="password" id="createPassword" placeholder="Password (min 4 characters)" autocomplete="new-password">
+        <input type="password" id="createPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password">
+        <p class="login-error" id="createError"></p>
+        <button id="createBtn">Create Account</button>
+      </div>
+
+      <!-- Guest Mode -->
+      <div class="login-form hidden" id="guestForm">
+        <p>Continue without an account. Your API key and usage history will not be saved between sessions.</p>
+        <input type="text" id="guestName" placeholder="Your name (optional)">
+        <button id="guestBtn">Continue as Guest</button>
+      </div>
     </div>
   </div>
 
@@ -3339,76 +3436,180 @@
     const userInfo = document.getElementById('userInfo');
     const userName = document.getElementById('userName');
     const loginModal = document.getElementById('loginModal');
-    const loginOptions = document.querySelectorAll('.login-option');
-    const loginNameInput = document.getElementById('loginNameInput');
-    const loginNameField = document.getElementById('loginNameField');
-    const loginContinueBtn = document.getElementById('loginContinueBtn');
 
-    let selectedLoginMode = null;
+    // Current user state
+    let currentUser = null;  // { id, username, displayName, isGuest }
 
-    // Check for stored user - show login modal if no user
-    const storedUser = localStorage.getItem('emmaneigh_user');
-    if (storedUser) {
-      try {
-        const user = JSON.parse(storedUser);
-        userName.textContent = user.name || 'Guest';
-        loginModal.classList.add('hidden');
-      } catch (e) {
-        userName.textContent = 'Guest';
-        // Show login modal for first time users
-      }
-    }
-
-    // Login option selection
-    loginOptions.forEach(option => {
-      option.addEventListener('click', () => {
-        loginOptions.forEach(o => o.classList.remove('selected'));
-        option.classList.add('selected');
-        selectedLoginMode = option.dataset.mode;
-
-        if (selectedLoginMode === 'login') {
-          loginNameInput.classList.add('visible');
-          loginContinueBtn.disabled = loginNameField.value.trim() === '';
-        } else {
-          loginNameInput.classList.remove('visible');
-          loginContinueBtn.disabled = false;
-        }
+    // Tab switching
+    const loginTabs = document.querySelectorAll('.login-tab');
+    loginTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        loginTabs.forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
+        tab.classList.add('active');
+        const formId = tab.dataset.tab + 'Form';
+        document.getElementById(formId).classList.remove('hidden');
+        // Clear error messages
+        document.getElementById('loginError').textContent = '';
+        document.getElementById('createError').textContent = '';
       });
     });
 
-    // Name input validation
-    loginNameField.addEventListener('input', () => {
-      if (selectedLoginMode === 'login') {
-        loginContinueBtn.disabled = loginNameField.value.trim() === '';
+    // Login form handler
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+      const username = document.getElementById('loginUsername').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      const errorEl = document.getElementById('loginError');
+
+      if (!username || !password) {
+        errorEl.textContent = 'Please enter username and password';
+        return;
+      }
+
+      try {
+        const result = await ipcRenderer.invoke('login-user', { username, password });
+
+        if (result.success) {
+          currentUser = { ...result.user, isGuest: false };
+          localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
+          userName.textContent = result.user.displayName || result.user.username;
+          loginModal.classList.add('hidden');
+          // Load user's API key
+          loadUserApiKey();
+        } else {
+          errorEl.textContent = result.error || 'Login failed';
+        }
+      } catch (e) {
+        errorEl.textContent = 'Login error: ' + e.message;
       }
     });
 
-    // Continue button
-    loginContinueBtn.addEventListener('click', () => {
-      if (!selectedLoginMode) {
-        // Default to guest if nothing selected
-        selectedLoginMode = 'guest';
+    // Allow Enter key to submit login
+    document.getElementById('loginPassword').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') document.getElementById('loginBtn').click();
+    });
+
+    // Create account form handler
+    document.getElementById('createBtn').addEventListener('click', async () => {
+      const username = document.getElementById('createUsername').value.trim();
+      const displayName = document.getElementById('createDisplayName').value.trim();
+      const password = document.getElementById('createPassword').value;
+      const confirm = document.getElementById('createPasswordConfirm').value;
+      const errorEl = document.getElementById('createError');
+
+      if (!username) {
+        errorEl.textContent = 'Username is required';
+        return;
       }
 
-      let displayName = 'Guest';
-      if (selectedLoginMode === 'login') {
-        displayName = loginNameField.value.trim() || 'Guest';
+      if (password.length < 4) {
+        errorEl.textContent = 'Password must be at least 4 characters';
+        return;
       }
 
-      userName.textContent = displayName;
-      localStorage.setItem('emmaneigh_user', JSON.stringify({ name: displayName, mode: selectedLoginMode }));
+      if (password !== confirm) {
+        errorEl.textContent = 'Passwords do not match';
+        return;
+      }
+
+      try {
+        const result = await ipcRenderer.invoke('create-user', { username, password, displayName });
+
+        if (result.success) {
+          // Auto-login after creation
+          const loginResult = await ipcRenderer.invoke('login-user', { username, password });
+          if (loginResult.success) {
+            currentUser = { ...loginResult.user, isGuest: false };
+            localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: loginResult.user.id }));
+            userName.textContent = loginResult.user.displayName || loginResult.user.username;
+            loginModal.classList.add('hidden');
+          }
+        } else {
+          errorEl.textContent = result.error || 'Account creation failed';
+        }
+      } catch (e) {
+        errorEl.textContent = 'Error: ' + e.message;
+      }
+    });
+
+    // Allow Enter key to submit create
+    document.getElementById('createPasswordConfirm').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') document.getElementById('createBtn').click();
+    });
+
+    // Guest mode handler
+    document.getElementById('guestBtn').addEventListener('click', () => {
+      const name = document.getElementById('guestName').value.trim() || 'Guest';
+      currentUser = { id: null, username: null, displayName: name, isGuest: true };
+      userName.textContent = name;
+      localStorage.removeItem('emmaneigh_session');  // Clear any stored session
       loginModal.classList.add('hidden');
     });
 
-    // Click on user info to change name
+    // Load user's API key after login
+    async function loadUserApiKey() {
+      if (currentUser && !currentUser.isGuest && currentUser.id) {
+        try {
+          const result = await ipcRenderer.invoke('get-user-api-key', { userId: currentUser.id });
+          if (result.success && result.apiKey) {
+            // API key is available - update status display
+            const apiKeyStatus = document.getElementById('apiKeyStatus');
+            if (apiKeyStatus) {
+              apiKeyStatus.innerHTML = '<span style="color: #4CAF50;">API key configured</span>';
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load user API key:', e);
+        }
+      }
+    }
+
+    // Check for stored session on load
+    async function checkStoredSession() {
+      const session = localStorage.getItem('emmaneigh_session');
+      if (session) {
+        try {
+          const { userId } = JSON.parse(session);
+          const result = await ipcRenderer.invoke('get-user-by-id', { userId });
+          if (result.success) {
+            currentUser = { ...result.user, isGuest: false };
+            userName.textContent = result.user.displayName || result.user.username;
+            loginModal.classList.add('hidden');
+            loadUserApiKey();
+            return;
+          }
+        } catch (e) {
+          console.error('Session restore failed:', e);
+        }
+      }
+      // No valid session - show login modal
+      userName.textContent = 'Guest';
+    }
+
+    // Initialize session check
+    checkStoredSession();
+
+    // Click on user info to logout/switch user
     userInfo.addEventListener('click', () => {
-      // Show login modal again
+      // Clear session and show login modal
+      localStorage.removeItem('emmaneigh_session');
+      currentUser = null;
       loginModal.classList.remove('hidden');
-      loginOptions.forEach(o => o.classList.remove('selected'));
-      loginNameInput.classList.remove('visible');
-      loginNameField.value = '';
-      selectedLoginMode = null;
-      loginContinueBtn.disabled = true;
+      // Reset forms
+      document.getElementById('loginUsername').value = '';
+      document.getElementById('loginPassword').value = '';
+      document.getElementById('createUsername').value = '';
+      document.getElementById('createDisplayName').value = '';
+      document.getElementById('createPassword').value = '';
+      document.getElementById('createPasswordConfirm').value = '';
+      document.getElementById('guestName').value = '';
+      document.getElementById('loginError').textContent = '';
+      document.getElementById('createError').textContent = '';
+      // Reset to login tab
+      loginTabs.forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
+      loginTabs[0].classList.add('active');
+      document.getElementById('loginForm').classList.remove('hidden');
     });
 
     // ========== AUTO-UPDATE ==========
