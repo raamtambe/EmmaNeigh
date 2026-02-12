@@ -41,7 +41,10 @@ async function initDatabase() {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
+        email TEXT,
         password_hash TEXT NOT NULL,
+        security_question TEXT,
+        security_answer_hash TEXT,
         display_name TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_login DATETIME,
@@ -49,6 +52,17 @@ async function initDatabase() {
         telemetry_enabled INTEGER DEFAULT 0
       )
     `);
+
+    // Migrate existing users table if it doesn't have new columns
+    try {
+      db.run(`ALTER TABLE users ADD COLUMN email TEXT`);
+    } catch (e) { /* Column may already exist */ }
+    try {
+      db.run(`ALTER TABLE users ADD COLUMN security_question TEXT`);
+    } catch (e) { /* Column may already exist */ }
+    try {
+      db.run(`ALTER TABLE users ADD COLUMN security_answer_hash TEXT`);
+    } catch (e) { /* Column may already exist */ }
 
     db.run(`
       CREATE TABLE IF NOT EXISTS usage_history (
@@ -1301,7 +1315,7 @@ ipcMain.handle('get-api-key-value', async () => {
 // ========== USER ACCOUNT HANDLERS ==========
 
 // Create new user account
-ipcMain.handle('create-user', async (event, { username, password, displayName }) => {
+ipcMain.handle('create-user', async (event, { username, password, displayName, email, securityQuestion, securityAnswer }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
 
   if (!username || !password) {
@@ -1316,8 +1330,14 @@ ipcMain.handle('create-user', async (event, { username, password, displayName })
     const id = crypto.randomUUID();
     const passwordHash = hashPassword(password);
 
-    db.run(`INSERT INTO users (id, username, password_hash, display_name) VALUES (?, ?, ?, ?)`,
-      [id, username.toLowerCase().trim(), passwordHash, displayName || username]);
+    // Hash security answer if provided
+    let securityAnswerHash = null;
+    if (securityQuestion && securityAnswer) {
+      securityAnswerHash = hashPassword(securityAnswer.toLowerCase().trim());
+    }
+
+    db.run(`INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, username.toLowerCase().trim(), email || null, passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
     saveDatabase();
 
     return { success: true, userId: id };
@@ -1437,6 +1457,79 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
       success: true,
       user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
     };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get security question for a user (for password reset)
+ipcMain.handle('get-security-question', async (event, { username }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!username) {
+    return { success: false, error: 'Username is required' };
+  }
+
+  try {
+    const result = db.exec(`SELECT security_question FROM users WHERE username = '${username.toLowerCase().trim()}'`);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const question = result[0].values[0][0];
+    if (!question) {
+      return { success: false, error: 'No security question set for this account' };
+    }
+
+    // Return human-readable question
+    const questions = {
+      'pet': 'What was the name of your first pet?',
+      'city': 'In what city were you born?',
+      'school': 'What was the name of your first school?',
+      'mother': "What is your mother's maiden name?"
+    };
+
+    return { success: true, question: questions[question] || question };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Reset password with security answer
+ipcMain.handle('reset-password', async (event, { username, securityAnswer, newPassword }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!username || !securityAnswer || !newPassword) {
+    return { success: false, error: 'All fields are required' };
+  }
+
+  if (newPassword.length < 4) {
+    return { success: false, error: 'Password must be at least 4 characters' };
+  }
+
+  try {
+    const result = db.exec(`SELECT security_answer_hash FROM users WHERE username = '${username.toLowerCase().trim()}'`);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const storedHash = result[0].values[0][0];
+    if (!storedHash) {
+      return { success: false, error: 'No security question set for this account' };
+    }
+
+    if (!verifyPassword(securityAnswer.toLowerCase().trim(), storedHash)) {
+      return { success: false, error: 'Incorrect security answer' };
+    }
+
+    // Update password
+    const newPasswordHash = hashPassword(newPassword);
+    db.run(`UPDATE users SET password_hash = '${newPasswordHash}' WHERE username = '${username.toLowerCase().trim()}'`);
+    saveDatabase();
+
+    return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
   }
