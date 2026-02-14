@@ -153,6 +153,140 @@ if (app.isPackaged) {
   }
 }
 
+// ========== VERSION ENFORCEMENT ==========
+// Configuration for mandatory updates with grace period
+const VERSION_ENFORCEMENT = {
+  // Set this to a version string to require users to update
+  // null = no enforcement, users can stay on any version
+  minimumVersion: null,  // e.g., '5.2.0' when you want to enforce
+
+  // Grace period in days - how long users can delay the update
+  gracePeriodDays: 7,
+
+  // Message shown to users during grace period
+  graceMessage: 'A required update is available. Please update within {days} days to continue using EmmaNeigh.',
+
+  // Message shown when grace period expires
+  blockedMessage: 'This version of EmmaNeigh is no longer supported. Please update to continue.',
+
+  // Features to disable during grace period (empty = all features work)
+  // Options: 'packets', 'execution', 'sigblocks', 'collate', 'email', 'time'
+  disabledFeaturesDuringGrace: [],
+
+  // URL to check for version requirements (optional - for remote control)
+  // If set, app will fetch this URL to get minimumVersion dynamically
+  remoteConfigUrl: null  // e.g., 'https://raw.githubusercontent.com/raamtambe/EmmaNeigh/main/version-config.json'
+};
+
+// Store for version enforcement state
+const versionEnforcementPath = path.join(app.getPath('userData'), 'version_enforcement.json');
+
+function getVersionEnforcementState() {
+  try {
+    if (fs.existsSync(versionEnforcementPath)) {
+      return JSON.parse(fs.readFileSync(versionEnforcementPath, 'utf8'));
+    }
+  } catch (e) {}
+  return { firstWarningDate: null, updateDismissed: false };
+}
+
+function saveVersionEnforcementState(state) {
+  try {
+    fs.writeFileSync(versionEnforcementPath, JSON.stringify(state));
+  } catch (e) {
+    console.error('Failed to save version enforcement state:', e);
+  }
+}
+
+function compareVersions(v1, v2) {
+  // Compare semantic versions: returns -1 if v1 < v2, 0 if equal, 1 if v1 > v2
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 < p2) return -1;
+    if (p1 > p2) return 1;
+  }
+  return 0;
+}
+
+async function checkVersionEnforcement() {
+  const currentVersion = app.getVersion();
+  let minimumVersion = VERSION_ENFORCEMENT.minimumVersion;
+
+  // Optionally fetch remote config for dynamic control
+  if (VERSION_ENFORCEMENT.remoteConfigUrl) {
+    try {
+      const https = require('https');
+      const response = await new Promise((resolve, reject) => {
+        https.get(VERSION_ENFORCEMENT.remoteConfigUrl, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => resolve(data));
+        }).on('error', reject);
+      });
+      const remoteConfig = JSON.parse(response);
+      if (remoteConfig.minimumVersion) {
+        minimumVersion = remoteConfig.minimumVersion;
+      }
+    } catch (e) {
+      console.log('Could not fetch remote version config:', e.message);
+    }
+  }
+
+  // No enforcement if minimumVersion is not set
+  if (!minimumVersion) {
+    return { enforced: false, status: 'none' };
+  }
+
+  // Check if current version meets minimum
+  if (compareVersions(currentVersion, minimumVersion) >= 0) {
+    // Version is OK, clear any previous enforcement state
+    saveVersionEnforcementState({ firstWarningDate: null, updateDismissed: false });
+    return { enforced: false, status: 'ok' };
+  }
+
+  // Version is below minimum - check grace period
+  const state = getVersionEnforcementState();
+  const now = new Date();
+
+  if (!state.firstWarningDate) {
+    // First time seeing this - start grace period
+    state.firstWarningDate = now.toISOString();
+    saveVersionEnforcementState(state);
+  }
+
+  const firstWarning = new Date(state.firstWarningDate);
+  const daysSinceWarning = Math.floor((now - firstWarning) / (1000 * 60 * 60 * 24));
+  const daysRemaining = Math.max(0, VERSION_ENFORCEMENT.gracePeriodDays - daysSinceWarning);
+
+  if (daysRemaining > 0) {
+    // Still in grace period
+    return {
+      enforced: true,
+      status: 'grace',
+      daysRemaining,
+      message: VERSION_ENFORCEMENT.graceMessage.replace('{days}', daysRemaining),
+      minimumVersion,
+      currentVersion,
+      disabledFeatures: VERSION_ENFORCEMENT.disabledFeaturesDuringGrace
+    };
+  } else {
+    // Grace period expired - block the app
+    return {
+      enforced: true,
+      status: 'blocked',
+      daysRemaining: 0,
+      message: VERSION_ENFORCEMENT.blockedMessage,
+      minimumVersion,
+      currentVersion,
+      disabledFeatures: ['all']  // Block everything
+    };
+  }
+}
+
 let mainWindow;
 
 function createWindow() {
@@ -267,6 +401,19 @@ ipcMain.handle('get-app-version', () => {
   return app.getVersion();
 });
 
+// Check version enforcement status
+ipcMain.handle('check-version-enforcement', async () => {
+  return await checkVersionEnforcement();
+});
+
+// Dismiss update warning (user acknowledges but continues)
+ipcMain.handle('dismiss-update-warning', async () => {
+  const state = getVersionEnforcementState();
+  state.updateDismissed = true;
+  saveVersionEnforcementState(state);
+  return { success: true };
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
@@ -319,11 +466,24 @@ ipcMain.handle('process-folder', async (event, input) => {
     if (typeof input === 'string') {
       args = [input];
     } else if (input.folder) {
-      args = [input.folder];
+      // If we have output_format, use config file
+      if (input.output_format) {
+        const configPath = path.join(app.getPath('temp'), `packets-config-${Date.now()}.json`);
+        fs.writeFileSync(configPath, JSON.stringify({
+          folder: input.folder,
+          output_format: input.output_format
+        }));
+        args = ['--config', configPath];
+      } else {
+        args = [input.folder];
+      }
     } else if (input.files) {
       // Write config to temp file for multi-file input
       const configPath = path.join(app.getPath('temp'), `packets-config-${Date.now()}.json`);
-      fs.writeFileSync(configPath, JSON.stringify({ files: input.files }));
+      fs.writeFileSync(configPath, JSON.stringify({
+        files: input.files,
+        output_format: input.output_format || 'preserve'
+      }));
       args = ['--config', configPath];
     } else {
       reject(new Error('Invalid input: must be folder path or { folder } or { files }'));
@@ -404,12 +564,89 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
   shell.openPath(folderPath);
 });
 
+// Generate packet shell - combined signature packet with all pages
+ipcMain.handle('generate-packet-shell', async (event, input) => {
+  return new Promise((resolve, reject) => {
+    const processorPath = getProcessorPath('packet_shell_generator');
+
+    if (!processorPath) {
+      reject(new Error('Development mode - please build the app first'));
+      return;
+    }
+
+    if (!fs.existsSync(processorPath)) {
+      reject(new Error('Packet shell generator not found: ' + processorPath));
+      return;
+    }
+
+    // Make executable on Mac
+    if (process.platform === 'darwin') {
+      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+    }
+
+    // Write config to temp file
+    const configPath = path.join(app.getPath('temp'), `shell-config-${Date.now()}.json`);
+    const outputDir = path.join(app.getPath('temp'), `packet-shell-${Date.now()}`);
+
+    fs.writeFileSync(configPath, JSON.stringify({
+      files: input.files,
+      output_format: input.output_format || 'both',
+      output_dir: outputDir
+    }));
+
+    const args = ['--config', configPath];
+    const proc = spawn(processorPath, args);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            mainWindow.webContents.send('shell-progress', msg);
+          } else if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.message));
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      console.error('shell stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Packet shell generation failed with code ' + code));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(err);
+    });
+  });
+});
+
 // Select folder dialog
 ipcMain.handle('select-folder', async () => {
   const { filePaths } = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory']
   });
   return filePaths[0] || null;
+});
+
+// Select multiple documents (PDF or DOCX)
+ipcMain.handle('select-documents-multiple', async () => {
+  const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Documents', extensions: ['pdf', 'docx'] }]
+  });
+  return filePaths || [];
 });
 
 // Select single PDF file

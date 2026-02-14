@@ -57,6 +57,39 @@
       margin-top: 6px;
     }
 
+    /* Output Format Selector */
+    .output-format-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      background: #1a1a1a;
+      border-radius: 8px;
+      border: 1px solid #333;
+    }
+
+    .output-format-row label {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .output-format-select {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #fff;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+
+    .output-format-select:focus {
+      outline: none;
+      border-color: #555;
+    }
+
     .drop-zone {
       flex: 1;
       border: 1px dashed #333;
@@ -1168,6 +1201,141 @@
     .update-banner .btn {
       padding: 8px 16px;
       font-size: 12px;
+    }
+
+    /* Version Enforcement Modal - Soft block with grace period */
+    .version-enforcement-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.95);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.2s;
+    }
+
+    .version-enforcement-modal.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .version-enforcement-box {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      text-align: center;
+    }
+
+    .version-enforcement-box.blocked {
+      border-color: #ef4444;
+    }
+
+    .version-enforcement-box.grace {
+      border-color: #f59e0b;
+    }
+
+    .version-enforcement-icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+    }
+
+    .version-enforcement-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #fff;
+    }
+
+    .version-enforcement-box.blocked .version-enforcement-title {
+      color: #ef4444;
+    }
+
+    .version-enforcement-box.grace .version-enforcement-title {
+      color: #f59e0b;
+    }
+
+    .version-enforcement-message {
+      font-size: 14px;
+      color: #888;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .version-enforcement-info {
+      background: #0a0a0a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .version-enforcement-info span {
+      color: #fff;
+    }
+
+    .version-enforcement-countdown {
+      font-size: 24px;
+      font-weight: 600;
+      color: #f59e0b;
+      margin-bottom: 8px;
+    }
+
+    .version-enforcement-countdown-label {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 20px;
+    }
+
+    .version-enforcement-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .version-enforcement-actions .btn-primary {
+      background: #22c55e;
+      border: none;
+      color: #000;
+      padding: 14px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .version-enforcement-actions .btn-primary:hover {
+      background: #16a34a;
+    }
+
+    .version-enforcement-actions .btn-secondary {
+      background: transparent;
+      border: 1px solid #333;
+      color: #888;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .version-enforcement-actions .btn-secondary:hover {
+      border-color: #555;
+      color: #fff;
+    }
+
+    .version-enforcement-actions .btn-secondary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
     /* User info in header */
@@ -2361,6 +2529,27 @@
     </div>
   </div>
 
+  <!-- Version Enforcement Modal - Soft block with grace period -->
+  <div class="version-enforcement-modal" id="versionEnforcementModal">
+    <div class="version-enforcement-box" id="versionEnforcementBox">
+      <div class="version-enforcement-icon" id="versionEnforcementIcon">⚠️</div>
+      <h2 class="version-enforcement-title" id="versionEnforcementTitle">Update Required</h2>
+      <p class="version-enforcement-message" id="versionEnforcementMessage">
+        A required update is available. Please update to continue using EmmaNeigh.
+      </p>
+      <div class="version-enforcement-countdown" id="versionEnforcementCountdown">7</div>
+      <p class="version-enforcement-countdown-label">days remaining to update</p>
+      <div class="version-enforcement-info">
+        Current version: <span id="versionEnforcementCurrent">5.0.0</span> →
+        Required version: <span id="versionEnforcementRequired">5.2.0</span>
+      </div>
+      <div class="version-enforcement-actions">
+        <button class="btn-primary" id="versionEnforcementUpdateBtn">Update Now</button>
+        <button class="btn-secondary" id="versionEnforcementContinueBtn">Continue Anyway</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Update Banner -->
   <div class="update-banner hidden" id="updateBanner">
     <div class="update-banner-row">
@@ -2419,6 +2608,7 @@
           </button>
           <div class="nav-items">
             <button class="nav-item active" data-tab="packets">Create Sig Packets</button>
+            <button class="nav-item" data-tab="packetshell">Create Packet Shell</button>
             <button class="nav-item" data-tab="execution">Execution Versions</button>
             <button class="nav-item" data-tab="sigblocks">Sig Blocks from Checklist</button>
           </div>
@@ -2467,6 +2657,17 @@
       <div class="content-area">
         <!-- Signature Packets Tab -->
         <div id="packetsTab">
+
+    <!-- Output Format Selector -->
+    <div class="output-format-row" id="packetsFormatRow">
+      <label>Output Format:</label>
+      <select id="packetsOutputFormat" class="output-format-select">
+        <option value="preserve">Same as Input</option>
+        <option value="pdf">PDF Only</option>
+        <option value="docx">Word Only</option>
+        <option value="both">Both PDF and Word</option>
+      </select>
+    </div>
 
     <!-- Drop Zone -->
     <div class="drop-zone" id="dropZone">
@@ -2542,6 +2743,89 @@
       <button class="btn btn-secondary" id="retryBtn">Try Again</button>
     </div>
     </div><!-- End packetsTab -->
+
+    <!-- Packet Shell Tab -->
+    <div id="packetshellTab" style="display: none;">
+      <p class="subtitle" style="margin-bottom: 16px;">
+        Create a combined signature packet with all pages requiring signatures from multiple documents.
+        Duplicates are removed, and footers are added to identify each document.
+      </p>
+
+      <!-- Output Format Selector -->
+      <div class="output-format-row" id="shellFormatRow">
+        <label>Output Format:</label>
+        <select id="shellOutputFormat" class="output-format-select">
+          <option value="both">Both PDF and Word</option>
+          <option value="pdf">PDF Only</option>
+          <option value="docx">Word Only</option>
+        </select>
+      </div>
+
+      <!-- Drop Zone for Shell -->
+      <div class="drop-zone" id="shellDropZone">
+        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+        </svg>
+        <p class="drop-text">Drop documents here, or <span>browse</span></p>
+        <p class="drop-hint">Upload all documents for the transaction to create a combined signature shell</p>
+        <p class="file-count" id="shellFileCount"></p>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="shellProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <g class="front-legs">
+                <rect x="62" y="46" width="5" height="14" rx="2"/>
+                <rect x="54" y="46" width="5" height="14" rx="2"/>
+              </g>
+              <g class="back-legs">
+                <rect x="38" y="46" width="5" height="14" rx="2"/>
+                <rect x="30" y="46" width="5" height="14" rx="2"/>
+              </g>
+            </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+          </div>
+        </div>
+        <p class="progress-text" id="shellProgressText">Processing...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="shellProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Complete -->
+      <div class="complete" id="shellComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Complete</h2>
+        <p id="shellResultText">Created signature packet shell</p>
+        <button class="btn btn-primary" id="shellDownloadBtn">Download ZIP</button>
+        <button class="btn btn-secondary" id="shellResetBtn">Process Another</button>
+      </div>
+
+      <!-- Error -->
+      <div class="error" id="shellError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="shellErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="shellRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End packetshellTab -->
 
     <!-- Execution Version Tab -->
     <div id="executionTab" style="display: none;">
@@ -3307,6 +3591,88 @@
 
   <script>
     const { ipcRenderer } = require('electron');
+
+    // ========== VERSION ENFORCEMENT ==========
+    // Check for mandatory updates with grace period
+    const versionEnforcementModal = document.getElementById('versionEnforcementModal');
+    const versionEnforcementBox = document.getElementById('versionEnforcementBox');
+    const versionEnforcementIcon = document.getElementById('versionEnforcementIcon');
+    const versionEnforcementTitle = document.getElementById('versionEnforcementTitle');
+    const versionEnforcementMessage = document.getElementById('versionEnforcementMessage');
+    const versionEnforcementCountdown = document.getElementById('versionEnforcementCountdown');
+    const versionEnforcementCurrent = document.getElementById('versionEnforcementCurrent');
+    const versionEnforcementRequired = document.getElementById('versionEnforcementRequired');
+    const versionEnforcementUpdateBtn = document.getElementById('versionEnforcementUpdateBtn');
+    const versionEnforcementContinueBtn = document.getElementById('versionEnforcementContinueBtn');
+
+    let versionEnforcementStatus = null;
+    let appBlocked = false;
+
+    async function checkVersionEnforcement() {
+      try {
+        versionEnforcementStatus = await ipcRenderer.invoke('check-version-enforcement');
+
+        if (!versionEnforcementStatus || !versionEnforcementStatus.enforced) {
+          // No enforcement needed
+          return;
+        }
+
+        // Update UI with version info
+        versionEnforcementCurrent.textContent = versionEnforcementStatus.currentVersion || '?';
+        versionEnforcementRequired.textContent = versionEnforcementStatus.minimumVersion || '?';
+
+        if (versionEnforcementStatus.status === 'blocked') {
+          // Grace period expired - block the app
+          appBlocked = true;
+          versionEnforcementBox.classList.remove('grace');
+          versionEnforcementBox.classList.add('blocked');
+          versionEnforcementIcon.textContent = '🚫';
+          versionEnforcementTitle.textContent = 'Update Required';
+          versionEnforcementMessage.textContent = versionEnforcementStatus.message;
+          versionEnforcementCountdown.textContent = '0';
+          versionEnforcementCountdown.parentElement.querySelector('.version-enforcement-countdown-label').textContent = 'Grace period expired';
+          versionEnforcementContinueBtn.disabled = true;
+          versionEnforcementContinueBtn.textContent = 'App Locked';
+          versionEnforcementModal.classList.add('visible');
+        } else if (versionEnforcementStatus.status === 'grace') {
+          // In grace period - show warning but allow continue
+          versionEnforcementBox.classList.remove('blocked');
+          versionEnforcementBox.classList.add('grace');
+          versionEnforcementIcon.textContent = '⚠️';
+          versionEnforcementTitle.textContent = 'Update Available';
+          versionEnforcementMessage.textContent = versionEnforcementStatus.message;
+          versionEnforcementCountdown.textContent = versionEnforcementStatus.daysRemaining;
+          versionEnforcementContinueBtn.disabled = false;
+          versionEnforcementContinueBtn.textContent = 'Continue Anyway';
+          versionEnforcementModal.classList.add('visible');
+        }
+      } catch (e) {
+        console.error('Version enforcement check failed:', e);
+        // On error, allow app to work normally
+      }
+    }
+
+    // Handle Update Now button
+    versionEnforcementUpdateBtn.addEventListener('click', async () => {
+      // Trigger the update check and download
+      const result = await ipcRenderer.invoke('check-for-updates');
+      if (result.success) {
+        // Close the modal if update process started
+        versionEnforcementModal.classList.remove('visible');
+      }
+    });
+
+    // Handle Continue Anyway button (only in grace period)
+    versionEnforcementContinueBtn.addEventListener('click', async () => {
+      if (appBlocked) return; // Don't allow if blocked
+
+      // Dismiss the warning and continue
+      await ipcRenderer.invoke('dismiss-update-warning');
+      versionEnforcementModal.classList.remove('visible');
+    });
+
+    // Check version enforcement on startup (after a short delay to let app initialize)
+    setTimeout(checkVersionEnforcement, 1000);
 
     // ========== DISCLAIMER MODAL ==========
     const disclaimerModal = document.getElementById('disclaimerModal');
@@ -4136,6 +4502,10 @@
 
       try {
         const startTime = Date.now();
+        // Add output format to the input
+        const outputFormat = document.getElementById('packetsOutputFormat').value;
+        input.output_format = outputFormat;
+
         const result = await ipcRenderer.invoke('process-folder', input);
         currentResult = result;
         progressText.textContent = 'Creating ZIP file...';
@@ -4187,6 +4557,127 @@
       packetsPaths = [];
       packetsFileCount.textContent = '';
       showState('idle');
+    });
+
+    // ========== PACKET SHELL TAB ==========
+    const shellDropZone = document.getElementById('shellDropZone');
+    const shellProcessing = document.getElementById('shellProcessing');
+    const shellComplete = document.getElementById('shellComplete');
+    const shellError = document.getElementById('shellError');
+    const shellProgressText = document.getElementById('shellProgressText');
+    const shellProgressFill = document.getElementById('shellProgressFill');
+    const shellResultText = document.getElementById('shellResultText');
+    const shellErrorText = document.getElementById('shellErrorText');
+    const shellDownloadBtn = document.getElementById('shellDownloadBtn');
+    const shellResetBtn = document.getElementById('shellResetBtn');
+    const shellRetryBtn = document.getElementById('shellRetryBtn');
+    const shellFileCount = document.getElementById('shellFileCount');
+    const shellOutputFormat = document.getElementById('shellOutputFormat');
+
+    let shellResult = null;
+    let shellZipPath = null;
+    let shellPaths = [];
+
+    function showShellState(state) {
+      shellDropZone.style.display = state === 'idle' ? 'flex' : 'none';
+      document.getElementById('shellFormatRow').style.display = state === 'idle' ? 'flex' : 'none';
+      shellProcessing.classList.toggle('visible', state === 'processing');
+      shellComplete.classList.toggle('visible', state === 'complete');
+      shellError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateShellFileCount() {
+      if (shellPaths.length === 0) {
+        shellFileCount.textContent = '';
+      } else {
+        shellFileCount.textContent = `${shellPaths.length} file${shellPaths.length !== 1 ? 's' : ''} selected`;
+      }
+    }
+
+    shellDropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      shellDropZone.classList.add('active');
+    });
+
+    shellDropZone.addEventListener('dragleave', () => {
+      shellDropZone.classList.remove('active');
+    });
+
+    shellDropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      shellDropZone.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        shellPaths = Array.from(files)
+          .filter(f => f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.docx'))
+          .map(f => f.path);
+        if (shellPaths.length > 0) {
+          updateShellFileCount();
+          await processPacketShell();
+        }
+      }
+    });
+
+    shellDropZone.addEventListener('click', async () => {
+      const filePaths = await ipcRenderer.invoke('select-documents-multiple');
+      if (filePaths && filePaths.length > 0) {
+        shellPaths = filePaths;
+        updateShellFileCount();
+        await processPacketShell();
+      }
+    });
+
+    async function processPacketShell() {
+      showShellState('processing');
+      shellProgressFill.style.width = '0%';
+      shellProgressText.textContent = 'Starting...';
+
+      try {
+        const startTime = Date.now();
+        const outputFormat = shellOutputFormat.value;
+
+        const result = await ipcRenderer.invoke('generate-packet-shell', {
+          files: shellPaths,
+          output_format: outputFormat
+        });
+
+        shellResult = result;
+        shellProgressText.textContent = 'Creating ZIP file...';
+        shellZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
+        shellResultText.textContent = `Created packet shell with ${result.totalPages} signature page${result.totalPages !== 1 ? 's' : ''}`;
+
+        // Log usage
+        await logUsage('packet_shell', 'generate', shellPaths.length, result.totalPages || 0, Date.now() - startTime);
+
+        showShellState('complete');
+      } catch (err) {
+        shellErrorText.textContent = err.message;
+        showShellState('error');
+      }
+    }
+
+    // Listen for shell progress
+    ipcRenderer.on('shell-progress', (event, data) => {
+      shellProgressText.textContent = data.message;
+      shellProgressFill.style.width = data.percent + '%';
+    });
+
+    shellDownloadBtn.addEventListener('click', async () => {
+      if (shellZipPath) await ipcRenderer.invoke('save-zip', shellZipPath, 'EmmaNeigh-Packet-Shell.zip');
+    });
+
+    shellResetBtn.addEventListener('click', () => {
+      shellResult = null;
+      shellZipPath = null;
+      shellPaths = [];
+      shellFileCount.textContent = '';
+      showShellState('idle');
+    });
+
+    shellRetryBtn.addEventListener('click', () => {
+      shellPaths = [];
+      shellFileCount.textContent = '';
+      showShellState('idle');
     });
 
     // ========== EXECUTION VERSION TAB ==========

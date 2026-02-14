@@ -39,6 +39,7 @@ jobs:
           pyinstaller --onefile --name checklist_updater checklist_updater.py
           pyinstaller --onefile --name punchlist_generator punchlist_generator.py
           pyinstaller --onefile --name email_nl_search email_nl_search.py
+          pyinstaller --onefile --name packet_shell_generator packet_shell_generator.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -64,6 +65,7 @@ jobs:
           cp desktop-app/python/dist/checklist_updater.exe desktop-app/resources/win/
           cp desktop-app/python/dist/punchlist_generator.exe desktop-app/resources/win/
           cp desktop-app/python/dist/email_nl_search.exe desktop-app/resources/win/
+          cp desktop-app/python/dist/packet_shell_generator.exe desktop-app/resources/win/
         shell: bash
 
       - name: Build Electron app (NSIS + Portable)
@@ -114,6 +116,7 @@ jobs:
           pyinstaller --onefile --name checklist_updater checklist_updater.py
           pyinstaller --onefile --name punchlist_generator punchlist_generator.py
           pyinstaller --onefile --name email_nl_search email_nl_search.py
+          pyinstaller --onefile --name packet_shell_generator packet_shell_generator.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -139,6 +142,7 @@ jobs:
           cp desktop-app/python/dist/checklist_updater desktop-app/resources/mac/
           cp desktop-app/python/dist/punchlist_generator desktop-app/resources/mac/
           cp desktop-app/python/dist/email_nl_search desktop-app/resources/mac/
+          cp desktop-app/python/dist/packet_shell_generator desktop-app/resources/mac/
           chmod +x desktop-app/resources/mac/signature_packets
           chmod +x desktop-app/resources/mac/execution_version
           chmod +x desktop-app/resources/mac/checklist_parser
@@ -150,6 +154,7 @@ jobs:
           chmod +x desktop-app/resources/mac/checklist_updater
           chmod +x desktop-app/resources/mac/punchlist_generator
           chmod +x desktop-app/resources/mac/email_nl_search
+          chmod +x desktop-app/resources/mac/packet_shell_generator
 
       - name: Build Electron app
         run: |
