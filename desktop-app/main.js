@@ -230,6 +230,12 @@ app.whenReady().then(async () => {
         mainWindow.webContents.send('update-error', err.message);
       }
     });
+
+    autoUpdater.on('update-not-available', (info) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('update-not-available', info);
+      }
+    });
   }
 });
 
@@ -240,6 +246,25 @@ ipcMain.handle('download-update', async () => {
     return true;
   }
   return false;
+});
+
+// Manual check for updates
+ipcMain.handle('check-for-updates', async () => {
+  if (!autoUpdater) {
+    return { success: false, error: 'Auto-updater not available (development mode)' };
+  }
+
+  try {
+    await autoUpdater.checkForUpdates();
+    return { success: true, checking: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get app version
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
 });
 
 app.on('window-all-closed', () => {

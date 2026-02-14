@@ -1566,6 +1566,37 @@
       text-decoration: underline;
     }
 
+    /* Update Check Section */
+    .update-check-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .update-check-status {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .update-check-status.success {
+      color: #22c55e;
+    }
+
+    .update-check-status.error {
+      color: #ef4444;
+    }
+
+    .current-version {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+
+    .current-version strong {
+      color: #fff;
+    }
+
     /* Settings button in header */
     .settings-btn-header {
       background: transparent;
@@ -2317,6 +2348,15 @@
           Get your API key from <a href="#" id="anthropicLink">console.anthropic.com</a>.
           Your key is encrypted and stored locally.
         </p>
+      </div>
+
+      <div class="settings-section">
+        <h3>Updates</h3>
+        <p class="current-version">Current version: <strong id="currentVersion">...</strong></p>
+        <div class="update-check-row">
+          <button class="settings-btn settings-btn-secondary" id="checkUpdatesBtn">Check for Updates</button>
+          <span class="update-check-status" id="updateCheckStatus"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -3514,6 +3554,47 @@
     anthropicLink.addEventListener('click', (e) => {
       e.preventDefault();
       require('electron').shell.openExternal('https://console.anthropic.com/');
+    });
+
+    // ========== UPDATE CHECK ==========
+    const checkUpdatesBtn = document.getElementById('checkUpdatesBtn');
+    const updateCheckStatus = document.getElementById('updateCheckStatus');
+    const currentVersionEl = document.getElementById('currentVersion');
+
+    // Load current version on startup
+    ipcRenderer.invoke('get-app-version').then(version => {
+      currentVersionEl.textContent = version;
+    }).catch(() => {
+      currentVersionEl.textContent = 'Unknown';
+    });
+
+    // Check for updates button
+    checkUpdatesBtn.addEventListener('click', async () => {
+      checkUpdatesBtn.disabled = true;
+      updateCheckStatus.textContent = 'Checking...';
+      updateCheckStatus.className = 'update-check-status';
+
+      try {
+        const result = await ipcRenderer.invoke('check-for-updates');
+        if (!result.success) {
+          updateCheckStatus.textContent = result.error || 'Check failed';
+          updateCheckStatus.className = 'update-check-status error';
+        }
+        // If successful, wait for update-available or update-not-available events
+      } catch (e) {
+        updateCheckStatus.textContent = 'Error: ' + e.message;
+        updateCheckStatus.className = 'update-check-status error';
+      }
+
+      checkUpdatesBtn.disabled = false;
+    });
+
+    // Handle update-not-available event
+    ipcRenderer.on('update-not-available', () => {
+      if (updateCheckStatus) {
+        updateCheckStatus.textContent = 'You are up to date!';
+        updateCheckStatus.className = 'update-check-status success';
+      }
     });
 
     // Helper function to log usage (call this after each feature completes)
