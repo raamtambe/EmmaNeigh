@@ -54,7 +54,7 @@ jobs:
       - name: Generate app icons from SVG
         run: |
           cd desktop-app
-          npm install --save-dev sharp sharp-ico @aspect-dev/sips
+          npm install --save-dev sharp png-to-ico
           node generate-icons.js
         shell: bash
 

@@ -1,6 +1,6 @@
 /**
  * Generate app icons from SVG for Windows (.ico) and Mac (.icns)
- * Requires: npm install sharp sharp-ico
+ * Requires: npm install sharp png-to-ico
  */
 
 const fs = require('fs');
@@ -14,15 +14,21 @@ async function generateIcons() {
   try {
     sharp = require('sharp');
   } catch (e) {
-    console.log('sharp not available, skipping PNG generation');
+    console.log('sharp not available, skipping icon generation');
     return;
   }
 
   const svgPath = path.join(__dirname, 'icon.svg');
+
+  if (!fs.existsSync(svgPath)) {
+    console.log('icon.svg not found, skipping icon generation');
+    return;
+  }
+
   const svgBuffer = fs.readFileSync(svgPath);
 
   // Icon sizes needed
-  const sizes = [16, 32, 48, 64, 128, 256, 512, 1024];
+  const sizes = [16, 32, 48, 64, 128, 256, 512];
 
   // Create build directory
   const buildDir = path.join(__dirname, 'build');
@@ -33,6 +39,8 @@ async function generateIcons() {
   // Generate PNGs for each size
   console.log('Generating PNG files...');
   const pngBuffers = {};
+  const pngPaths = [];
+
   for (const size of sizes) {
     try {
       const pngBuffer = await sharp(svgBuffer)
@@ -43,54 +51,44 @@ async function generateIcons() {
       const pngPath = path.join(buildDir, `icon_${size}x${size}.png`);
       fs.writeFileSync(pngPath, pngBuffer);
       pngBuffers[size] = pngBuffer;
+      pngPaths.push(pngPath);
       console.log(`  Created ${size}x${size} PNG`);
     } catch (e) {
       console.log(`  Failed to create ${size}x${size}: ${e.message}`);
     }
   }
 
-  // Generate ICO for Windows
+  // Generate ICO for Windows using png-to-ico
   try {
-    const toIco = require('sharp-ico').toIco;
-    if (toIco) {
-      // Use sizes appropriate for ICO (16, 32, 48, 256)
-      const icoSizes = [16, 32, 48, 256].filter(s => pngBuffers[s]);
-      const icoInputs = icoSizes.map(s => pngBuffers[s]);
+    const pngToIco = require('png-to-ico');
 
-      if (icoInputs.length > 0) {
-        const icoBuffer = await toIco(icoInputs);
-        fs.writeFileSync(path.join(__dirname, 'icon.ico'), icoBuffer);
-        console.log('Created icon.ico');
-      }
+    // Use 256, 48, 32, 16 for ICO
+    const icoPngs = [256, 48, 32, 16]
+      .filter(s => pngBuffers[s])
+      .map(s => path.join(buildDir, `icon_${s}x${s}.png`));
+
+    if (icoPngs.length > 0) {
+      const icoBuffer = await pngToIco(icoPngs);
+      fs.writeFileSync(path.join(__dirname, 'icon.ico'), icoBuffer);
+      console.log('Created icon.ico');
     }
   } catch (e) {
-    console.log('sharp-ico not available, creating ICO manually...');
-    // Fallback: just copy the 256px PNG as ico (electron-builder can handle this)
+    console.log('png-to-ico failed, creating simple ICO:', e.message);
+    // Fallback: create simple ICO from 256px PNG
     if (pngBuffers[256]) {
-      // Create a simple ICO from 256px PNG using raw approach
-      try {
-        const ico = createSimpleIco(pngBuffers[256]);
-        fs.writeFileSync(path.join(__dirname, 'icon.ico'), ico);
-        console.log('Created icon.ico (simple)');
-      } catch (e2) {
-        console.log('Could not create ICO:', e2.message);
-      }
+      const ico = createSimpleIco(pngBuffers[256]);
+      fs.writeFileSync(path.join(__dirname, 'icon.ico'), ico);
+      console.log('Created icon.ico (simple fallback)');
     }
   }
 
-  // For Mac, electron-builder can use a 512x512 or 1024x1024 PNG
-  // Copy to icon.png for electron-builder to use
-  if (pngBuffers[512]) {
-    fs.writeFileSync(path.join(__dirname, 'icon.png'), pngBuffers[512]);
-    console.log('Created icon.png (512x512)');
-  } else if (pngBuffers[256]) {
+  // Copy 256px PNG as icon.png for electron-builder
+  if (pngBuffers[256]) {
     fs.writeFileSync(path.join(__dirname, 'icon.png'), pngBuffers[256]);
     console.log('Created icon.png (256x256)');
   }
 
-  // For Mac ICNS, electron-builder can generate from PNG
-  // But we can help by providing the right structure
-  // Create iconset folder for Mac
+  // For Mac, create iconset folder structure
   const iconsetDir = path.join(buildDir, 'icon.iconset');
   if (!fs.existsSync(iconsetDir)) {
     fs.mkdirSync(iconsetDir);
@@ -107,7 +105,6 @@ async function generateIcons() {
     { size: 256, name: 'icon_256x256.png' },
     { size: 512, name: 'icon_256x256@2x.png' },
     { size: 512, name: 'icon_512x512.png' },
-    { size: 1024, name: 'icon_512x512@2x.png' },
   ];
 
   for (const { size, name } of macSizes) {
@@ -132,12 +129,8 @@ async function generateIcons() {
 }
 
 function createSimpleIco(pngBuffer) {
-  // Very basic ICO creation - just wraps PNG in ICO container
-  // ICO format: header + directory entries + image data
-
+  // Very basic ICO creation - wraps PNG in ICO container
   const imageSize = pngBuffer.length;
-  const width = 256; // Assuming 256x256
-  const height = 256;
 
   // ICO Header (6 bytes)
   const header = Buffer.alloc(6);
