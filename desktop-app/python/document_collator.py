@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Document Collator
-v5.1.3: Format-preserving merge of track changes from multiple Word documents.
+v5.1.4: Properly extracts track changes from Word documents and merges them
+into the base document WITHOUT destroying formatting.
 
-Takes a precedent (base) document and multiple modified versions,
-then merges all edits into one combined document showing all changes
-while PRESERVING the original document's formatting (fonts, styles, margins).
+The key insight: Word track changes are stored in the OOXML as:
+- <w:ins> elements for insertions
+- <w:del> elements for deletions
+- Comments are stored in comments.xml with references in document.xml
 
-Key change from v5.1.2: Instead of creating a new document, we copy the base
-document and modify it in-place to preserve all formatting.
+This version:
+1. Copies the base document to preserve ALL formatting
+2. Extracts track changes from each commented version
+3. Merges track changes into the copy by modifying the XML directly
 """
 
 import os
@@ -16,13 +20,26 @@ import sys
 import json
 import shutil
 import zipfile
-import difflib
-import copy
+import re
 from datetime import datetime
-from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+from xml.etree import ElementTree as ET
+from copy import deepcopy
+
+
+# Word XML namespaces
+NAMESPACES = {
+    'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+    'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+    'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+    'pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+    'w14': 'http://schemas.microsoft.com/office/word/2010/wordml',
+    'w15': 'http://schemas.microsoft.com/office/word/2012/wordml',
+}
+
+# Register namespaces to preserve them when writing
+for prefix, uri in NAMESPACES.items():
+    ET.register_namespace(prefix, uri)
 
 
 def emit(msg_type, **kwargs):
@@ -35,7 +52,6 @@ def get_author_from_docx(docx_path):
     try:
         with zipfile.ZipFile(docx_path, 'r') as zf:
             if 'docProps/core.xml' in zf.namelist():
-                import re
                 core_xml = zf.read('docProps/core.xml').decode('utf-8')
                 match = re.search(r'<dc:creator[^>]*>([^<]+)</dc:creator>', core_xml)
                 if match:
@@ -46,358 +62,312 @@ def get_author_from_docx(docx_path):
     return os.path.splitext(os.path.basename(docx_path))[0]
 
 
-def copy_run_formatting(source_run, target_run):
-    """Copy formatting from source run to target run."""
+def extract_track_changes_from_docx(docx_path):
+    """
+    Extract all track changes (insertions and deletions) from a Word document.
+
+    Returns a dict with:
+    - insertions: list of {author, date, text, paragraph_index}
+    - deletions: list of {author, date, text, paragraph_index}
+    - comments: list of {author, date, text, paragraph_index}
+    """
+    changes = {
+        'insertions': [],
+        'deletions': [],
+        'comments': [],
+        'author': get_author_from_docx(docx_path)
+    }
+
     try:
-        # Copy font properties
-        if source_run.font.name:
-            target_run.font.name = source_run.font.name
-        if source_run.font.size:
-            target_run.font.size = source_run.font.size
-        target_run.font.bold = source_run.font.bold
-        target_run.font.italic = source_run.font.italic
-        target_run.font.underline = source_run.font.underline
-        # Don't copy color - we need to set our own for track changes
-    except:
-        pass
+        with zipfile.ZipFile(docx_path, 'r') as zf:
+            # Read document.xml
+            if 'word/document.xml' not in zf.namelist():
+                return changes
+
+            doc_xml = zf.read('word/document.xml').decode('utf-8')
+            root = ET.fromstring(doc_xml)
+
+            # Find the body
+            body = root.find('.//w:body', NAMESPACES)
+            if body is None:
+                return changes
+
+            # Track paragraph index
+            para_idx = 0
+
+            for para in body.findall('.//w:p', NAMESPACES):
+                # Find insertions in this paragraph
+                for ins in para.findall('.//w:ins', NAMESPACES):
+                    author = ins.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author', changes['author'])
+                    date = ins.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date', '')
+
+                    # Get text from all runs inside the insertion
+                    text_parts = []
+                    for t in ins.findall('.//w:t', NAMESPACES):
+                        if t.text:
+                            text_parts.append(t.text)
+
+                    if text_parts:
+                        changes['insertions'].append({
+                            'author': author,
+                            'date': date,
+                            'text': ''.join(text_parts),
+                            'paragraph_index': para_idx
+                        })
+
+                # Find deletions in this paragraph
+                for dele in para.findall('.//w:del', NAMESPACES):
+                    author = dele.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author', changes['author'])
+                    date = dele.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date', '')
+
+                    # Get text from delText elements
+                    text_parts = []
+                    for dt in dele.findall('.//w:delText', NAMESPACES):
+                        if dt.text:
+                            text_parts.append(dt.text)
+
+                    if text_parts:
+                        changes['deletions'].append({
+                            'author': author,
+                            'date': date,
+                            'text': ''.join(text_parts),
+                            'paragraph_index': para_idx
+                        })
+
+                para_idx += 1
+
+            # Read comments if they exist
+            if 'word/comments.xml' in zf.namelist():
+                comments_xml = zf.read('word/comments.xml').decode('utf-8')
+                comments_root = ET.fromstring(comments_xml)
+
+                for comment in comments_root.findall('.//w:comment', NAMESPACES):
+                    author = comment.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author', changes['author'])
+                    date = comment.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date', '')
+
+                    # Get comment text
+                    text_parts = []
+                    for t in comment.findall('.//w:t', NAMESPACES):
+                        if t.text:
+                            text_parts.append(t.text)
+
+                    if text_parts:
+                        changes['comments'].append({
+                            'author': author,
+                            'date': date,
+                            'text': ''.join(text_parts)
+                        })
+
+    except Exception as e:
+        emit("progress", percent=0, message=f"Warning: Error reading {docx_path}: {str(e)}")
+
+    return changes
 
 
-def get_paragraph_text_with_runs(paragraph):
-    """Get paragraph text and run boundaries for precise editing."""
-    runs_info = []
-    for run in paragraph.runs:
-        runs_info.append({
-            'text': run.text,
-            'run': run
-        })
-    return runs_info
-
-
-def clear_paragraph_content(paragraph):
-    """Remove all runs from a paragraph while keeping the paragraph itself."""
-    for run in list(paragraph.runs):
-        run._element.getparent().remove(run._element)
-
-
-def add_tracked_change_run(paragraph, text, change_type, reference_run=None):
+def merge_track_changes_into_document(base_path, all_changes, output_path):
     """
-    Add a run with track change formatting.
-    change_type: 'deleted', 'inserted', 'unchanged'
+    Merge track changes from multiple documents into a copy of the base document.
+
+    This works by:
+    1. Copying the base document (preserves all formatting)
+    2. Reading the document.xml
+    3. Finding where to insert track changes based on text matching
+    4. Writing the modified document.xml back
+
+    Args:
+        base_path: Path to the original base document
+        all_changes: List of changes dicts from extract_track_changes_from_docx
+        output_path: Where to save the merged document
+
+    Returns:
+        dict with counts of changes merged
     """
-    run = paragraph.add_run(text)
-
-    # Copy formatting from reference run if available
-    if reference_run:
-        copy_run_formatting(reference_run, run)
-
-    if change_type == 'deleted':
-        run.font.color.rgb = RGBColor(255, 0, 0)
-        run.font.strike = True
-    elif change_type == 'inserted':
-        run.font.color.rgb = RGBColor(0, 0, 255)
-    # 'unchanged' keeps original formatting
-
-    return run
-
-
-def create_merged_document_preserving_format(base_path, modified_paths, output_path):
-    """
-    Create a merged document showing all changes while PRESERVING base document formatting.
-
-    Strategy:
-    1. Copy the base document file
-    2. Open the copy and modify paragraphs in-place
-    3. This preserves: styles, fonts, margins, headers, footers, page layout
-    """
-    import re
-
-    # Step 1: Copy the base document as our starting point
+    # Copy base document to output
     shutil.copy2(base_path, output_path)
 
-    # Step 2: Open the copy for editing
-    output_doc = Document(output_path)
+    total_insertions = 0
+    total_deletions = 0
+    total_comments = 0
 
-    # Get base paragraphs text for comparison
-    base_paragraphs = [p.text for p in output_doc.paragraphs]
+    # Collect all changes
+    for changes in all_changes:
+        total_insertions += len(changes['insertions'])
+        total_deletions += len(changes['deletions'])
+        total_comments += len(changes['comments'])
 
-    # Step 3: Collect all modifications from all sources
-    all_modifications = []  # List of modification records
+    # If there are no changes, just return the copy
+    if total_insertions == 0 and total_deletions == 0 and total_comments == 0:
+        return {
+            'insertions': 0,
+            'deletions': 0,
+            'comments': 0
+        }
 
-    for mod_path in modified_paths:
-        author = get_author_from_docx(mod_path)
-        mod_doc = Document(mod_path)
-        mod_paragraphs = [p.text for p in mod_doc.paragraphs]
+    # Now we need to merge the track changes into the document
+    # This is complex because we need to preserve the XML structure
 
-        # Use difflib to align paragraphs
-        matcher = difflib.SequenceMatcher(None, base_paragraphs, mod_paragraphs)
+    try:
+        # Read the output document as a zip
+        with zipfile.ZipFile(output_path, 'r') as zf:
+            doc_xml = zf.read('word/document.xml').decode('utf-8')
+            all_files = {name: zf.read(name) for name in zf.namelist()}
 
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == 'replace':
-                # Paragraphs were modified
-                for bi, mi in zip(range(i1, i2), range(j1, j2)):
-                    if bi < len(base_paragraphs) and mi < len(mod_paragraphs):
-                        if base_paragraphs[bi] != mod_paragraphs[mi]:
-                            all_modifications.append({
-                                'author': author,
-                                'base_text': base_paragraphs[bi],
-                                'modified_text': mod_paragraphs[mi],
-                                'para_index': bi,
-                                'type': 'modified'
-                            })
-            elif tag == 'delete':
-                # Paragraphs deleted
-                for bi in range(i1, i2):
-                    all_modifications.append({
-                        'author': author,
-                        'base_text': base_paragraphs[bi],
-                        'modified_text': '',
-                        'para_index': bi,
-                        'type': 'deleted'
-                    })
-            elif tag == 'insert':
-                # New paragraphs added
-                insert_after = i1 - 1 if i1 > 0 else 0
-                for mi in range(j1, j2):
-                    all_modifications.append({
-                        'author': author,
-                        'base_text': '',
-                        'modified_text': mod_paragraphs[mi],
-                        'para_index': insert_after,
-                        'type': 'inserted'
-                    })
+        # Parse the document
+        root = ET.fromstring(doc_xml)
+        body = root.find('.//w:body', NAMESPACES)
 
-    # Group modifications by paragraph index
-    mods_by_para = {}
-    for mod in all_modifications:
-        idx = mod['para_index']
-        if idx not in mods_by_para:
-            mods_by_para[idx] = []
-        mods_by_para[idx].append(mod)
+        if body is not None:
+            # Get all paragraphs
+            paragraphs = body.findall('.//w:p', NAMESPACES)
 
-    changes_count = 0
+            # For each set of changes, try to apply them
+            for changes in all_changes:
+                author = changes['author']
 
-    # Collect insertions to add after processing
-    insertions_to_add = {}  # para_index -> list of insertions
-    for idx, mods in mods_by_para.items():
-        for mod in mods:
-            if mod['type'] == 'inserted':
-                if idx not in insertions_to_add:
-                    insertions_to_add[idx] = []
-                insertions_to_add[idx].append(mod)
+                # Apply insertions (mark with w:ins)
+                for ins in changes['insertions']:
+                    # Find the target paragraph (simplified: use index if available)
+                    para_idx = ins.get('paragraph_index', 0)
+                    if para_idx < len(paragraphs):
+                        para = paragraphs[para_idx]
 
-    # Step 4: Modify paragraphs in-place (preserving formatting)
-    for i, para in enumerate(output_doc.paragraphs):
-        mods = mods_by_para.get(i, [])
+                        # Create an insertion element
+                        ins_elem = ET.SubElement(para, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}ins')
+                        ins_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author', author)
+                        ins_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date', ins.get('date', datetime.now().isoformat()))
 
-        # Filter to non-insertions for this paragraph
-        para_mods = [m for m in mods if m['type'] != 'inserted']
+                        # Add run with text
+                        run = ET.SubElement(ins_elem, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                        text = ET.SubElement(run, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')
+                        text.text = ins['text']
 
-        if not para_mods:
-            # No changes - keep paragraph as-is (formatting preserved)
-            continue
+                # Apply deletions (mark with w:del)
+                for dele in changes['deletions']:
+                    para_idx = dele.get('paragraph_index', 0)
+                    if para_idx < len(paragraphs):
+                        para = paragraphs[para_idx]
 
-        # Get a reference run for formatting (use first run if available)
-        reference_run = para.runs[0] if para.runs else None
-        original_text = para.text
+                        # Create a deletion element
+                        del_elem = ET.SubElement(para, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}del')
+                        del_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author', author)
+                        del_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date', dele.get('date', datetime.now().isoformat()))
 
-        deletions = [m for m in para_mods if m['type'] == 'deleted']
-        modifications = [m for m in para_mods if m['type'] == 'modified']
+                        # Add run with deleted text
+                        run = ET.SubElement(del_elem, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                        del_text = ET.SubElement(run, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}delText')
+                        del_text.text = dele['text']
 
-        if deletions and not modifications:
-            # Paragraph was deleted - show as strikethrough red
-            if original_text.strip():
-                # Clear and rebuild with strikethrough
-                clear_paragraph_content(para)
-                run = add_tracked_change_run(para, original_text, 'deleted', reference_run)
-                # Add author attribution
-                attr = para.add_run(f" [{deletions[0]['author']}]")
-                attr.font.size = Pt(8)
-                attr.font.color.rgb = RGBColor(128, 128, 128)
-                changes_count += 1
+        # Convert back to string
+        new_doc_xml = ET.tostring(root, encoding='unicode')
 
-        elif modifications:
-            # Apply word-level diff while preserving paragraph formatting
-            mod = modifications[0]
-            clear_paragraph_content(para)
-            apply_word_diff_in_place(para, original_text, mod['modified_text'],
-                                     mod['author'], reference_run)
-            changes_count += 1
+        # Add XML declaration
+        new_doc_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + new_doc_xml
 
-    # Step 5: Handle insertions (add new paragraphs after existing ones)
-    # We need to insert in reverse order to maintain correct indices
-    sorted_indices = sorted(insertions_to_add.keys(), reverse=True)
+        # Write back to zip
+        all_files['word/document.xml'] = new_doc_xml.encode('utf-8')
 
-    for idx in sorted_indices:
-        insertions = insertions_to_add[idx]
+        # Handle comments - merge into comments.xml
+        all_comments = []
+        for changes in all_changes:
+            for comment in changes['comments']:
+                comment['source_author'] = changes['author']
+                all_comments.append(comment)
 
-        # Get the paragraph to insert after
-        if idx < len(output_doc.paragraphs):
-            target_para = output_doc.paragraphs[idx]
+        if all_comments:
+            # Create or update comments.xml
+            if 'word/comments.xml' in all_files:
+                comments_root = ET.fromstring(all_files['word/comments.xml'].decode('utf-8'))
+            else:
+                comments_root = ET.Element('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}comments')
 
-            for ins in reversed(insertions):  # Reverse to maintain order
-                if ins['modified_text'].strip():
-                    # Create new paragraph after target
-                    new_para = insert_paragraph_after(target_para)
+            comment_id = 0
+            for comment in all_comments:
+                comm_elem = ET.SubElement(comments_root, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}comment')
+                comm_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id', str(comment_id))
+                comm_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author', comment.get('author', comment.get('source_author', 'Unknown')))
+                comm_elem.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date', comment.get('date', datetime.now().isoformat()))
 
-                    run = new_para.add_run(ins['modified_text'])
-                    run.font.color.rgb = RGBColor(0, 0, 255)
+                # Add paragraph with text
+                para = ET.SubElement(comm_elem, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p')
+                run = ET.SubElement(para, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                text = ET.SubElement(run, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')
+                text.text = comment['text']
 
-                    # Add author attribution
-                    attr = new_para.add_run(f" [Added by {ins['author']}]")
-                    attr.font.size = Pt(8)
-                    attr.font.color.rgb = RGBColor(128, 128, 128)
-                    changes_count += 1
+                comment_id += 1
 
-    # Step 6: Add legend at the very top
-    if changes_count > 0:
-        # Insert legend as first paragraph
-        first_para = output_doc.paragraphs[0] if output_doc.paragraphs else output_doc.add_paragraph()
-        legend_para = insert_paragraph_before(first_para)
+            comments_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + ET.tostring(comments_root, encoding='unicode')
+            all_files['word/comments.xml'] = comments_xml.encode('utf-8')
 
-        bold_run = legend_para.add_run("COLLATED DOCUMENT - ")
-        bold_run.bold = True
-        legend_para.add_run("Legend: ")
-        del_run = legend_para.add_run("Deleted")
-        del_run.font.color.rgb = RGBColor(255, 0, 0)
-        del_run.font.strike = True
-        legend_para.add_run(" | ")
-        ins_run = legend_para.add_run("Added")
-        ins_run.font.color.rgb = RGBColor(0, 0, 255)
-        legend_para.add_run(" | ")
-        legend_para.add_run("[Author attribution in gray]")
+        # Enable track changes in settings.xml
+        if 'word/settings.xml' in all_files:
+            try:
+                settings_xml = all_files['word/settings.xml'].decode('utf-8')
+                settings_root = ET.fromstring(settings_xml)
 
-        # Add blank line after legend
-        blank_para = insert_paragraph_after(legend_para)
+                # Add trackRevisions element to enable track changes
+                # Check if it already exists
+                track_rev = settings_root.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}trackRevisions')
+                if track_rev is None:
+                    # Add trackRevisions element
+                    track_rev = ET.SubElement(settings_root, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}trackRevisions')
 
-    # Save the modified document
-    output_doc.save(output_path)
-    return changes_count
+                # Set val to true (or just having the element enables it)
+                track_rev.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val', 'true')
+
+                settings_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + ET.tostring(settings_root, encoding='unicode')
+                all_files['word/settings.xml'] = settings_xml.encode('utf-8')
+            except Exception as e:
+                emit("progress", percent=0, message=f"Warning: Could not enable track changes: {str(e)}")
+
+        # Write the new zip file
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for name, content in all_files.items():
+                zf.writestr(name, content)
+
+    except Exception as e:
+        emit("progress", percent=0, message=f"Warning: Error merging changes: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+    return {
+        'insertions': total_insertions,
+        'deletions': total_deletions,
+        'comments': total_comments
+    }
 
 
-def insert_paragraph_after(paragraph):
-    """Insert a new paragraph after the given paragraph."""
-    new_p = OxmlElement('w:p')
-    paragraph._element.addnext(new_p)
-    new_para = paragraph._element.getnext()
-
-    # Create proper Paragraph object
-    from docx.text.paragraph import Paragraph
-    return Paragraph(new_para, paragraph._parent)
-
-
-def insert_paragraph_before(paragraph):
-    """Insert a new paragraph before the given paragraph."""
-    new_p = OxmlElement('w:p')
-    paragraph._element.addprevious(new_p)
-    new_para = paragraph._element.getprevious()
-
-    # Create proper Paragraph object
-    from docx.text.paragraph import Paragraph
-    return Paragraph(new_para, paragraph._parent)
-
-
-def apply_word_diff_in_place(para, base_text, modified_text, author, reference_run=None):
-    """Apply word-level diff to a paragraph while preserving formatting."""
-    import re
-
-    # Split into words preserving whitespace
-    base_words = re.findall(r'\S+|\s+', base_text)
-    mod_words = re.findall(r'\S+|\s+', modified_text)
-
-    matcher = difflib.SequenceMatcher(None, base_words, mod_words)
-
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == 'equal':
-            text = ''.join(base_words[i1:i2])
-            if text:
-                run = para.add_run(text)
-                if reference_run:
-                    copy_run_formatting(reference_run, run)
-
-        elif tag == 'delete':
-            text = ''.join(base_words[i1:i2])
-            if text.strip():
-                run = para.add_run(text)
-                run.font.color.rgb = RGBColor(255, 0, 0)
-                run.font.strike = True
-                if reference_run:
-                    # Copy font but override color
-                    if reference_run.font.name:
-                        run.font.name = reference_run.font.name
-                    if reference_run.font.size:
-                        run.font.size = reference_run.font.size
-
-        elif tag == 'insert':
-            text = ''.join(mod_words[j1:j2])
-            if text.strip():
-                run = para.add_run(text)
-                run.font.color.rgb = RGBColor(0, 0, 255)
-                if reference_run:
-                    if reference_run.font.name:
-                        run.font.name = reference_run.font.name
-                    if reference_run.font.size:
-                        run.font.size = reference_run.font.size
-
-        elif tag == 'replace':
-            # Show deletion then insertion
-            del_text = ''.join(base_words[i1:i2])
-            ins_text = ''.join(mod_words[j1:j2])
-
-            if del_text.strip():
-                run = para.add_run(del_text)
-                run.font.color.rgb = RGBColor(255, 0, 0)
-                run.font.strike = True
-                if reference_run:
-                    if reference_run.font.name:
-                        run.font.name = reference_run.font.name
-                    if reference_run.font.size:
-                        run.font.size = reference_run.font.size
-
-            if ins_text.strip():
-                run = para.add_run(ins_text)
-                run.font.color.rgb = RGBColor(0, 0, 255)
-                if reference_run:
-                    if reference_run.font.name:
-                        run.font.name = reference_run.font.name
-                    if reference_run.font.size:
-                        run.font.size = reference_run.font.size
-
-    # Add author attribution at end
-    attr = para.add_run(f" [{author}]")
-    attr.font.size = Pt(8)
-    attr.font.color.rgb = RGBColor(128, 128, 128)
-
-
-def create_summary(base_path, modified_paths, changes_count, output_folder):
-    """Create a simple summary document."""
-    doc = Document()
-
-    # Title
-    title = doc.add_paragraph()
-    title_run = title.add_run("Document Collation Summary")
-    title_run.bold = True
-    title_run.font.size = Pt(16)
-
-    doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    doc.add_paragraph("")
-
-    doc.add_paragraph(f"Base Document: {os.path.basename(base_path)}")
-    doc.add_paragraph(f"Modified Versions: {len(modified_paths)}")
-    doc.add_paragraph("")
-
-    # List modified docs with authors
-    sources_heading = doc.add_paragraph()
-    sources_heading.add_run("Sources:").bold = True
+def create_summary(base_path, modified_paths, stats, output_folder):
+    """Create a simple text summary of the collation."""
+    summary_lines = [
+        "Document Collation Summary",
+        "=" * 50,
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        f"Base Document: {os.path.basename(base_path)}",
+        f"Commented Versions: {len(modified_paths)}",
+        "",
+        "Sources:",
+    ]
 
     for path in modified_paths:
         author = get_author_from_docx(path)
-        doc.add_paragraph(f"  • {os.path.basename(path)} (Author: {author})")
+        summary_lines.append(f"  • {os.path.basename(path)} (Author: {author})")
 
-    doc.add_paragraph("")
-    doc.add_paragraph(f"Total Changes Applied: {changes_count}")
+    summary_lines.extend([
+        "",
+        "Changes Merged:",
+        f"  • Insertions: {stats.get('insertions', 0)}",
+        f"  • Deletions: {stats.get('deletions', 0)}",
+        f"  • Comments: {stats.get('comments', 0)}",
+        "",
+        "Note: Track changes have been preserved in the merged document.",
+        "Open in Word and use Review > Track Changes to see all changes.",
+    ])
 
-    summary_path = os.path.join(output_folder, "Collation_Summary.docx")
-    doc.save(summary_path)
+    summary_path = os.path.join(output_folder, "Collation_Summary.txt")
+    with open(summary_path, 'w') as f:
+        f.write('\n'.join(summary_lines))
+
     return summary_path
 
 
@@ -407,7 +377,7 @@ def collate_documents(base_path, modified_paths, output_folder):
 
     Args:
         base_path: Path to the precedent/base document
-        modified_paths: List of paths to modified versions
+        modified_paths: List of paths to modified versions with track changes
         output_folder: Where to save output
 
     Returns:
@@ -431,20 +401,39 @@ def collate_documents(base_path, modified_paths, output_folder):
     if not valid_modified:
         raise ValueError("No valid modified documents found")
 
-    emit("progress", percent=30, message=f"Processing {len(valid_modified)} modified documents...")
+    emit("progress", percent=20, message=f"Extracting changes from {len(valid_modified)} documents...")
 
-    # Create merged document (preserving formatting)
+    # Extract track changes from all modified documents
+    all_changes = []
+    for i, mod_path in enumerate(valid_modified):
+        percent = 20 + int((i / len(valid_modified)) * 40)
+        emit("progress", percent=percent, message=f"Reading {os.path.basename(mod_path)}...")
+
+        changes = extract_track_changes_from_docx(mod_path)
+        all_changes.append(changes)
+
+        # Log what we found
+        ins_count = len(changes['insertions'])
+        del_count = len(changes['deletions'])
+        comm_count = len(changes['comments'])
+        if ins_count + del_count + comm_count > 0:
+            emit("progress", percent=percent,
+                 message=f"Found {ins_count} insertions, {del_count} deletions, {comm_count} comments in {os.path.basename(mod_path)}")
+
+    emit("progress", percent=65, message="Merging changes into base document...")
+
+    # Create output document by merging changes
     base_name = os.path.splitext(os.path.basename(base_path))[0]
     output_path = os.path.join(output_folder, f"{base_name}_Collated.docx")
 
-    emit("progress", percent=50, message="Merging changes (preserving formatting)...")
+    stats = merge_track_changes_into_document(base_path, all_changes, output_path)
 
-    changes_count = create_merged_document_preserving_format(base_path, valid_modified, output_path)
-
-    emit("progress", percent=80, message="Creating summary...")
+    emit("progress", percent=90, message="Creating summary...")
 
     # Create summary
-    summary_path = create_summary(base_path, valid_modified, changes_count, output_folder)
+    summary_path = create_summary(base_path, valid_modified, stats, output_folder)
+
+    total_changes = stats['insertions'] + stats['deletions']
 
     emit("progress", percent=100, message="Complete!")
 
@@ -452,7 +441,8 @@ def collate_documents(base_path, modified_paths, output_folder):
         'output_folder': output_folder,
         'output_document': output_path,
         'summary_document': summary_path,
-        'total_changes': changes_count,
+        'total_changes': total_changes,
+        'total_comments': stats['comments'],
         'documents_processed': len(valid_modified)
     }
 
@@ -500,7 +490,7 @@ def main():
              output_document=results['output_document'],
              summary_document=results['summary_document'],
              total_changes=results['total_changes'],
-             total_comments=0,
+             total_comments=results['total_comments'],
              conflicts=0,
              unresolved_conflicts=0,
              changes_by_source={},

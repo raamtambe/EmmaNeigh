@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Signature Packet Processor
-v5.1.3: Improved signature detection - stricter heuristics to avoid blank page false positives.
+v5.1.4: Simplified signature detection - BY: blocks and NAME:/TITLE: patterns only.
+Removes loose heuristics that caused false positives on blank pages.
 """
 
 import fitz
@@ -267,10 +268,53 @@ def extract_signers_horizontal_table(table_data):
     return signers
 
 
+def extract_signers_name_title_pattern(text):
+    """
+    v5.1.4: New pattern - NAME: followed by TITLE: on subsequent lines.
+    This is a common signature block format in legal documents.
+
+    Example:
+    NAME: John Smith
+    TITLE: President
+
+    Returns set of normalized signer names.
+    """
+    signers = set()
+    lines = text.splitlines()
+
+    for i, line in enumerate(lines):
+        # Look for NAME: label
+        name_match = re.search(r'\bNAME\s*:\s*(.+)', line, re.IGNORECASE)
+        if name_match:
+            # Check if TITLE: appears within next 3 lines (confirms this is a signature block)
+            has_title_nearby = False
+            for j in range(1, 4):
+                if i + j < len(lines):
+                    if re.search(r'\bTITLE\s*:', lines[i + j], re.IGNORECASE):
+                        has_title_nearby = True
+                        break
+
+            if has_title_nearby:
+                name = name_match.group(1).strip()
+                # Clean up the name (remove trailing underscores, etc.)
+                name = re.sub(r'_{2,}.*$', '', name).strip()
+                name = re.sub(r'\s*\[.*\]$', '', name).strip()  # Remove [brackets]
+                if name and is_probable_person(name):
+                    signers.add(normalize_name(name))
+
+    return signers
+
+
 def detect_signature_page_extended(text, tables=None):
     """
-    Extended signature page detection using multiple patterns.
-    v5.1.3: Added stricter validation to prevent blank page false positives.
+    Signature page detection - simplified in v5.1.4.
+
+    Only uses two reliable detection methods:
+    1. BY: blocks - The most reliable indicator of a signature page
+    2. NAME: followed by TITLE: - Another reliable signature block pattern
+
+    NO fallback heuristics - if we can't find a name, it's not a signature page.
+    This eliminates false positives from blank pages.
 
     Returns:
         tuple: (is_signature_page: bool, signers: set, detection_method: str)
@@ -278,13 +322,19 @@ def detect_signature_page_extended(text, tables=None):
     all_signers = set()
     methods_used = []
 
-    # Method 1: Traditional BY: blocks
+    # Method 1: Traditional BY: blocks (most reliable)
     by_signers = extract_signers_from_by_blocks(text)
     if by_signers:
         all_signers.update(by_signers)
         methods_used.append("BY_BLOCK")
 
-    # Method 2: Standard signature tables
+    # Method 2: NAME: followed by TITLE: pattern (v5.1.4)
+    name_title_signers = extract_signers_name_title_pattern(text)
+    if name_title_signers:
+        all_signers.update(name_title_signers)
+        methods_used.append("NAME_TITLE")
+
+    # Method 3: Signature tables (if they have explicit NAME and SIGNATURE headers)
     if tables:
         for table_data in tables:
             if table_data and len(table_data) > 0:
@@ -293,68 +343,13 @@ def detect_signature_page_extended(text, tables=None):
                     if table_signers:
                         all_signers.update(table_signers)
                         methods_used.append("TABLE")
-                else:
-                    # Try horizontal table detection
-                    horiz_signers = extract_signers_horizontal_table(table_data)
-                    if horiz_signers:
-                        all_signers.update(horiz_signers)
-                        methods_used.append("HORIZ_TABLE")
-
-    # Method 3: Underscore + Name pattern
-    underscore_signers = extract_signers_underscore_name(text)
-    if underscore_signers:
-        all_signers.update(underscore_signers)
-        methods_used.append("UNDERSCORE_NAME")
-
-    # Method 4: Underscore followed by Name: label
-    label_signers = extract_signers_underscore_label(text)
-    if label_signers:
-        all_signers.update(label_signers)
-        methods_used.append("UNDERSCORE_LABEL")
-
-    # Method 5: Trigger phrases followed by names
-    trigger_signers = extract_signers_trigger_phrase(text)
-    if trigger_signers:
-        all_signers.update(trigger_signers)
-        methods_used.append("TRIGGER_PHRASE")
 
     # If we found signers, it's a signature page
     if all_signers:
         return (True, all_signers, ",".join(methods_used))
 
-    # ========== STRICTER FALLBACK HEURISTIC (v5.1.3) ==========
-    # Only accept pages as "UNKNOWN SIGNER" if they have STRONG signature indicators
-    # This prevents blank pages or pages with just underscores from being flagged
-
-    text_upper = text.upper()
-
-    # Remove underscores and whitespace to calculate actual content
-    content_text = re.sub(r'[_\s\-\=]+', '', text)
-    has_substantial_content = len(content_text) >= 50  # At least 50 chars of real content
-
-    # Strong indicators that MUST be present (not just trigger phrases)
-    strong_indicators = [
-        'SIGNATURE PAGE', 'EXECUTION PAGE', 'COUNTERPART SIGNATURE',
-        'NOTARY PUBLIC', 'ACKNOWLEDGED BEFORE ME'
-    ]
-
-    # Additional strong patterns - explicit signature block markers
-    has_name_label = bool(re.search(r'\bNAME\s*:', text_upper))
-    has_title_label = bool(re.search(r'\bTITLE\s*:', text_upper))
-    has_by_label = bool(re.search(r'\bBY\s*:', text_upper))
-    has_date_label = bool(re.search(r'\bDATE\s*:', text_upper))
-
-    # Count how many signature block labels are present
-    label_count = sum([has_name_label, has_title_label, has_by_label, has_date_label])
-
-    has_strong_indicator = any(ind in text_upper for ind in strong_indicators)
-
-    # v5.1.3: STRICTER RULES - Must have BOTH:
-    # 1. Substantial content (not just blank/underscores)
-    # 2. EITHER a strong indicator phrase OR at least 2 signature block labels (NAME:/TITLE:/BY:/DATE:)
-    if has_substantial_content and (has_strong_indicator or label_count >= 2):
-        return (True, {"UNKNOWN SIGNER"}, "UNKNOWN")
-
+    # v5.1.4: NO FALLBACK - If we couldn't extract a name, it's not a signature page
+    # This prevents false positives from blank pages, pages with just underscores, etc.
     return (False, set(), None)
 
 

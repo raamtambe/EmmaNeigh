@@ -3065,6 +3065,9 @@
             <p class="input-hint">The original clean version</p>
             <p class="input-selected" id="baseDocSelected"></p>
           </div>
+          <div class="file-list hidden" id="baseDocList">
+            <!-- Populated dynamically with remove button -->
+          </div>
         </div>
 
         <!-- Commented Versions -->
@@ -5257,6 +5260,7 @@
     const baseDocInput = document.getElementById('baseDocInput');
     const baseDocSelected = document.getElementById('baseDocSelected');
     const baseDocHeader = document.getElementById('baseDocHeader');
+    const baseDocList = document.getElementById('baseDocList');
     const commentedDocsInput = document.getElementById('commentedDocsInput');
     const commentedDocsSelected = document.getElementById('commentedDocsSelected');
     const commentedDocsList = document.getElementById('commentedDocsList');
@@ -5292,6 +5296,33 @@
 
     function updateCollateButton() {
       collateBtn.disabled = !(baseDocPath && commentedDocPaths.length > 0);
+    }
+
+    function updateBaseDocDisplay() {
+      if (baseDocPath) {
+        const name = baseDocPath.split(/[/\\]/).pop();
+        baseDocSelected.textContent = truncatePath(baseDocPath);
+        baseDocInput.classList.add('selected');
+        baseDocHeader.classList.add('done');
+        baseDocList.classList.remove('hidden');
+        baseDocList.innerHTML = `<div class="file-list-item">
+          <span>${name}</span>
+          <button class="remove-btn" id="removeBaseDocBtn">×</button>
+        </div>`;
+
+        // Add remove handler
+        document.getElementById('removeBaseDocBtn').addEventListener('click', () => {
+          baseDocPath = null;
+          updateBaseDocDisplay();
+          updateCollateButton();
+        });
+      } else {
+        baseDocSelected.textContent = '';
+        baseDocInput.classList.remove('selected');
+        baseDocHeader.classList.remove('done');
+        baseDocList.classList.add('hidden');
+        baseDocList.innerHTML = '';
+      }
     }
 
     function updateCommentedDocsList() {
@@ -5335,9 +5366,7 @@
       const path = await ipcRenderer.invoke('select-docx');
       if (path) {
         baseDocPath = path;
-        baseDocSelected.textContent = truncatePath(path);
-        baseDocInput.classList.add('selected');
-        baseDocHeader.classList.add('done');
+        updateBaseDocDisplay();
         updateCollateButton();
       }
     });
@@ -5357,9 +5386,7 @@
       const files = e.dataTransfer.files;
       if (files.length > 0 && files[0].name.toLowerCase().endsWith('.docx')) {
         baseDocPath = files[0].path;
-        baseDocSelected.textContent = truncatePath(baseDocPath);
-        baseDocInput.classList.add('selected');
-        baseDocHeader.classList.add('done');
+        updateBaseDocDisplay();
         updateCollateButton();
       }
     });
@@ -5467,6 +5494,8 @@
       commentedDocsSelected.textContent = '';
       commentedDocsList.innerHTML = '';
       commentedDocsList.classList.add('hidden');
+      baseDocList.innerHTML = '';
+      baseDocList.classList.add('hidden');
 
       baseDocInput.classList.remove('selected');
       commentedDocsInput.classList.remove('selected');

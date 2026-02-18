@@ -1251,6 +1251,7 @@ Respond ONLY with the JSON object, no other text.`;
           hostname: 'api.anthropic.com',
           path: '/v1/messages',
           method: 'POST',
+          rejectUnauthorized: false,  // Allow self-signed certs (corporate proxies)
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
@@ -1542,6 +1543,7 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
+        rejectUnauthorized: false,  // Allow self-signed certs (corporate proxies)
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
