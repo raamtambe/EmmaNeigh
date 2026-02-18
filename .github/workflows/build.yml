@@ -51,6 +51,13 @@ jobs:
           cd desktop-app
           npm install
 
+      - name: Generate app icons from SVG
+        run: |
+          cd desktop-app
+          npm install --save-dev sharp sharp-ico @aspect-dev/sips
+          node generate-icons.js
+        shell: bash
+
       - name: Prepare resources
         run: |
           mkdir -p desktop-app/resources/win
@@ -127,6 +134,13 @@ jobs:
         run: |
           cd desktop-app
           npm install
+
+      - name: Generate app icons from SVG
+        run: |
+          cd desktop-app
+          npm install --save-dev sharp
+          node generate-icons.js
+        shell: bash
 
       - name: Prepare resources
         run: |

@@ -444,6 +444,9 @@ function getProcessorPath(processorName = 'signature_packets') {
 // Accepts either a folder path string (legacy) or an object { folder: string } or { files: string[] }
 ipcMain.handle('process-folder', async (event, input) => {
   return new Promise((resolve, reject) => {
+    // Send initial progress
+    mainWindow.webContents.send('progress', { percent: 0, message: 'Initializing signature packet processor...' });
+
     const processorPath = getProcessorPath();
 
     if (!processorPath) {

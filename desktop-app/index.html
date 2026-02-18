@@ -159,7 +159,7 @@
 
     .horse-container {
       width: 120px;
-      height: 60px;
+      height: 70px;
       margin-bottom: 24px;
       position: relative;
     }
@@ -168,25 +168,92 @@
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
-      animation: gallop 0.4s ease-in-out infinite;
+      animation: gallop-body 0.35s ease-in-out infinite;
     }
 
-    @keyframes gallop {
-      0%, 100% { transform: translateX(-50%) translateY(0); }
-      50% { transform: translateX(-50%) translateY(-6px); }
+    @keyframes gallop-body {
+      0%, 100% { transform: translateX(-50%) translateY(0) rotate(0deg); }
+      25% { transform: translateX(-50%) translateY(-4px) rotate(-1deg); }
+      50% { transform: translateX(-50%) translateY(-2px) rotate(0deg); }
+      75% { transform: translateX(-50%) translateY(-4px) rotate(1deg); }
     }
 
     .horse svg {
       width: 80px;
-      height: 50px;
+      height: 55px;
       fill: #fff;
-      opacity: 0.9;
+      opacity: 0.95;
+    }
+
+    /* Front legs animation - galloping motion */
+    .horse .front-leg-1 {
+      transform-origin: 62px 46px;
+      animation: front-leg-1 0.35s ease-in-out infinite;
+    }
+
+    .horse .front-leg-2 {
+      transform-origin: 54px 46px;
+      animation: front-leg-2 0.35s ease-in-out infinite;
+    }
+
+    @keyframes front-leg-1 {
+      0% { transform: rotate(-25deg); }
+      25% { transform: rotate(15deg); }
+      50% { transform: rotate(30deg); }
+      75% { transform: rotate(0deg); }
+      100% { transform: rotate(-25deg); }
+    }
+
+    @keyframes front-leg-2 {
+      0% { transform: rotate(20deg); }
+      25% { transform: rotate(-20deg); }
+      50% { transform: rotate(-30deg); }
+      75% { transform: rotate(10deg); }
+      100% { transform: rotate(20deg); }
+    }
+
+    /* Back legs animation - galloping motion */
+    .horse .back-leg-1 {
+      transform-origin: 38px 46px;
+      animation: back-leg-1 0.35s ease-in-out infinite;
+    }
+
+    .horse .back-leg-2 {
+      transform-origin: 30px 46px;
+      animation: back-leg-2 0.35s ease-in-out infinite;
+    }
+
+    @keyframes back-leg-1 {
+      0% { transform: rotate(25deg); }
+      25% { transform: rotate(-10deg); }
+      50% { transform: rotate(-25deg); }
+      75% { transform: rotate(5deg); }
+      100% { transform: rotate(25deg); }
+    }
+
+    @keyframes back-leg-2 {
+      0% { transform: rotate(-15deg); }
+      25% { transform: rotate(20deg); }
+      50% { transform: rotate(25deg); }
+      75% { transform: rotate(-5deg); }
+      100% { transform: rotate(-15deg); }
+    }
+
+    /* Tail animation */
+    .horse .tail {
+      transform-origin: 22px 35px;
+      animation: tail-flow 0.35s ease-in-out infinite;
+    }
+
+    @keyframes tail-flow {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-8deg); }
     }
 
     .dust {
       position: absolute;
       bottom: 0;
-      left: 20%;
+      left: 15%;
       display: flex;
       gap: 4px;
     }
@@ -196,15 +263,16 @@
       height: 6px;
       background: #888;
       border-radius: 50%;
-      animation: dust 0.6s ease-out infinite;
+      animation: dust 0.4s ease-out infinite;
     }
 
-    .dust-particle:nth-child(2) { animation-delay: 0.1s; }
-    .dust-particle:nth-child(3) { animation-delay: 0.2s; }
+    .dust-particle:nth-child(2) { animation-delay: 0.08s; }
+    .dust-particle:nth-child(3) { animation-delay: 0.16s; }
+    .dust-particle:nth-child(4) { animation-delay: 0.24s; }
 
     @keyframes dust {
-      0% { transform: translate(0, 0) scale(1); opacity: 0.8; }
-      100% { transform: translate(-12px, -4px) scale(0.3); opacity: 0; }
+      0% { transform: translate(0, 0) scale(1); opacity: 0.7; }
+      100% { transform: translate(-20px, -8px) scale(0.2); opacity: 0; }
     }
 
     .progress-text {
@@ -2697,20 +2765,17 @@
             <!-- Mane -->
             <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
             <!-- Tail -->
-            <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-            <!-- Front legs -->
-            <g class="front-legs">
-              <rect x="62" y="46" width="5" height="14" rx="2"/>
-              <rect x="54" y="46" width="5" height="14" rx="2"/>
-            </g>
-            <!-- Back legs -->
-            <g class="back-legs">
-              <rect x="38" y="46" width="5" height="14" rx="2"/>
-              <rect x="30" y="46" width="5" height="14" rx="2"/>
-            </g>
+            <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+            <!-- Front legs - individual for animation -->
+            <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+            <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+            <!-- Back legs - individual for animation -->
+            <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+            <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
           </svg>
         </div>
         <div class="dust">
+          <div class="dust-particle"></div>
           <div class="dust-particle"></div>
           <div class="dust-particle"></div>
           <div class="dust-particle"></div>
