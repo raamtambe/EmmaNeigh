@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Signature Packet Processor
-v5.1.1: Added footer extraction, extended signature detection, output format support.
+v5.1.3: Improved signature detection - stricter heuristics to avoid blank page false positives.
 """
 
 import fitz
@@ -270,6 +270,7 @@ def extract_signers_horizontal_table(table_data):
 def detect_signature_page_extended(text, tables=None):
     """
     Extended signature page detection using multiple patterns.
+    v5.1.3: Added stricter validation to prevent blank page false positives.
 
     Returns:
         tuple: (is_signature_page: bool, signers: set, detection_method: str)
@@ -321,20 +322,37 @@ def detect_signature_page_extended(text, tables=None):
     if all_signers:
         return (True, all_signers, ",".join(methods_used))
 
-    # Additional heuristic: Check for signature indicators without detected names
+    # ========== STRICTER FALLBACK HEURISTIC (v5.1.3) ==========
+    # Only accept pages as "UNKNOWN SIGNER" if they have STRONG signature indicators
+    # This prevents blank pages or pages with just underscores from being flagged
+
     text_upper = text.upper()
-    signature_indicators = [
+
+    # Remove underscores and whitespace to calculate actual content
+    content_text = re.sub(r'[_\s\-\=]+', '', text)
+    has_substantial_content = len(content_text) >= 50  # At least 50 chars of real content
+
+    # Strong indicators that MUST be present (not just trigger phrases)
+    strong_indicators = [
         'SIGNATURE PAGE', 'EXECUTION PAGE', 'COUNTERPART SIGNATURE',
-        'WITNESS WHEREOF', 'DULY AUTHORIZED', 'AUTHORIZED SIGNATORY',
         'NOTARY PUBLIC', 'ACKNOWLEDGED BEFORE ME'
     ]
 
-    has_indicator = any(ind in text_upper for ind in signature_indicators)
-    has_underscore_line = bool(re.search(r'_{10,}', text))
+    # Additional strong patterns - explicit signature block markers
+    has_name_label = bool(re.search(r'\bNAME\s*:', text_upper))
+    has_title_label = bool(re.search(r'\bTITLE\s*:', text_upper))
+    has_by_label = bool(re.search(r'\bBY\s*:', text_upper))
+    has_date_label = bool(re.search(r'\bDATE\s*:', text_upper))
 
-    if has_indicator or (has_underscore_line and any(phrase in text_upper for phrase in SIGNATURE_TRIGGER_PHRASES)):
-        # This looks like a signature page but we couldn't detect names
-        # Return with UNKNOWN SIGNER
+    # Count how many signature block labels are present
+    label_count = sum([has_name_label, has_title_label, has_by_label, has_date_label])
+
+    has_strong_indicator = any(ind in text_upper for ind in strong_indicators)
+
+    # v5.1.3: STRICTER RULES - Must have BOTH:
+    # 1. Substantial content (not just blank/underscores)
+    # 2. EITHER a strong indicator phrase OR at least 2 signature block labels (NAME:/TITLE:/BY:/DATE:)
+    if has_substantial_content and (has_strong_indicator or label_count >= 2):
         return (True, {"UNKNOWN SIGNER"}, "UNKNOWN")
 
     return (False, set(), None)
@@ -380,7 +398,10 @@ def find_name_column(headers):
 
 
 def is_signature_table(headers):
-    """Check if table headers indicate a signature table."""
+    """
+    Check if table headers indicate a signature table.
+    v5.1.3: Removed empty column acceptance to prevent false positives.
+    """
     if not headers:
         return False
 
@@ -392,10 +413,12 @@ def is_signature_table(headers):
         for h in headers_upper
     )
 
-    # Should have signature-like column (or empty column which often is signature)
+    # v5.1.3: STRICTER - Must have EXPLICIT signature-like column header
+    # Removed: "or h == ''" which accepted any table with empty columns
     has_sig = any(
-        any(sh in h for sh in SIGNATURE_HEADERS) or h == ""
+        any(sh in h for sh in SIGNATURE_HEADERS)
         for h in headers_upper
+        if h  # Skip empty headers
     )
 
     return has_name and has_sig

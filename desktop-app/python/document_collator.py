@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Document Collator
-v5.1.2: Simplified merge of track changes from multiple Word documents.
+v5.1.3: Format-preserving merge of track changes from multiple Word documents.
 
 Takes a precedent (base) document and multiple modified versions,
-then merges all edits into one combined document showing all changes.
+then merges all edits into one combined document showing all changes
+while PRESERVING the original document's formatting (fonts, styles, margins).
+
+Key change from v5.1.2: Instead of creating a new document, we copy the base
+document and modify it in-place to preserve all formatting.
 """
 
 import os
 import sys
 import json
+import shutil
 import zipfile
 import difflib
+import copy
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, RGBColor
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 
 def emit(msg_type, **kwargs):
@@ -38,33 +46,87 @@ def get_author_from_docx(docx_path):
     return os.path.splitext(os.path.basename(docx_path))[0]
 
 
-def get_paragraphs_text(docx_path):
-    """Extract all paragraph texts from a Word document."""
+def copy_run_formatting(source_run, target_run):
+    """Copy formatting from source run to target run."""
     try:
-        doc = Document(docx_path)
-        return [p.text for p in doc.paragraphs]
-    except Exception as e:
-        emit("progress", percent=0, message=f"Warning: Could not read {docx_path}: {str(e)}")
-        return []
+        # Copy font properties
+        if source_run.font.name:
+            target_run.font.name = source_run.font.name
+        if source_run.font.size:
+            target_run.font.size = source_run.font.size
+        target_run.font.bold = source_run.font.bold
+        target_run.font.italic = source_run.font.italic
+        target_run.font.underline = source_run.font.underline
+        # Don't copy color - we need to set our own for track changes
+    except:
+        pass
 
 
-def create_merged_document(base_path, modified_paths, output_path):
+def get_paragraph_text_with_runs(paragraph):
+    """Get paragraph text and run boundaries for precise editing."""
+    runs_info = []
+    for run in paragraph.runs:
+        runs_info.append({
+            'text': run.text,
+            'run': run
+        })
+    return runs_info
+
+
+def clear_paragraph_content(paragraph):
+    """Remove all runs from a paragraph while keeping the paragraph itself."""
+    for run in list(paragraph.runs):
+        run._element.getparent().remove(run._element)
+
+
+def add_tracked_change_run(paragraph, text, change_type, reference_run=None):
     """
-    Create a merged document showing all changes from all modified versions.
-
-    - Deletions shown in red with strikethrough
-    - Insertions shown in blue
-    - Each change attributed to its author
+    Add a run with track change formatting.
+    change_type: 'deleted', 'inserted', 'unchanged'
     """
-    # Read base document
-    base_paragraphs = get_paragraphs_text(base_path)
+    run = paragraph.add_run(text)
 
-    # Collect all modifications from all sources
-    all_modifications = []  # List of (author, base_text, modified_text, para_index)
+    # Copy formatting from reference run if available
+    if reference_run:
+        copy_run_formatting(reference_run, run)
+
+    if change_type == 'deleted':
+        run.font.color.rgb = RGBColor(255, 0, 0)
+        run.font.strike = True
+    elif change_type == 'inserted':
+        run.font.color.rgb = RGBColor(0, 0, 255)
+    # 'unchanged' keeps original formatting
+
+    return run
+
+
+def create_merged_document_preserving_format(base_path, modified_paths, output_path):
+    """
+    Create a merged document showing all changes while PRESERVING base document formatting.
+
+    Strategy:
+    1. Copy the base document file
+    2. Open the copy and modify paragraphs in-place
+    3. This preserves: styles, fonts, margins, headers, footers, page layout
+    """
+    import re
+
+    # Step 1: Copy the base document as our starting point
+    shutil.copy2(base_path, output_path)
+
+    # Step 2: Open the copy for editing
+    output_doc = Document(output_path)
+
+    # Get base paragraphs text for comparison
+    base_paragraphs = [p.text for p in output_doc.paragraphs]
+
+    # Step 3: Collect all modifications from all sources
+    all_modifications = []  # List of modification records
 
     for mod_path in modified_paths:
         author = get_author_from_docx(mod_path)
-        mod_paragraphs = get_paragraphs_text(mod_path)
+        mod_doc = Document(mod_path)
+        mod_paragraphs = [p.text for p in mod_doc.paragraphs]
 
         # Use difflib to align paragraphs
         matcher = difflib.SequenceMatcher(None, base_paragraphs, mod_paragraphs)
@@ -112,25 +174,10 @@ def create_merged_document(base_path, modified_paths, output_path):
             mods_by_para[idx] = []
         mods_by_para[idx].append(mod)
 
-    # Create output document
-    output_doc = Document()
-
-    # Add legend at the top
-    legend = output_doc.add_paragraph()
-    legend.add_run("MERGED DOCUMENT - ").bold = True
-    legend.add_run("Legend: ")
-    del_run = legend.add_run("Deleted")
-    del_run.font.color.rgb = RGBColor(255, 0, 0)
-    del_run.font.strike = True
-    legend.add_run(" | ")
-    ins_run = legend.add_run("Added")
-    ins_run.font.color.rgb = RGBColor(0, 0, 255)
-    output_doc.add_paragraph("")
-
     changes_count = 0
-    insertions_to_add = {}  # para_index -> list of insertions to add after
 
-    # Collect insertions separately
+    # Collect insertions to add after processing
+    insertions_to_add = {}  # para_index -> list of insertions
     for idx, mods in mods_by_para.items():
         for mod in mods:
             if mod['type'] == 'inserted':
@@ -138,65 +185,119 @@ def create_merged_document(base_path, modified_paths, output_path):
                     insertions_to_add[idx] = []
                 insertions_to_add[idx].append(mod)
 
-    # Build the document paragraph by paragraph
-    for i, base_text in enumerate(base_paragraphs):
+    # Step 4: Modify paragraphs in-place (preserving formatting)
+    for i, para in enumerate(output_doc.paragraphs):
         mods = mods_by_para.get(i, [])
 
         # Filter to non-insertions for this paragraph
         para_mods = [m for m in mods if m['type'] != 'inserted']
 
         if not para_mods:
-            # No changes to this paragraph - keep as is
-            output_doc.add_paragraph(base_text)
-        else:
-            # Apply changes
-            # If multiple authors modified same paragraph, show all their changes
-            para = output_doc.add_paragraph()
+            # No changes - keep paragraph as-is (formatting preserved)
+            continue
 
-            # Check if any author deleted this paragraph entirely
-            deletions = [m for m in para_mods if m['type'] == 'deleted']
-            modifications = [m for m in para_mods if m['type'] == 'modified']
+        # Get a reference run for formatting (use first run if available)
+        reference_run = para.runs[0] if para.runs else None
+        original_text = para.text
 
-            if deletions and not modifications:
-                # Paragraph was deleted - show as strikethrough red
-                if base_text.strip():
-                    run = para.add_run(base_text)
-                    run.font.color.rgb = RGBColor(255, 0, 0)
-                    run.font.strike = True
-                    # Add author attribution
-                    attr = para.add_run(f" [{deletions[0]['author']}]")
-                    attr.font.size = Pt(8)
-                    attr.font.color.rgb = RGBColor(128, 128, 128)
-                    changes_count += 1
-            elif modifications:
-                # Use the first modification and show word-level diff
-                mod = modifications[0]
-                add_word_diff(para, base_text, mod['modified_text'], mod['author'])
+        deletions = [m for m in para_mods if m['type'] == 'deleted']
+        modifications = [m for m in para_mods if m['type'] == 'modified']
+
+        if deletions and not modifications:
+            # Paragraph was deleted - show as strikethrough red
+            if original_text.strip():
+                # Clear and rebuild with strikethrough
+                clear_paragraph_content(para)
+                run = add_tracked_change_run(para, original_text, 'deleted', reference_run)
+                # Add author attribution
+                attr = para.add_run(f" [{deletions[0]['author']}]")
+                attr.font.size = Pt(8)
+                attr.font.color.rgb = RGBColor(128, 128, 128)
                 changes_count += 1
-            else:
-                # Keep original
-                output_doc.add_paragraph(base_text)
 
-        # Add any insertions that come after this paragraph
-        if i in insertions_to_add:
-            for ins in insertions_to_add[i]:
+        elif modifications:
+            # Apply word-level diff while preserving paragraph formatting
+            mod = modifications[0]
+            clear_paragraph_content(para)
+            apply_word_diff_in_place(para, original_text, mod['modified_text'],
+                                     mod['author'], reference_run)
+            changes_count += 1
+
+    # Step 5: Handle insertions (add new paragraphs after existing ones)
+    # We need to insert in reverse order to maintain correct indices
+    sorted_indices = sorted(insertions_to_add.keys(), reverse=True)
+
+    for idx in sorted_indices:
+        insertions = insertions_to_add[idx]
+
+        # Get the paragraph to insert after
+        if idx < len(output_doc.paragraphs):
+            target_para = output_doc.paragraphs[idx]
+
+            for ins in reversed(insertions):  # Reverse to maintain order
                 if ins['modified_text'].strip():
-                    ins_para = output_doc.add_paragraph()
-                    run = ins_para.add_run(ins['modified_text'])
+                    # Create new paragraph after target
+                    new_para = insert_paragraph_after(target_para)
+
+                    run = new_para.add_run(ins['modified_text'])
                     run.font.color.rgb = RGBColor(0, 0, 255)
+
                     # Add author attribution
-                    attr = ins_para.add_run(f" [Added by {ins['author']}]")
+                    attr = new_para.add_run(f" [Added by {ins['author']}]")
                     attr.font.size = Pt(8)
                     attr.font.color.rgb = RGBColor(128, 128, 128)
                     changes_count += 1
 
-    # Save the merged document
+    # Step 6: Add legend at the very top
+    if changes_count > 0:
+        # Insert legend as first paragraph
+        first_para = output_doc.paragraphs[0] if output_doc.paragraphs else output_doc.add_paragraph()
+        legend_para = insert_paragraph_before(first_para)
+
+        bold_run = legend_para.add_run("COLLATED DOCUMENT - ")
+        bold_run.bold = True
+        legend_para.add_run("Legend: ")
+        del_run = legend_para.add_run("Deleted")
+        del_run.font.color.rgb = RGBColor(255, 0, 0)
+        del_run.font.strike = True
+        legend_para.add_run(" | ")
+        ins_run = legend_para.add_run("Added")
+        ins_run.font.color.rgb = RGBColor(0, 0, 255)
+        legend_para.add_run(" | ")
+        legend_para.add_run("[Author attribution in gray]")
+
+        # Add blank line after legend
+        blank_para = insert_paragraph_after(legend_para)
+
+    # Save the modified document
     output_doc.save(output_path)
     return changes_count
 
 
-def add_word_diff(para, base_text, modified_text, author):
-    """Add word-level diff to a paragraph, showing deletions and insertions."""
+def insert_paragraph_after(paragraph):
+    """Insert a new paragraph after the given paragraph."""
+    new_p = OxmlElement('w:p')
+    paragraph._element.addnext(new_p)
+    new_para = paragraph._element.getnext()
+
+    # Create proper Paragraph object
+    from docx.text.paragraph import Paragraph
+    return Paragraph(new_para, paragraph._parent)
+
+
+def insert_paragraph_before(paragraph):
+    """Insert a new paragraph before the given paragraph."""
+    new_p = OxmlElement('w:p')
+    paragraph._element.addprevious(new_p)
+    new_para = paragraph._element.getprevious()
+
+    # Create proper Paragraph object
+    from docx.text.paragraph import Paragraph
+    return Paragraph(new_para, paragraph._parent)
+
+
+def apply_word_diff_in_place(para, base_text, modified_text, author, reference_run=None):
+    """Apply word-level diff to a paragraph while preserving formatting."""
     import re
 
     # Split into words preserving whitespace
@@ -209,7 +310,9 @@ def add_word_diff(para, base_text, modified_text, author):
         if tag == 'equal':
             text = ''.join(base_words[i1:i2])
             if text:
-                para.add_run(text)
+                run = para.add_run(text)
+                if reference_run:
+                    copy_run_formatting(reference_run, run)
 
         elif tag == 'delete':
             text = ''.join(base_words[i1:i2])
@@ -217,12 +320,23 @@ def add_word_diff(para, base_text, modified_text, author):
                 run = para.add_run(text)
                 run.font.color.rgb = RGBColor(255, 0, 0)
                 run.font.strike = True
+                if reference_run:
+                    # Copy font but override color
+                    if reference_run.font.name:
+                        run.font.name = reference_run.font.name
+                    if reference_run.font.size:
+                        run.font.size = reference_run.font.size
 
         elif tag == 'insert':
             text = ''.join(mod_words[j1:j2])
             if text.strip():
                 run = para.add_run(text)
                 run.font.color.rgb = RGBColor(0, 0, 255)
+                if reference_run:
+                    if reference_run.font.name:
+                        run.font.name = reference_run.font.name
+                    if reference_run.font.size:
+                        run.font.size = reference_run.font.size
 
         elif tag == 'replace':
             # Show deletion then insertion
@@ -233,10 +347,20 @@ def add_word_diff(para, base_text, modified_text, author):
                 run = para.add_run(del_text)
                 run.font.color.rgb = RGBColor(255, 0, 0)
                 run.font.strike = True
+                if reference_run:
+                    if reference_run.font.name:
+                        run.font.name = reference_run.font.name
+                    if reference_run.font.size:
+                        run.font.size = reference_run.font.size
 
             if ins_text.strip():
                 run = para.add_run(ins_text)
                 run.font.color.rgb = RGBColor(0, 0, 255)
+                if reference_run:
+                    if reference_run.font.name:
+                        run.font.name = reference_run.font.name
+                    if reference_run.font.size:
+                        run.font.size = reference_run.font.size
 
     # Add author attribution at end
     attr = para.add_run(f" [{author}]")
@@ -309,13 +433,13 @@ def collate_documents(base_path, modified_paths, output_folder):
 
     emit("progress", percent=30, message=f"Processing {len(valid_modified)} modified documents...")
 
-    # Create merged document
+    # Create merged document (preserving formatting)
     base_name = os.path.splitext(os.path.basename(base_path))[0]
     output_path = os.path.join(output_folder, f"{base_name}_Collated.docx")
 
-    emit("progress", percent=50, message="Merging changes...")
+    emit("progress", percent=50, message="Merging changes (preserving formatting)...")
 
-    changes_count = create_merged_document(base_path, valid_modified, output_path)
+    changes_count = create_merged_document_preserving_format(base_path, valid_modified, output_path)
 
     emit("progress", percent=80, message="Creating summary...")
 

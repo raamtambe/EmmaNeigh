@@ -842,7 +842,8 @@ ipcMain.handle('process-sigblocks', async (event, config) => {
 
 // Process execution version
 // originalsInput can be a folder path string (legacy) or { folder: string } or { files: string[] }
-ipcMain.handle('process-execution-version', async (event, originalsInput, signedPdfPath) => {
+// signedPath can be a folder path (new two-folder workflow) or a single PDF file (legacy)
+ipcMain.handle('process-execution-version', async (event, originalsInput, signedPath) => {
   return new Promise((resolve, reject) => {
     const processorPath = getProcessorPath('execution_version');
 
@@ -863,19 +864,30 @@ ipcMain.handle('process-execution-version', async (event, originalsInput, signed
 
     let args;
     let configPath = null;
+
+    // Determine signed path type (folder vs file)
+    const signedIsFolder = fs.existsSync(signedPath) && fs.statSync(signedPath).isDirectory();
+
     // Handle different input types
     if (typeof originalsInput === 'string') {
-      // Legacy: folder path string
-      args = [originalsInput, signedPdfPath];
+      // Legacy: folder path string - pass directly
+      args = [originalsInput, signedPath];
     } else if (originalsInput.folder) {
-      args = [originalsInput.folder, signedPdfPath];
+      // Object with folder property
+      args = [originalsInput.folder, signedPath];
     } else if (originalsInput.files) {
-      // Write config to temp file
+      // List of individual files - need config file
       configPath = path.join(app.getPath('temp'), `exec-config-${Date.now()}.json`);
-      fs.writeFileSync(configPath, JSON.stringify({
-        files: originalsInput.files,
-        signed_pdf: signedPdfPath
-      }));
+      const config = {
+        files: originalsInput.files
+      };
+      // Use signed_folder or signed_pdf based on path type
+      if (signedIsFolder) {
+        config.signed_folder = signedPath;
+      } else {
+        config.signed_pdf = signedPath;
+      }
+      fs.writeFileSync(configPath, JSON.stringify(config));
       args = ['--config', configPath];
     } else {
       reject(new Error('Invalid input: must be folder path or { folder } or { files }'));

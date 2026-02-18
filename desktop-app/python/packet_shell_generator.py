@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Signature Packet Shell Generator
-v5.1.1: Generate a combined signature packet with all pages requiring signatures.
+v5.1.3: Generate a combined signature packet with all pages requiring signatures.
+Uses improved signature detection from signature_packets.py to avoid blank page false positives.
 
 Creates a single "shell" packet containing all unique signature pages from multiple documents,
 with footers added to identify each document.
