@@ -50,7 +50,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "EmmaNeigh-Setup.exe",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "useZip": true
     },
     "portable": {
       "artifactName": "EmmaNeigh-Portable.exe"
