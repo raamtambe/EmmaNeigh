@@ -1134,6 +1134,67 @@
       min-height: 20px;
     }
 
+    .twofa-icon {
+      font-size: 48px;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    #tfaCode {
+      font-family: monospace;
+    }
+
+    /* Toggle Switch */
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #333;
+      transition: 0.3s;
+      border-radius: 24px;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: #fff;
+      transition: 0.3s;
+      border-radius: 50%;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background-color: #22c55e;
+    }
+
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+    }
+
+    .toggle-switch input:disabled + .toggle-slider {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     .login-form p {
       color: #888;
       font-size: 13px;
@@ -2492,6 +2553,20 @@
         <input type="text" id="guestName" placeholder="Your name (optional)">
         <button id="guestBtn">Continue as Guest</button>
       </div>
+
+      <!-- 2FA Verification Form -->
+      <div class="login-form hidden" id="twoFactorForm">
+        <div class="twofa-icon">🔐</div>
+        <h3 style="text-align: center; margin-bottom: 8px;">Two-Factor Authentication</h3>
+        <p style="text-align: center; color: #888; margin-bottom: 16px;">A verification code has been sent to <span id="tfaEmailDisplay">your email</span></p>
+        <input type="text" id="tfaCode" placeholder="Enter 6-digit code" maxlength="6" autocomplete="one-time-code" style="text-align: center; font-size: 24px; letter-spacing: 8px;">
+        <p class="login-error" id="tfaError"></p>
+        <button id="tfaVerifyBtn">Verify</button>
+        <div style="display: flex; justify-content: space-between; margin-top: 12px;">
+          <a href="#" id="tfaResendBtn" style="color: #888; font-size: 13px; text-decoration: none;">Resend Code</a>
+          <a href="#" id="tfaCancelBtn" style="color: #888; font-size: 13px; text-decoration: none;">Back to Login</a>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2584,6 +2659,48 @@
           Get your API key from <a href="#" id="anthropicLink">console.anthropic.com</a>.
           Your key is encrypted and stored locally.
         </p>
+      </div>
+
+      <div class="settings-section" id="securitySection">
+        <h3>🔐 Two-Factor Authentication</h3>
+        <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+          Add an extra layer of security to your account. A verification code will be sent to your email on each login.
+        </p>
+
+        <!-- Email Section -->
+        <div class="tfa-email-section">
+          <label style="color: #888; font-size: 12px;">Email Address</label>
+          <div class="api-key-input-group" style="margin-top: 4px;">
+            <input type="email" class="api-key-input" id="tfaEmailInput" placeholder="your@email.com">
+            <button class="settings-btn settings-btn-secondary" id="tfaUpdateEmailBtn" style="margin-left: 8px;">Update</button>
+          </div>
+          <div id="tfaEmailStatus" style="font-size: 12px; margin-top: 4px;"></div>
+        </div>
+
+        <!-- Verification Section (shown after email is set) -->
+        <div class="tfa-verify-section" id="tfaVerifySection" style="display: none; margin-top: 12px; padding: 12px; background: #1a1a1a; border-radius: 8px;">
+          <p style="color: #888; font-size: 13px; margin-bottom: 8px;">Enter the verification code sent to your email:</p>
+          <div class="api-key-input-group">
+            <input type="text" class="api-key-input" id="tfaSettingsCode" placeholder="6-digit code" maxlength="6" style="text-align: center; letter-spacing: 4px;">
+            <button class="settings-btn settings-btn-primary" id="tfaVerifyEmailBtn" style="margin-left: 8px;">Verify</button>
+          </div>
+          <div id="tfaVerifyStatus" style="font-size: 12px; margin-top: 4px;"></div>
+        </div>
+
+        <!-- 2FA Toggle (shown after email is verified) -->
+        <div class="tfa-toggle-section" id="tfaToggleSection" style="margin-top: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <span style="color: #fff;">Enable 2FA</span>
+              <span id="tfa2FAStatusBadge" style="margin-left: 8px; padding: 2px 8px; border-radius: 4px; font-size: 11px;"></span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="tfa2FAToggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p style="font-size: 11px; color: #666; margin-top: 4px;">Require email verification code on login</p>
+        </div>
       </div>
 
       <div class="settings-section">
@@ -2717,6 +2834,7 @@
           </button>
           <div class="nav-items">
             <button class="nav-item" data-tab="collate">Collate Documents</button>
+            <button class="nav-item" data-tab="redline">Redline Documents</button>
           </div>
         </div>
       </div>
@@ -3237,6 +3355,124 @@
       </div>
     </div><!-- End collateTab -->
 
+    <!-- Redline Tab -->
+    <div id="redlineTab" style="display: none;">
+      <!-- Input State -->
+      <div id="redlineInputs" class="exec-inputs">
+        <p class="subtitle" style="margin-bottom: 8px;">Compare documents and generate redline markup showing changes</p>
+
+        <!-- Document Pair Input -->
+        <div class="sigblock-step">
+          <div class="sigblock-step-header">
+            <span class="step-number">1</span>
+            Original Document
+          </div>
+          <div class="input-section" id="redlineOriginalInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+            </svg>
+            <p class="input-label">Drop original document here</p>
+            <p class="input-hint">PDF, Word, PowerPoint, or Excel</p>
+            <p class="input-selected" id="redlineOriginalSelected"></p>
+          </div>
+        </div>
+
+        <div class="sigblock-step">
+          <div class="sigblock-step-header">
+            <span class="step-number">2</span>
+            Modified Document
+          </div>
+          <div class="input-section" id="redlineModifiedInput">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+            </svg>
+            <p class="input-label">Drop modified document here</p>
+            <p class="input-hint">The newer version to compare</p>
+            <p class="input-selected" id="redlineModifiedSelected"></p>
+          </div>
+        </div>
+
+        <!-- Document Pairs List -->
+        <div id="redlinePairsList" class="file-list hidden">
+          <!-- Populated dynamically with document pairs -->
+        </div>
+
+        <div class="exec-actions" style="display: flex; gap: 12px; align-items: center;">
+          <button class="btn btn-secondary" id="redlineAddPairBtn" style="display: none;">+ Add Another Pair</button>
+          <button class="btn btn-primary" id="redlineBtn" disabled>Generate Redline</button>
+        </div>
+      </div>
+
+      <!-- Processing -->
+      <div class="processing" id="redlineProcessing">
+        <div class="horse-container">
+          <div class="horse">
+            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+              <ellipse cx="50" cy="35" rx="28" ry="16"/>
+              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+              <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <g class="front-legs">
+                <rect x="62" y="46" width="5" height="14" rx="2"/>
+                <rect x="54" y="46" width="5" height="14" rx="2"/>
+              </g>
+              <g class="back-legs">
+                <rect x="38" y="46" width="5" height="14" rx="2"/>
+                <rect x="30" y="46" width="5" height="14" rx="2"/>
+              </g>
+            </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+          </div>
+        </div>
+        <p class="progress-text" id="redlineProgressText">Comparing documents...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="redlineProgressFill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Complete -->
+      <div class="complete" id="redlineComplete">
+        <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2>Redline Complete</h2>
+        <p id="redlineResultText">Generated 1 comparison document</p>
+
+        <div class="collate-stats">
+          <div class="stat-box">
+            <div class="stat-value" id="redlineParagraphChanges">0</div>
+            <div class="stat-label">Text Changes</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="redlineTableChanges">0</div>
+            <div class="stat-label">Table Changes</div>
+          </div>
+        </div>
+
+        <div class="result-actions">
+          <button class="btn btn-primary" id="redlineOpenFolderBtn">Open Output Folder</button>
+          <button class="btn btn-secondary" id="redlineResetBtn">Compare More Documents</button>
+        </div>
+      </div>
+
+      <!-- Error State -->
+      <div class="error-state" id="redlineError">
+        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
+        </svg>
+        <h2>Error</h2>
+        <p id="redlineErrorText">Something went wrong</p>
+        <button class="btn btn-secondary" id="redlineRetryBtn">Try Again</button>
+      </div>
+    </div><!-- End redlineTab -->
+
     <!-- Email Tab -->
     <div id="emailTab" style="display: none;">
       <!-- Upload State -->
@@ -3273,7 +3509,7 @@
 
         <!-- Keyword Search Box -->
         <div class="email-search" id="emailSearchBox" style="display: none;">
-          <input type="text" class="email-search-input" id="emailSearchInput" placeholder="Search emails by keyword...">
+          <input type="text" class="email-search-input" id="emailSearchInput" placeholder='Search: "purchase agreement" OR credit AND loan NOT draft'>
           <button class="btn btn-primary" id="emailSearchBtn">Search</button>
         </div>
 
@@ -3990,6 +4226,197 @@
       require('electron').shell.openExternal('https://console.anthropic.com/');
     });
 
+    // ========== 2FA SETTINGS ==========
+    const tfaEmailInput = document.getElementById('tfaEmailInput');
+    const tfaUpdateEmailBtn = document.getElementById('tfaUpdateEmailBtn');
+    const tfaEmailStatus = document.getElementById('tfaEmailStatus');
+    const tfaVerifySection = document.getElementById('tfaVerifySection');
+    const tfaSettingsCode = document.getElementById('tfaSettingsCode');
+    const tfaVerifyEmailBtn = document.getElementById('tfaVerifyEmailBtn');
+    const tfaVerifyStatus = document.getElementById('tfaVerifyStatus');
+    const tfaToggleSection = document.getElementById('tfaToggleSection');
+    const tfa2FAToggle = document.getElementById('tfa2FAToggle');
+    const tfa2FAStatusBadge = document.getElementById('tfa2FAStatusBadge');
+    const securitySection = document.getElementById('securitySection');
+
+    // Load 2FA status when settings opens
+    async function load2FAStatus() {
+      if (!currentUser || currentUser.isGuest) {
+        securitySection.style.display = 'none';
+        return;
+      }
+
+      securitySection.style.display = 'block';
+
+      try {
+        const result = await ipcRenderer.invoke('get-2fa-status', { userId: currentUser.id });
+
+        if (result.success) {
+          // Show email
+          if (result.email) {
+            tfaEmailInput.value = result.email;
+            tfaEmailInput.placeholder = result.email;
+          }
+
+          // Show verification status
+          if (result.emailVerified) {
+            tfaEmailStatus.innerHTML = '<span style="color: #22c55e;">✓ Email verified</span>';
+            tfaVerifySection.style.display = 'none';
+            tfaToggleSection.style.display = 'block';
+
+            // Show 2FA status
+            tfa2FAToggle.checked = result.twoFactorEnabled;
+            tfa2FAToggle.disabled = false;
+
+            if (result.twoFactorEnabled) {
+              tfa2FAStatusBadge.textContent = 'Enabled';
+              tfa2FAStatusBadge.style.background = '#22c55e';
+              tfa2FAStatusBadge.style.color = '#fff';
+            } else {
+              tfa2FAStatusBadge.textContent = 'Disabled';
+              tfa2FAStatusBadge.style.background = '#444';
+              tfa2FAStatusBadge.style.color = '#888';
+            }
+          } else if (result.email) {
+            tfaEmailStatus.innerHTML = '<span style="color: #f59e0b;">⚠ Email not verified</span>';
+            tfaToggleSection.style.display = 'none';
+            tfa2FAToggle.disabled = true;
+          } else {
+            tfaEmailStatus.innerHTML = '';
+            tfaToggleSection.style.display = 'none';
+            tfa2FAToggle.disabled = true;
+          }
+        }
+      } catch (e) {
+        console.error('Error loading 2FA status:', e);
+      }
+    }
+
+    // Update email button
+    tfaUpdateEmailBtn.addEventListener('click', async () => {
+      const email = tfaEmailInput.value.trim();
+
+      if (!email || !email.includes('@')) {
+        tfaEmailStatus.innerHTML = '<span style="color: #ef4444;">Please enter a valid email</span>';
+        return;
+      }
+
+      tfaUpdateEmailBtn.disabled = true;
+      tfaUpdateEmailBtn.textContent = 'Updating...';
+
+      try {
+        // Update email
+        const updateResult = await ipcRenderer.invoke('update-user-email', {
+          userId: currentUser.id,
+          email: email
+        });
+
+        if (!updateResult.success) {
+          tfaEmailStatus.innerHTML = `<span style="color: #ef4444;">${updateResult.error}</span>`;
+          tfaUpdateEmailBtn.disabled = false;
+          tfaUpdateEmailBtn.textContent = 'Update';
+          return;
+        }
+
+        // Send verification code
+        const codeResult = await ipcRenderer.invoke('request-verification-code', {
+          userId: currentUser.id,
+          email: email,
+          type: 'email_verify'
+        });
+
+        if (codeResult.success) {
+          tfaEmailStatus.innerHTML = '<span style="color: #22c55e;">Verification code sent!</span>';
+          tfaVerifySection.style.display = 'block';
+          tfaSettingsCode.value = '';
+          tfaSettingsCode.focus();
+
+          // For development
+          if (codeResult._devCode) {
+            console.log('[DEV] Email verification code:', codeResult._devCode);
+          }
+        } else {
+          tfaEmailStatus.innerHTML = `<span style="color: #ef4444;">${codeResult.error}</span>`;
+        }
+      } catch (e) {
+        tfaEmailStatus.innerHTML = `<span style="color: #ef4444;">Error: ${e.message}</span>`;
+      }
+
+      tfaUpdateEmailBtn.disabled = false;
+      tfaUpdateEmailBtn.textContent = 'Update';
+    });
+
+    // Verify email code
+    tfaVerifyEmailBtn.addEventListener('click', async () => {
+      const code = tfaSettingsCode.value.trim();
+
+      if (!code || code.length !== 6) {
+        tfaVerifyStatus.innerHTML = '<span style="color: #ef4444;">Enter 6-digit code</span>';
+        return;
+      }
+
+      tfaVerifyEmailBtn.disabled = true;
+      tfaVerifyEmailBtn.textContent = 'Verifying...';
+
+      try {
+        const result = await ipcRenderer.invoke('verify-code', {
+          userId: currentUser.id,
+          code: code,
+          type: 'email_verify'
+        });
+
+        if (result.success) {
+          tfaVerifyStatus.innerHTML = '<span style="color: #22c55e;">✓ Email verified!</span>';
+          tfaVerifySection.style.display = 'none';
+          await load2FAStatus();
+        } else {
+          tfaVerifyStatus.innerHTML = `<span style="color: #ef4444;">${result.error}</span>`;
+        }
+      } catch (e) {
+        tfaVerifyStatus.innerHTML = `<span style="color: #ef4444;">Error: ${e.message}</span>`;
+      }
+
+      tfaVerifyEmailBtn.disabled = false;
+      tfaVerifyEmailBtn.textContent = 'Verify';
+    });
+
+    // Toggle 2FA
+    tfa2FAToggle.addEventListener('change', async () => {
+      const enable = tfa2FAToggle.checked;
+
+      try {
+        const result = await ipcRenderer.invoke('toggle-2fa', {
+          userId: currentUser.id,
+          enable: enable
+        });
+
+        if (result.success) {
+          if (enable) {
+            tfa2FAStatusBadge.textContent = 'Enabled';
+            tfa2FAStatusBadge.style.background = '#22c55e';
+            tfa2FAStatusBadge.style.color = '#fff';
+          } else {
+            tfa2FAStatusBadge.textContent = 'Disabled';
+            tfa2FAStatusBadge.style.background = '#444';
+            tfa2FAStatusBadge.style.color = '#888';
+          }
+        } else {
+          // Revert toggle
+          tfa2FAToggle.checked = !enable;
+          alert(result.error || 'Failed to update 2FA setting');
+        }
+      } catch (e) {
+        tfa2FAToggle.checked = !enable;
+        alert('Error: ' + e.message);
+      }
+    });
+
+    // Load 2FA status when settings modal opens
+    const originalSettingsOpen = settingsBtn.onclick;
+    settingsBtn.addEventListener('click', async () => {
+      await load2FAStatus();
+    });
+
     // ========== UPDATE CHECK ==========
     const checkUpdatesBtn = document.getElementById('checkUpdatesBtn');
     const updateCheckStatus = document.getElementById('updateCheckStatus');
@@ -4075,6 +4502,10 @@
       });
     });
 
+    // 2FA state
+    let pending2FAUserId = null;
+    let pending2FAEmail = null;
+
     // Login form handler
     document.getElementById('loginBtn').addEventListener('click', async () => {
       const username = document.getElementById('loginUsername').value.trim();
@@ -4090,18 +4521,125 @@
         const result = await ipcRenderer.invoke('login-user', { username, password });
 
         if (result.success) {
-          currentUser = { ...result.user, isGuest: false };
-          localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
-          userName.textContent = result.user.displayName || result.user.username;
-          loginModal.classList.add('hidden');
-          // Load user's API key
-          loadUserApiKey();
+          if (result.requires2FA) {
+            // Show 2FA form
+            pending2FAUserId = result.userId;
+            pending2FAEmail = result.email;
+
+            document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
+            document.querySelector('.login-tabs').style.display = 'none';
+            document.getElementById('twoFactorForm').classList.remove('hidden');
+            document.getElementById('tfaEmailDisplay').textContent = result.email;
+            document.getElementById('tfaCode').value = '';
+            document.getElementById('tfaError').textContent = '';
+            document.getElementById('tfaCode').focus();
+
+            // For development, show the code in console
+            if (result._devCode) {
+              console.log('[DEV] 2FA Code:', result._devCode);
+            }
+          } else {
+            // Direct login (no 2FA)
+            currentUser = { ...result.user, isGuest: false };
+            localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
+            userName.textContent = result.user.displayName || result.user.username;
+            loginModal.classList.add('hidden');
+            // Load user's API key
+            loadUserApiKey();
+          }
         } else {
           errorEl.textContent = result.error || 'Login failed';
         }
       } catch (e) {
         errorEl.textContent = 'Login error: ' + e.message;
       }
+    });
+
+    // 2FA verification handler
+    document.getElementById('tfaVerifyBtn').addEventListener('click', async () => {
+      const code = document.getElementById('tfaCode').value.trim();
+      const errorEl = document.getElementById('tfaError');
+
+      if (!code || code.length !== 6) {
+        errorEl.textContent = 'Please enter the 6-digit code';
+        return;
+      }
+
+      try {
+        const result = await ipcRenderer.invoke('complete-2fa-login', {
+          userId: pending2FAUserId,
+          code: code
+        });
+
+        if (result.success) {
+          currentUser = { ...result.user, isGuest: false };
+          localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
+          userName.textContent = result.user.displayName || result.user.username;
+          loginModal.classList.add('hidden');
+          pending2FAUserId = null;
+          pending2FAEmail = null;
+          // Load user's API key
+          loadUserApiKey();
+        } else {
+          errorEl.textContent = result.error || 'Verification failed';
+        }
+      } catch (e) {
+        errorEl.textContent = 'Verification error: ' + e.message;
+      }
+    });
+
+    // 2FA code input - auto-submit on 6 digits
+    document.getElementById('tfaCode').addEventListener('input', (e) => {
+      // Only allow digits
+      e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+
+      // Auto-submit when 6 digits entered
+      if (e.target.value.length === 6) {
+        document.getElementById('tfaVerifyBtn').click();
+      }
+    });
+
+    // 2FA resend code
+    document.getElementById('tfaResendBtn').addEventListener('click', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('tfaError');
+
+      try {
+        const result = await ipcRenderer.invoke('request-verification-code', {
+          userId: pending2FAUserId,
+          type: 'login'
+        });
+
+        if (result.success) {
+          errorEl.style.color = '#4ade80';
+          errorEl.textContent = 'New code sent!';
+          setTimeout(() => {
+            errorEl.style.color = '#ff4444';
+            errorEl.textContent = '';
+          }, 3000);
+
+          // For development, show the code
+          if (result._devCode) {
+            console.log('[DEV] New 2FA Code:', result._devCode);
+          }
+        } else {
+          errorEl.textContent = result.error || 'Failed to resend code';
+        }
+      } catch (e) {
+        errorEl.textContent = 'Error: ' + e.message;
+      }
+    });
+
+    // 2FA cancel - back to login
+    document.getElementById('tfaCancelBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      pending2FAUserId = null;
+      pending2FAEmail = null;
+      document.getElementById('twoFactorForm').classList.add('hidden');
+      document.querySelector('.login-tabs').style.display = 'flex';
+      document.getElementById('loginForm').classList.remove('hidden');
+      loginTabs.forEach(t => t.classList.remove('active'));
+      loginTabs[0].classList.add('active');
     });
 
     // Allow Enter key to submit login
@@ -4427,6 +4965,7 @@
     const executionTab = document.getElementById('executionTab');
     const sigblocksTab = document.getElementById('sigblocksTab');
     const collateTab = document.getElementById('collateTab');
+    const redlineTab = document.getElementById('redlineTab');
     const emailTab = document.getElementById('emailTab');
     const timetrackTab = document.getElementById('timetrackTab');
     const updatechecklistTab = document.getElementById('updatechecklistTab');
@@ -4452,6 +4991,7 @@
       executionTab.style.display = tabName === 'execution' ? 'block' : 'none';
       sigblocksTab.style.display = tabName === 'sigblocks' ? 'block' : 'none';
       collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
+      redlineTab.style.display = tabName === 'redline' ? 'block' : 'none';
       emailTab.style.display = tabName === 'email' ? 'block' : 'none';
       timetrackTab.style.display = tabName === 'timetrack' ? 'block' : 'none';
       updatechecklistTab.style.display = tabName === 'updatechecklist' ? 'block' : 'none';
@@ -5577,6 +6117,295 @@
     collateResetBtn.addEventListener('click', resetCollateState);
     collateRetryBtn.addEventListener('click', resetCollateState);
 
+    // ========== REDLINE TAB ==========
+    const redlineOriginalInput = document.getElementById('redlineOriginalInput');
+    const redlineModifiedInput = document.getElementById('redlineModifiedInput');
+    const redlineOriginalSelected = document.getElementById('redlineOriginalSelected');
+    const redlineModifiedSelected = document.getElementById('redlineModifiedSelected');
+    const redlineBtn = document.getElementById('redlineBtn');
+    const redlineAddPairBtn = document.getElementById('redlineAddPairBtn');
+    const redlinePairsList = document.getElementById('redlinePairsList');
+    const redlineInputs = document.getElementById('redlineInputs');
+    const redlineProcessing = document.getElementById('redlineProcessing');
+    const redlineComplete = document.getElementById('redlineComplete');
+    const redlineError = document.getElementById('redlineError');
+    const redlineProgressText = document.getElementById('redlineProgressText');
+    const redlineProgressFill = document.getElementById('redlineProgressFill');
+    const redlineResultText = document.getElementById('redlineResultText');
+    const redlineParagraphChanges = document.getElementById('redlineParagraphChanges');
+    const redlineTableChanges = document.getElementById('redlineTableChanges');
+    const redlineOpenFolderBtn = document.getElementById('redlineOpenFolderBtn');
+    const redlineResetBtn = document.getElementById('redlineResetBtn');
+    const redlineRetryBtn = document.getElementById('redlineRetryBtn');
+    const redlineErrorText = document.getElementById('redlineErrorText');
+
+    let redlineOriginalPath = null;
+    let redlineModifiedPath = null;
+    let redlinePairs = []; // [{original: path, modified: path}]
+    let redlineOutputFolder = null;
+
+    const REDLINE_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'];
+
+    function showRedlineState(state) {
+      redlineInputs.style.display = state === 'idle' ? 'block' : 'none';
+      redlineProcessing.classList.toggle('visible', state === 'processing');
+      redlineComplete.classList.toggle('visible', state === 'complete');
+      redlineError.classList.toggle('visible', state === 'error');
+    }
+
+    function updateRedlineButton() {
+      const hasCurrentPair = redlineOriginalPath && redlineModifiedPath;
+      const hasPairs = redlinePairs.length > 0;
+      redlineBtn.disabled = !hasCurrentPair && !hasPairs;
+      redlineAddPairBtn.style.display = hasCurrentPair ? 'inline-block' : 'none';
+    }
+
+    function isRedlineFile(filename) {
+      const ext = filename.split('.').pop().toLowerCase();
+      return REDLINE_EXTENSIONS.includes(ext);
+    }
+
+    // Original document drop handlers
+    redlineOriginalInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      redlineOriginalInput.classList.add('active');
+    });
+
+    redlineOriginalInput.addEventListener('dragleave', () => {
+      redlineOriginalInput.classList.remove('active');
+    });
+
+    redlineOriginalInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      redlineOriginalInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0 && isRedlineFile(files[0].name)) {
+        redlineOriginalPath = files[0].path;
+        redlineOriginalSelected.textContent = files[0].name;
+        redlineOriginalInput.classList.add('selected');
+        updateRedlineButton();
+      }
+    });
+
+    redlineOriginalInput.addEventListener('click', async () => {
+      const filePaths = await ipcRenderer.invoke('select-file', {
+        title: 'Select Original Document',
+        filters: [{ name: 'Documents', extensions: REDLINE_EXTENSIONS }]
+      });
+      if (filePaths) {
+        redlineOriginalPath = filePaths;
+        redlineOriginalSelected.textContent = filePaths.split(/[/\\]/).pop();
+        redlineOriginalInput.classList.add('selected');
+        updateRedlineButton();
+      }
+    });
+
+    // Modified document drop handlers
+    redlineModifiedInput.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      redlineModifiedInput.classList.add('active');
+    });
+
+    redlineModifiedInput.addEventListener('dragleave', () => {
+      redlineModifiedInput.classList.remove('active');
+    });
+
+    redlineModifiedInput.addEventListener('drop', (e) => {
+      e.preventDefault();
+      redlineModifiedInput.classList.remove('active');
+      const files = e.dataTransfer.files;
+      if (files.length > 0 && isRedlineFile(files[0].name)) {
+        redlineModifiedPath = files[0].path;
+        redlineModifiedSelected.textContent = files[0].name;
+        redlineModifiedInput.classList.add('selected');
+        updateRedlineButton();
+      }
+    });
+
+    redlineModifiedInput.addEventListener('click', async () => {
+      const filePaths = await ipcRenderer.invoke('select-file', {
+        title: 'Select Modified Document',
+        filters: [{ name: 'Documents', extensions: REDLINE_EXTENSIONS }]
+      });
+      if (filePaths) {
+        redlineModifiedPath = filePaths;
+        redlineModifiedSelected.textContent = filePaths.split(/[/\\]/).pop();
+        redlineModifiedInput.classList.add('selected');
+        updateRedlineButton();
+      }
+    });
+
+    // Add another pair button
+    redlineAddPairBtn.addEventListener('click', () => {
+      if (redlineOriginalPath && redlineModifiedPath) {
+        redlinePairs.push({
+          original: redlineOriginalPath,
+          modified: redlineModifiedPath
+        });
+
+        // Update pairs list UI
+        const pairDiv = document.createElement('div');
+        pairDiv.className = 'file-item';
+        pairDiv.innerHTML = `
+          <span class="file-name">${redlineOriginalPath.split(/[/\\]/).pop()} vs ${redlineModifiedPath.split(/[/\\]/).pop()}</span>
+          <button class="remove-btn" data-index="${redlinePairs.length - 1}">×</button>
+        `;
+        redlinePairsList.appendChild(pairDiv);
+        redlinePairsList.classList.remove('hidden');
+
+        // Reset current inputs for next pair
+        redlineOriginalPath = null;
+        redlineModifiedPath = null;
+        redlineOriginalSelected.textContent = '';
+        redlineModifiedSelected.textContent = '';
+        redlineOriginalInput.classList.remove('selected');
+        redlineModifiedInput.classList.remove('selected');
+        updateRedlineButton();
+      }
+    });
+
+    // Remove pair from list
+    redlinePairsList.addEventListener('click', (e) => {
+      if (e.target.classList.contains('remove-btn')) {
+        const index = parseInt(e.target.dataset.index);
+        redlinePairs.splice(index, 1);
+
+        // Rebuild list
+        redlinePairsList.innerHTML = '';
+        redlinePairs.forEach((pair, i) => {
+          const pairDiv = document.createElement('div');
+          pairDiv.className = 'file-item';
+          pairDiv.innerHTML = `
+            <span class="file-name">${pair.original.split(/[/\\]/).pop()} vs ${pair.modified.split(/[/\\]/).pop()}</span>
+            <button class="remove-btn" data-index="${i}">×</button>
+          `;
+          redlinePairsList.appendChild(pairDiv);
+        });
+
+        if (redlinePairs.length === 0) {
+          redlinePairsList.classList.add('hidden');
+        }
+        updateRedlineButton();
+      }
+    });
+
+    // Generate redline
+    redlineBtn.addEventListener('click', async () => {
+      // Add current pair if exists
+      if (redlineOriginalPath && redlineModifiedPath) {
+        redlinePairs.push({
+          original: redlineOriginalPath,
+          modified: redlineModifiedPath
+        });
+      }
+
+      if (redlinePairs.length === 0) return;
+
+      showRedlineState('processing');
+      redlineProgressText.textContent = 'Preparing comparison...';
+      redlineProgressFill.style.width = '0%';
+
+      const startTime = Date.now();
+
+      try {
+        // Determine output folder (same as first original document)
+        redlineOutputFolder = redlinePairs[0].original.substring(0, redlinePairs[0].original.lastIndexOf(/[/\\]/));
+        if (!redlineOutputFolder) {
+          redlineOutputFolder = redlinePairs[0].original.split(/[/\\]/).slice(0, -1).join('/');
+        }
+
+        const config = redlinePairs.length === 1 ? {
+          original: redlinePairs[0].original,
+          modified: redlinePairs[0].modified,
+          output: null // Let Python generate output path
+        } : {
+          batch: true,
+          pairs: redlinePairs,
+          output_folder: redlineOutputFolder
+        };
+
+        const result = await ipcRenderer.invoke('redline-documents', config);
+
+        if (result.success) {
+          showRedlineState('complete');
+
+          if (result.mode === 'batch') {
+            redlineResultText.textContent = `Generated ${result.successful} of ${result.total} comparison documents`;
+            redlineOutputFolder = config.output_folder;
+
+            // Sum up changes
+            let totalParaChanges = 0;
+            let totalTableChanges = 0;
+            result.results.forEach(r => {
+              if (r.paragraph_changes) totalParaChanges += r.paragraph_changes;
+              if (r.table_changes) totalTableChanges += r.table_changes;
+            });
+            redlineParagraphChanges.textContent = totalParaChanges;
+            redlineTableChanges.textContent = totalTableChanges;
+          } else {
+            redlineResultText.textContent = 'Comparison document generated';
+            redlineOutputFolder = result.output_path.substring(0, result.output_path.lastIndexOf('/'));
+            redlineParagraphChanges.textContent = result.paragraph_changes || 0;
+            redlineTableChanges.textContent = result.table_changes || 0;
+          }
+
+          // Log usage
+          const duration = Date.now() - startTime;
+          ipcRenderer.invoke('log-usage', {
+            feature: 'redline',
+            action: 'compare',
+            input_count: redlinePairs.length,
+            output_count: result.mode === 'batch' ? result.successful : 1,
+            duration_ms: duration
+          });
+        } else {
+          throw new Error(result.error || 'Comparison failed');
+        }
+      } catch (error) {
+        showRedlineState('error');
+        redlineErrorText.textContent = error.message || 'Unknown error';
+      }
+    });
+
+    // Listen for progress updates
+    ipcRenderer.on('redline-progress', (event, data) => {
+      if (data.percent !== undefined) {
+        redlineProgressFill.style.width = data.percent + '%';
+      }
+      if (data.message) {
+        redlineProgressText.textContent = data.message;
+      }
+    });
+
+    // Open output folder
+    redlineOpenFolderBtn.addEventListener('click', () => {
+      if (redlineOutputFolder) {
+        ipcRenderer.invoke('open-folder', redlineOutputFolder);
+      }
+    });
+
+    // Reset state
+    function resetRedlineState() {
+      redlineOriginalPath = null;
+      redlineModifiedPath = null;
+      redlinePairs = [];
+      redlineOutputFolder = null;
+
+      redlineOriginalSelected.textContent = '';
+      redlineModifiedSelected.textContent = '';
+      redlinePairsList.innerHTML = '';
+      redlinePairsList.classList.add('hidden');
+
+      redlineOriginalInput.classList.remove('selected');
+      redlineModifiedInput.classList.remove('selected');
+
+      updateRedlineButton();
+      showRedlineState('idle');
+    }
+
+    redlineResetBtn.addEventListener('click', resetRedlineState);
+    redlineRetryBtn.addEventListener('click', resetRedlineState);
+
     // ========== EMAIL TAB ==========
     const emailCsvDrop = document.getElementById('emailCsvDrop');
     const emailCsvSelected = document.getElementById('emailCsvSelected');
@@ -5720,6 +6549,83 @@
       }
     });
 
+    // Boolean search parser - supports AND, OR, NOT, "quoted phrases", attachment:filename
+    function parseBooleanQuery(query) {
+      const tokens = [];
+      let i = 0;
+      while (i < query.length) {
+        // Skip whitespace
+        while (i < query.length && /\s/.test(query[i])) i++;
+        if (i >= query.length) break;
+
+        // Check for quoted phrase
+        if (query[i] === '"') {
+          const end = query.indexOf('"', i + 1);
+          const phrase = query.substring(i + 1, end === -1 ? query.length : end).trim();
+          if (phrase) tokens.push({ type: 'phrase', value: phrase.toLowerCase() });
+          i = end === -1 ? query.length : end + 1;
+          continue;
+        }
+
+        // Extract word
+        let start = i;
+        while (i < query.length && !/\s/.test(query[i]) && query[i] !== '"') i++;
+        const word = query.substring(start, i);
+        if (!word) continue;
+
+        const wordUpper = word.toUpperCase();
+        const wordLower = word.toLowerCase();
+
+        if (wordUpper === 'AND') tokens.push({ type: 'and' });
+        else if (wordUpper === 'OR') tokens.push({ type: 'or' });
+        else if (wordUpper === 'NOT') tokens.push({ type: 'not' });
+        else if (wordLower.startsWith('attachment:')) tokens.push({ type: 'attachment', value: word.substring(11).toLowerCase() });
+        else if (wordLower === 'has:attachment' || wordLower === 'has:attachments') tokens.push({ type: 'has_attachment' });
+        else tokens.push({ type: 'term', value: wordLower });
+      }
+      return tokens;
+    }
+
+    function evaluateBooleanQuery(email, tokens) {
+      if (!tokens.length) return true;
+
+      const searchableText = [
+        email.subject || '',
+        email.body || '',
+        email.from || '',
+        email.to || '',
+        email.attachments || ''
+      ].join(' ').toLowerCase();
+
+      const attachmentText = (email.attachments || '').toLowerCase();
+
+      let results = [];
+      let currentOp = 'and';
+      let negateNext = false;
+
+      for (const token of tokens) {
+        if (token.type === 'and') { currentOp = 'and'; continue; }
+        if (token.type === 'or') { currentOp = 'or'; continue; }
+        if (token.type === 'not') { negateNext = true; continue; }
+
+        let match = false;
+        if (token.type === 'term') match = searchableText.includes(token.value);
+        else if (token.type === 'phrase') match = searchableText.includes(token.value);
+        else if (token.type === 'attachment') match = attachmentText.includes(token.value);
+        else if (token.type === 'has_attachment') match = !!email.has_attachments;
+
+        if (negateNext) { match = !match; negateNext = false; }
+
+        if (results.length === 0) results.push(match);
+        else if (currentOp === 'and') results[results.length - 1] = results[results.length - 1] && match;
+        else if (currentOp === 'or') results.push(match);
+
+        currentOp = 'and';
+      }
+
+      return results.some(r => r);
+    }
+
     function performEmailSearch() {
       const query = emailSearchInput.value.trim();
 
@@ -5738,15 +6644,13 @@
         // Show all emails if no filters but data exists
       }
 
-      const queryLower = query.toLowerCase();
+      // Parse boolean query
+      const tokens = query ? parseBooleanQuery(query) : [];
+
       const results = emailData.filter(email => {
-        // Keyword search (if provided)
-        if (query) {
-          const keywordMatch = (email.subject && email.subject.toLowerCase().includes(queryLower)) ||
-                               (email.body && email.body.toLowerCase().includes(queryLower)) ||
-                               (email.from && email.from.toLowerCase().includes(queryLower)) ||
-                               (email.to && email.to.toLowerCase().includes(queryLower));
-          if (!keywordMatch) return false;
+        // Boolean keyword search (if provided)
+        if (tokens.length > 0) {
+          if (!evaluateBooleanQuery(email, tokens)) return false;
         }
 
         // Sender filter

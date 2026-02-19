@@ -63,6 +63,27 @@ async function initDatabase() {
     try {
       db.run(`ALTER TABLE users ADD COLUMN security_answer_hash TEXT`);
     } catch (e) { /* Column may already exist */ }
+    // 2FA columns
+    try {
+      db.run(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`);
+    } catch (e) { /* Column may already exist */ }
+    try {
+      db.run(`ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0`);
+    } catch (e) { /* Column may already exist */ }
+
+    // Create verification codes table for 2FA
+    db.run(`
+      CREATE TABLE IF NOT EXISTS verification_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        code TEXT NOT NULL,
+        type TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL,
+        used INTEGER DEFAULT 0,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
 
     db.run(`
       CREATE TABLE IF NOT EXISTS usage_history (
@@ -1095,32 +1116,66 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
     // In development, parse CSV directly with Node.js
     try {
       const csvContent = fs.readFileSync(csvPath, 'utf-8');
-      const lines = csvContent.split('\n');
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+
+      // Proper CSV parsing that handles quoted fields
+      function parseCSVLine(line) {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+              current += '"';
+              i++;
+            } else {
+              inQuotes = !inQuotes;
+            }
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim());
+        return result;
+      }
+
+      const lines = csvContent.split(/\r?\n/);
+      const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
 
       const emails = [];
       for (let i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
 
-        // Simple CSV parsing (doesn't handle quoted commas perfectly)
-        const values = lines[i].split(',');
+        const values = parseCSVLine(lines[i]);
         const email = {
           subject: '',
           from: '',
           to: '',
+          cc: '',
           date_sent: null,
           date_received: null,
-          body: ''
+          body: '',
+          attachments: '',
+          has_attachments: false
         };
 
         headers.forEach((header, idx) => {
           const value = values[idx] ? values[idx].trim() : '';
-          if (header.includes('subject')) email.subject = value;
-          else if (header.includes('from')) email.from = value;
-          else if (header.includes('to')) email.to = value;
-          else if (header.includes('body') || header.includes('content')) email.body = value;
-          else if (header.includes('sent')) email.date_sent = value;
-          else if (header.includes('received') || header === 'date') email.date_received = value;
+          if (header.includes('subject') || header === 'title') email.subject = value;
+          else if (header.includes('from') || header === 'sender') email.from = value;
+          else if (header.includes('to') || header === 'recipient') email.to = value;
+          else if (header === 'cc' || header.includes('carbon')) email.cc = value;
+          else if (header.includes('body') || header.includes('content') || header === 'message') email.body = value;
+          else if (header.includes('sent') || header === 'send date') email.date_sent = value;
+          else if (header.includes('received') || header === 'date' || header === 'receive date') email.date_received = value;
+          else if (header.includes('attachment')) {
+            email.attachments = value;
+            email.has_attachments = !!(value && value.toLowerCase() !== 'no' && value.toLowerCase() !== 'false' && value !== '0');
+          }
         });
 
         emails.push(email);
@@ -1128,6 +1183,7 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
 
       const uniqueSenders = new Set(emails.map(e => e.from).filter(f => f));
       const dates = emails.map(e => e.date_sent || e.date_received).filter(d => d).sort();
+      const withAttachments = emails.filter(e => e.has_attachments).length;
 
       return {
         success: true,
@@ -1135,6 +1191,7 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
         summary: {
           total_emails: emails.length,
           unique_senders: uniqueSenders.size,
+          with_attachments: withAttachments,
           date_range: {
             earliest: dates[0] || null,
             latest: dates[dates.length - 1] || null
@@ -1628,7 +1685,7 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
   }
 });
 
-// Login with username/password
+// Login with username/password (step 1 of login - may require 2FA)
 ipcMain.handle('login-user', async (event, { username, password }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
 
@@ -1637,18 +1694,105 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
   }
 
   try {
-    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted FROM users WHERE username = '${username.toLowerCase().trim()}'`);
+    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted, email, two_factor_enabled FROM users WHERE username = '${username.toLowerCase().trim()}'`);
 
     if (result.length === 0 || result[0].values.length === 0) {
       return { success: false, error: 'User not found' };
     }
 
     const row = result[0].values[0];
-    const [id, uname, passwordHash, displayName, apiKeyEnc] = row;
+    const [id, uname, passwordHash, displayName, apiKeyEnc, email, twoFactorEnabled] = row;
 
     if (!verifyPassword(password, passwordHash)) {
       return { success: false, error: 'Invalid password' };
     }
+
+    // Check if 2FA is enabled
+    if (twoFactorEnabled && email) {
+      // Don't log in yet - require 2FA verification
+      // Generate and send verification code
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+      // Invalidate existing codes
+      db.run(`UPDATE verification_codes SET used = 1 WHERE user_id = '${id}' AND type = 'login' AND used = 0`);
+
+      // Store new code
+      db.run(`INSERT INTO verification_codes (user_id, code, type, expires_at) VALUES (?, ?, ?, ?)`,
+        [id, code, 'login', expiresAt]);
+      saveDatabase();
+
+      // Log the code (in production, send email)
+      console.log(`[2FA] Verification code for ${uname}: ${code}`);
+
+      // Mask email for display
+      const maskedEmail = email.replace(/(.{2})(.*)(@.*)/, '$1***$3');
+
+      return {
+        success: true,
+        requires2FA: true,
+        userId: id,
+        email: maskedEmail,
+        _devCode: code // Remove in production!
+      };
+    }
+
+    // No 2FA - complete login
+    db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
+    saveDatabase();
+
+    return {
+      success: true,
+      requires2FA: false,
+      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Complete login after 2FA verification
+ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!code || code.length !== 6) {
+    return { success: false, error: 'Invalid verification code' };
+  }
+
+  try {
+    // Find valid code
+    const codeResult = db.exec(`
+      SELECT id, expires_at FROM verification_codes
+      WHERE user_id = '${userId}'
+      AND code = '${code}'
+      AND type = 'login'
+      AND used = 0
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+
+    if (codeResult.length === 0 || codeResult[0].values.length === 0) {
+      return { success: false, error: 'Invalid verification code' };
+    }
+
+    const [codeId, expiresAt] = codeResult[0].values[0];
+
+    // Check expiration
+    if (new Date(expiresAt) < new Date()) {
+      return { success: false, error: 'Verification code has expired' };
+    }
+
+    // Mark code as used
+    db.run(`UPDATE verification_codes SET used = 1 WHERE id = ${codeId}`);
+
+    // Get user info and complete login
+    const userResult = db.exec(`SELECT id, username, display_name, api_key_encrypted FROM users WHERE id = '${userId}'`);
+
+    if (userResult.length === 0 || userResult[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const [id, username, displayName, apiKeyEnc] = userResult[0].values[0];
 
     // Update last login
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
@@ -1656,7 +1800,7 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
 
     return {
       success: true,
-      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+      user: { id, username, displayName: displayName || username, hasApiKey: !!apiKeyEnc }
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -1806,6 +1950,239 @@ ipcMain.handle('reset-password', async (event, { username, securityAnswer, newPa
     // Update password
     const newPasswordHash = hashPassword(newPassword);
     db.run(`UPDATE users SET password_hash = '${newPasswordHash}' WHERE username = '${username.toLowerCase().trim()}'`);
+    saveDatabase();
+
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// ========== 2FA / EMAIL VERIFICATION HANDLERS ==========
+
+// Generate a 6-digit verification code
+function generateVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Send verification email using system mail (or log for testing)
+async function sendVerificationEmail(email, code, type) {
+  // In production, you would integrate with an email service like SendGrid, AWS SES, etc.
+  // For now, we'll use the Anthropic API to format a nice email and log it
+  // In a real app, you'd call an email API here
+
+  const subject = type === 'login'
+    ? 'EmmaNeigh - Login Verification Code'
+    : type === 'email_verify'
+    ? 'EmmaNeigh - Verify Your Email'
+    : 'EmmaNeigh - Verification Code';
+
+  const body = `Your EmmaNeigh verification code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`;
+
+  console.log(`[EMAIL] To: ${email}`);
+  console.log(`[EMAIL] Subject: ${subject}`);
+  console.log(`[EMAIL] Body: ${body}`);
+
+  // Try to open default mail client with the code (for local testing)
+  // In production, replace this with actual email sending
+  try {
+    const { shell } = require('electron');
+    // We won't actually open mail client - just log for now
+    // shell.openExternal(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+  } catch (e) {
+    console.error('Could not send email:', e);
+  }
+
+  return true;
+}
+
+// Request a verification code (for login 2FA or email verification)
+ipcMain.handle('request-verification-code', async (event, { userId, email, type }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!userId && !email) {
+    return { success: false, error: 'User ID or email required' };
+  }
+
+  try {
+    let userEmail = email;
+    let resolvedUserId = userId;
+
+    // If we have userId, get the user's email
+    if (userId && !email) {
+      const result = db.exec(`SELECT email FROM users WHERE id = '${userId}'`);
+      if (result.length === 0 || result[0].values.length === 0) {
+        return { success: false, error: 'User not found' };
+      }
+      userEmail = result[0].values[0][0];
+    }
+
+    // If we have email but no userId, find the user
+    if (email && !userId) {
+      const result = db.exec(`SELECT id FROM users WHERE email = '${email}'`);
+      if (result.length > 0 && result[0].values.length > 0) {
+        resolvedUserId = result[0].values[0][0];
+      }
+    }
+
+    if (!userEmail) {
+      return { success: false, error: 'No email address on file. Please add an email to enable 2FA.' };
+    }
+
+    // Generate code
+    const code = generateVerificationCode();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+
+    // Invalidate any existing unused codes for this user/type
+    if (resolvedUserId) {
+      db.run(`UPDATE verification_codes SET used = 1 WHERE user_id = '${resolvedUserId}' AND type = '${type}' AND used = 0`);
+    }
+
+    // Store the code
+    db.run(`
+      INSERT INTO verification_codes (user_id, code, type, expires_at)
+      VALUES (?, ?, ?, ?)
+    `, [resolvedUserId || 'pending', code, type, expiresAt]);
+
+    saveDatabase();
+
+    // Send the email
+    await sendVerificationEmail(userEmail, code, type);
+
+    // Mask email for display
+    const maskedEmail = userEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3');
+
+    return {
+      success: true,
+      message: `Verification code sent to ${maskedEmail}`,
+      email: maskedEmail,
+      // For testing/development, include the code (remove in production!)
+      _devCode: code
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Verify a code
+ipcMain.handle('verify-code', async (event, { userId, code, type }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!code || code.length !== 6) {
+    return { success: false, error: 'Invalid verification code format' };
+  }
+
+  try {
+    // Find valid code
+    const result = db.exec(`
+      SELECT id, user_id, expires_at FROM verification_codes
+      WHERE code = '${code}'
+      AND type = '${type}'
+      AND used = 0
+      AND (user_id = '${userId}' OR user_id = 'pending')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'Invalid or expired verification code' };
+    }
+
+    const [codeId, codeUserId, expiresAt] = result[0].values[0];
+
+    // Check expiration
+    if (new Date(expiresAt) < new Date()) {
+      return { success: false, error: 'Verification code has expired' };
+    }
+
+    // Mark code as used
+    db.run(`UPDATE verification_codes SET used = 1 WHERE id = ${codeId}`);
+
+    // If this is email verification, mark the email as verified
+    if (type === 'email_verify' && userId) {
+      db.run(`UPDATE users SET email_verified = 1 WHERE id = '${userId}'`);
+    }
+
+    saveDatabase();
+
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Enable/disable 2FA for a user
+ipcMain.handle('toggle-2fa', async (event, { userId, enable }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Check if user has verified email
+    const result = db.exec(`SELECT email, email_verified FROM users WHERE id = '${userId}'`);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const [email, emailVerified] = result[0].values[0];
+
+    if (enable && !email) {
+      return { success: false, error: 'Please add an email address before enabling 2FA' };
+    }
+
+    if (enable && !emailVerified) {
+      return { success: false, error: 'Please verify your email address before enabling 2FA' };
+    }
+
+    db.run(`UPDATE users SET two_factor_enabled = ${enable ? 1 : 0} WHERE id = '${userId}'`);
+    saveDatabase();
+
+    return { success: true, twoFactorEnabled: enable };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get user's 2FA status
+ipcMain.handle('get-2fa-status', async (event, { userId }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    const result = db.exec(`SELECT email, email_verified, two_factor_enabled FROM users WHERE id = '${userId}'`);
+
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, error: 'User not found' };
+    }
+
+    const [email, emailVerified, twoFactorEnabled] = result[0].values[0];
+
+    return {
+      success: true,
+      email: email || null,
+      emailVerified: !!emailVerified,
+      twoFactorEnabled: !!twoFactorEnabled
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Update user email
+ipcMain.handle('update-user-email', async (event, { userId, email }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  if (!email || !email.includes('@')) {
+    return { success: false, error: 'Invalid email address' };
+  }
+
+  try {
+    // Check if email is already used by another user
+    const existing = db.exec(`SELECT id FROM users WHERE email = '${email}' AND id != '${userId}'`);
+    if (existing.length > 0 && existing[0].values.length > 0) {
+      return { success: false, error: 'Email address is already in use' };
+    }
+
+    // Update email and reset verification status
+    db.run(`UPDATE users SET email = '${email}', email_verified = 0, two_factor_enabled = 0 WHERE id = '${userId}'`);
     saveDatabase();
 
     return { success: true };

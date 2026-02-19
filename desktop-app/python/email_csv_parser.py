@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Email CSV Parser
+v5.1.6: Added boolean search with attachment filtering
 Parses Outlook CSV exports and stores email metadata for checklist integration.
-Supports keyword search and can be used with Claude API for semantic queries.
+Supports boolean keyword search (AND, OR, NOT, quotes) and attachment filtering.
 """
 
 import os
@@ -156,34 +157,244 @@ def parse_outlook_csv(csv_path):
     return emails
 
 
-def search_emails(emails, query, search_fields=None):
+def parse_boolean_query(query):
     """
-    Search emails by keyword.
+    Parse a boolean search query into tokens.
+
+    Supports:
+    - AND, OR, NOT operators (case insensitive)
+    - Quoted phrases: "purchase agreement"
+    - Attachment filter: attachment:filename or has:attachment
+    - Implicit AND between terms
+
+    Returns list of tokens with types:
+    [{'type': 'term'|'phrase'|'and'|'or'|'not'|'attachment', 'value': str}, ...]
+    """
+    tokens = []
+    query = query.strip()
+    i = 0
+
+    while i < len(query):
+        # Skip whitespace
+        while i < len(query) and query[i].isspace():
+            i += 1
+        if i >= len(query):
+            break
+
+        # Check for quoted phrase
+        if query[i] == '"':
+            end = query.find('"', i + 1)
+            if end == -1:
+                end = len(query)
+            phrase = query[i+1:end].strip()
+            if phrase:
+                tokens.append({'type': 'phrase', 'value': phrase.lower()})
+            i = end + 1
+            continue
+
+        # Extract word
+        start = i
+        while i < len(query) and not query[i].isspace() and query[i] != '"':
+            i += 1
+        word = query[start:i]
+
+        if not word:
+            continue
+
+        word_upper = word.upper()
+        word_lower = word.lower()
+
+        # Check for operators
+        if word_upper == 'AND':
+            tokens.append({'type': 'and', 'value': 'AND'})
+        elif word_upper == 'OR':
+            tokens.append({'type': 'or', 'value': 'OR'})
+        elif word_upper == 'NOT':
+            tokens.append({'type': 'not', 'value': 'NOT'})
+        # Check for attachment filter
+        elif word_lower.startswith('attachment:'):
+            attachment_query = word[11:]  # Remove "attachment:"
+            tokens.append({'type': 'attachment', 'value': attachment_query.lower()})
+        elif word_lower == 'has:attachment' or word_lower == 'has:attachments':
+            tokens.append({'type': 'has_attachment', 'value': True})
+        else:
+            tokens.append({'type': 'term', 'value': word_lower})
+
+    return tokens
+
+
+def evaluate_boolean_query(email, tokens, search_fields):
+    """
+    Evaluate a boolean query against an email.
+
+    Returns True if email matches the query.
+    """
+    if not tokens:
+        return False
+
+    # Build searchable text from specified fields
+    searchable_parts = []
+    for field in search_fields:
+        value = email.get(field, '')
+        if value:
+            searchable_parts.append(value.lower())
+    searchable_text = ' '.join(searchable_parts)
+
+    # Get attachment text separately
+    attachment_text = email.get('attachments', '').lower()
+    has_attachments = email.get('has_attachments', False)
+
+    # Evaluate tokens with simple boolean logic
+    # Default is AND between consecutive terms
+    results = []
+    current_op = 'and'  # Default operator
+    negate_next = False
+
+    for token in tokens:
+        if token['type'] == 'and':
+            current_op = 'and'
+            continue
+        elif token['type'] == 'or':
+            current_op = 'or'
+            continue
+        elif token['type'] == 'not':
+            negate_next = True
+            continue
+
+        # Evaluate the term/phrase/attachment
+        if token['type'] == 'term':
+            match = token['value'] in searchable_text
+        elif token['type'] == 'phrase':
+            match = token['value'] in searchable_text
+        elif token['type'] == 'attachment':
+            match = token['value'] in attachment_text
+        elif token['type'] == 'has_attachment':
+            match = has_attachments
+        else:
+            match = False
+
+        # Apply negation
+        if negate_next:
+            match = not match
+            negate_next = False
+
+        # Combine with previous results
+        if not results:
+            results.append(match)
+        elif current_op == 'and':
+            results[-1] = results[-1] and match
+        elif current_op == 'or':
+            results.append(match)
+
+        # Reset to default AND
+        current_op = 'and'
+
+    # Final result: any OR group must be true
+    return any(results) if results else False
+
+
+def search_emails(emails, query, search_fields=None, attachment_only=False):
+    """
+    Search emails with boolean query support.
+
+    v5.1.6: Supports boolean operators (AND, OR, NOT), quoted phrases,
+    and attachment filtering.
 
     Args:
         emails: List of email dictionaries
-        query: Search query string
-        search_fields: List of fields to search (default: subject, body, from, to)
+        query: Search query string with optional boolean operators
+               Examples:
+               - "purchase agreement" (exact phrase)
+               - credit AND agreement
+               - loan OR credit
+               - NOT draft
+               - attachment:agreement.pdf
+               - has:attachment
+        search_fields: List of fields to search (default: subject, body, from, to, attachments)
+        attachment_only: If True, only search in attachments field
 
     Returns list of matching emails with match info.
     """
     if not search_fields:
-        search_fields = ['subject', 'body', 'from', 'to']
+        search_fields = ['subject', 'body', 'from', 'to', 'attachments']
 
-    query_lower = query.lower()
+    if attachment_only:
+        search_fields = ['attachments']
+
+    # Parse the boolean query
+    tokens = parse_boolean_query(query)
+
+    if not tokens:
+        return []
+
     results = []
 
     for email in emails:
-        matches = []
-        for field in search_fields:
-            value = email.get(field, '')
-            if value and query_lower in value.lower():
-                matches.append(field)
+        if evaluate_boolean_query(email, tokens, search_fields):
+            # Determine which fields matched (for display)
+            matched_fields = []
+            for field in search_fields:
+                value = email.get(field, '')
+                if value:
+                    # Check if any search term appears in this field
+                    for token in tokens:
+                        if token['type'] in ('term', 'phrase'):
+                            if token['value'] in value.lower():
+                                matched_fields.append(field)
+                                break
+                        elif token['type'] == 'attachment' and field == 'attachments':
+                            if token['value'] in value.lower():
+                                matched_fields.append('attachments')
+                                break
+
+            results.append({
+                'email': email,
+                'matched_fields': list(set(matched_fields))
+            })
+
+    return results
+
+
+def search_attachments(emails, query):
+    """
+    Search specifically for attachments matching the query.
+
+    v5.1.6: Convenience function for attachment-only search.
+
+    Args:
+        emails: List of email dictionaries
+        query: Search query (can use boolean operators)
+
+    Returns list of emails with matching attachments.
+    """
+    # First filter to only emails with attachments
+    emails_with_attachments = [e for e in emails if e.get('has_attachments')]
+
+    # Parse query
+    tokens = parse_boolean_query(query)
+
+    # If no special operators, treat as simple attachment search
+    if all(t['type'] == 'term' for t in tokens):
+        # Add implicit attachment: prefix to all terms
+        tokens = [{'type': 'attachment', 'value': t['value']} for t in tokens]
+
+    results = []
+    for email in emails_with_attachments:
+        attachment_text = email.get('attachments', '').lower()
+
+        # Check if any term matches
+        matches = False
+        for token in tokens:
+            if token['type'] in ('term', 'attachment', 'phrase'):
+                if token['value'] in attachment_text:
+                    matches = True
+                    break
 
         if matches:
             results.append({
                 'email': email,
-                'matched_fields': matches
+                'matched_fields': ['attachments'],
+                'attachments': email.get('attachments', '')
             })
 
     return results
@@ -284,20 +495,39 @@ def main():
              summary=summary)
 
     elif action == 'search':
-        # Search within provided emails
+        # Search within provided emails (v5.1.6: supports boolean operators)
         emails = config.get('emails', [])
         query = config.get('query', '')
         search_fields = config.get('search_fields')
+        attachment_only = config.get('attachment_only', False)
 
         if not query:
             emit("error", message="No search query provided")
             sys.exit(1)
 
-        results = search_emails(emails, query, search_fields)
+        results = search_emails(emails, query, search_fields, attachment_only)
 
         emit("result",
              success=True,
              action="search",
+             query=query,
+             results=results,
+             total_matches=len(results))
+
+    elif action == 'search_attachments':
+        # v5.1.6: Search specifically for attachments
+        emails = config.get('emails', [])
+        query = config.get('query', '')
+
+        if not query:
+            emit("error", message="No search query provided")
+            sys.exit(1)
+
+        results = search_attachments(emails, query)
+
+        emit("result",
+             success=True,
+             action="search_attachments",
              query=query,
              results=results,
              total_matches=len(results))
