@@ -25,22 +25,27 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Python executables (with --strip to reduce size)
+      - name: Build unified processor executable
         run: |
           cd desktop-app/python
-          pyinstaller --onefile --strip --name signature_packets signature_packets.py
-          pyinstaller --onefile --strip --name execution_version execution_version.py
-          pyinstaller --onefile --strip --name checklist_parser checklist_parser.py
-          pyinstaller --onefile --strip --name incumbency_parser incumbency_parser.py
-          pyinstaller --onefile --strip --name sigblock_workflow sigblock_workflow.py
-          pyinstaller --onefile --strip --name document_collator document_collator.py
-          pyinstaller --onefile --strip --name email_csv_parser email_csv_parser.py
-          pyinstaller --onefile --strip --name time_tracker time_tracker.py
-          pyinstaller --onefile --strip --name checklist_updater checklist_updater.py
-          pyinstaller --onefile --strip --name punchlist_generator punchlist_generator.py
-          pyinstaller --onefile --strip --name email_nl_search email_nl_search.py
-          pyinstaller --onefile --strip --name packet_shell_generator packet_shell_generator.py
-          pyinstaller --onefile --strip --name document_redline document_redline.py
+          pyinstaller --onefile --strip --name emna_processor ^
+            --hidden-import=signature_packets ^
+            --hidden-import=execution_version ^
+            --hidden-import=checklist_parser ^
+            --hidden-import=incumbency_parser ^
+            --hidden-import=sigblock_workflow ^
+            --hidden-import=sigblock_generator ^
+            --hidden-import=document_collator ^
+            --hidden-import=email_csv_parser ^
+            --hidden-import=time_tracker ^
+            --hidden-import=checklist_updater ^
+            --hidden-import=punchlist_generator ^
+            --hidden-import=email_nl_search ^
+            --hidden-import=packet_shell_generator ^
+            --hidden-import=document_redline ^
+            --paths=. ^
+            emna_processor.py
+        shell: cmd
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -62,21 +67,9 @@ jobs:
       - name: Prepare resources
         run: |
           mkdir -p desktop-app/resources/win
-          cp desktop-app/python/dist/signature_packets.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/execution_version.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/checklist_parser.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/incumbency_parser.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/sigblock_workflow.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/document_collator.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/email_csv_parser.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/time_tracker.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/checklist_updater.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/punchlist_generator.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/email_nl_search.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/packet_shell_generator.exe desktop-app/resources/win/
-          cp desktop-app/python/dist/document_redline.exe desktop-app/resources/win/
+          cp desktop-app/python/dist/emna_processor.exe desktop-app/resources/win/
           echo "=== Resource sizes ==="
-          du -sh desktop-app/resources/win/*.exe
+          du -sh desktop-app/resources/win/emna_processor.exe
           du -sh desktop-app/resources/win/
         shell: bash
 
@@ -113,22 +106,26 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Python executables (with --strip to reduce size)
+      - name: Build unified processor executable
         run: |
           cd desktop-app/python
-          pyinstaller --onefile --strip --name signature_packets signature_packets.py
-          pyinstaller --onefile --strip --name execution_version execution_version.py
-          pyinstaller --onefile --strip --name checklist_parser checklist_parser.py
-          pyinstaller --onefile --strip --name incumbency_parser incumbency_parser.py
-          pyinstaller --onefile --strip --name sigblock_workflow sigblock_workflow.py
-          pyinstaller --onefile --strip --name document_collator document_collator.py
-          pyinstaller --onefile --strip --name email_csv_parser email_csv_parser.py
-          pyinstaller --onefile --strip --name time_tracker time_tracker.py
-          pyinstaller --onefile --strip --name checklist_updater checklist_updater.py
-          pyinstaller --onefile --strip --name punchlist_generator punchlist_generator.py
-          pyinstaller --onefile --strip --name email_nl_search email_nl_search.py
-          pyinstaller --onefile --strip --name packet_shell_generator packet_shell_generator.py
-          pyinstaller --onefile --strip --name document_redline document_redline.py
+          pyinstaller --onefile --strip --name emna_processor \
+            --hidden-import=signature_packets \
+            --hidden-import=execution_version \
+            --hidden-import=checklist_parser \
+            --hidden-import=incumbency_parser \
+            --hidden-import=sigblock_workflow \
+            --hidden-import=sigblock_generator \
+            --hidden-import=document_collator \
+            --hidden-import=email_csv_parser \
+            --hidden-import=time_tracker \
+            --hidden-import=checklist_updater \
+            --hidden-import=punchlist_generator \
+            --hidden-import=email_nl_search \
+            --hidden-import=packet_shell_generator \
+            --hidden-import=document_redline \
+            --paths=. \
+            emna_processor.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -150,32 +147,8 @@ jobs:
       - name: Prepare resources
         run: |
           mkdir -p desktop-app/resources/mac
-          cp desktop-app/python/dist/signature_packets desktop-app/resources/mac/
-          cp desktop-app/python/dist/execution_version desktop-app/resources/mac/
-          cp desktop-app/python/dist/checklist_parser desktop-app/resources/mac/
-          cp desktop-app/python/dist/incumbency_parser desktop-app/resources/mac/
-          cp desktop-app/python/dist/sigblock_workflow desktop-app/resources/mac/
-          cp desktop-app/python/dist/document_collator desktop-app/resources/mac/
-          cp desktop-app/python/dist/email_csv_parser desktop-app/resources/mac/
-          cp desktop-app/python/dist/time_tracker desktop-app/resources/mac/
-          cp desktop-app/python/dist/checklist_updater desktop-app/resources/mac/
-          cp desktop-app/python/dist/punchlist_generator desktop-app/resources/mac/
-          cp desktop-app/python/dist/email_nl_search desktop-app/resources/mac/
-          cp desktop-app/python/dist/packet_shell_generator desktop-app/resources/mac/
-          cp desktop-app/python/dist/document_redline desktop-app/resources/mac/
-          chmod +x desktop-app/resources/mac/signature_packets
-          chmod +x desktop-app/resources/mac/execution_version
-          chmod +x desktop-app/resources/mac/checklist_parser
-          chmod +x desktop-app/resources/mac/incumbency_parser
-          chmod +x desktop-app/resources/mac/sigblock_workflow
-          chmod +x desktop-app/resources/mac/document_collator
-          chmod +x desktop-app/resources/mac/email_csv_parser
-          chmod +x desktop-app/resources/mac/time_tracker
-          chmod +x desktop-app/resources/mac/checklist_updater
-          chmod +x desktop-app/resources/mac/punchlist_generator
-          chmod +x desktop-app/resources/mac/email_nl_search
-          chmod +x desktop-app/resources/mac/packet_shell_generator
-          chmod +x desktop-app/resources/mac/document_redline
+          cp desktop-app/python/dist/emna_processor desktop-app/resources/mac/
+          chmod +x desktop-app/resources/mac/emna_processor
 
       - name: Build Electron app
         run: |

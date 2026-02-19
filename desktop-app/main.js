@@ -452,14 +452,16 @@ function getProcessorPath(processorName = 'signature_packets') {
     return null;
   }
 
-  // Production - bundled processor
+  // Production - unified processor executable
+  // All modules are bundled into a single emna_processor binary
   const resourcesPath = process.resourcesPath;
   if (process.platform === 'win32') {
-    return path.join(resourcesPath, 'processor', `${processorName}.exe`);
+    return path.join(resourcesPath, 'processor', 'emna_processor.exe');
   } else {
-    return path.join(resourcesPath, 'processor', processorName);
+    return path.join(resourcesPath, 'processor', 'emna_processor');
   }
 }
+
 
 // Process signature packets
 // Accepts either a folder path string (legacy) or an object { folder: string } or { files: string[] }
@@ -468,7 +470,8 @@ ipcMain.handle('process-folder', async (event, input) => {
     // Send initial progress
     mainWindow.webContents.send('progress', { percent: 0, message: 'Initializing signature packet processor...' });
 
-    const processorPath = getProcessorPath();
+    const moduleName = 'signature_packets';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -514,7 +517,7 @@ ipcMain.handle('process-folder', async (event, input) => {
       return;
     }
 
-    const proc = spawn(processorPath, args);
+    const proc = spawn(processorPath, [moduleName, ...args]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -591,7 +594,8 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
 // Generate packet shell - combined signature packet with all pages
 ipcMain.handle('generate-packet-shell', async (event, input) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('packet_shell_generator');
+    const moduleName = 'packet_shell_generator';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -619,7 +623,7 @@ ipcMain.handle('generate-packet-shell', async (event, input) => {
     }));
 
     const args = ['--config', configPath];
-    const proc = spawn(processorPath, args);
+    const proc = spawn(processorPath, [moduleName, ...args]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -712,7 +716,8 @@ ipcMain.handle('select-pdfs-multiple', async () => {
 // Parse checklist
 ipcMain.handle('parse-checklist', async (event, checklistPath) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('checklist_parser');
+    const moduleName = 'checklist_parser';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -728,7 +733,7 @@ ipcMain.handle('parse-checklist', async (event, checklistPath) => {
       try { fs.chmodSync(processorPath, '755'); } catch (e) {}
     }
 
-    const proc = spawn(processorPath, [checklistPath]);
+    const proc = spawn(processorPath, [moduleName, checklistPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -762,7 +767,8 @@ ipcMain.handle('parse-checklist', async (event, checklistPath) => {
 // Parse incumbency certificate
 ipcMain.handle('parse-incumbency', async (event, incPath) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('incumbency_parser');
+    const moduleName = 'incumbency_parser';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -778,7 +784,7 @@ ipcMain.handle('parse-incumbency', async (event, incPath) => {
       try { fs.chmodSync(processorPath, '755'); } catch (e) {}
     }
 
-    const proc = spawn(processorPath, [incPath]);
+    const proc = spawn(processorPath, [moduleName, incPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -810,7 +816,8 @@ ipcMain.handle('parse-incumbency', async (event, incPath) => {
 // Process signature block workflow
 ipcMain.handle('process-sigblocks', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('sigblock_workflow');
+    const moduleName = 'sigblock_workflow';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -830,7 +837,7 @@ ipcMain.handle('process-sigblocks', async (event, config) => {
     const configPath = path.join(app.getPath('temp'), `sigblock-config-${Date.now()}.json`);
     fs.writeFileSync(configPath, JSON.stringify(config));
 
-    const proc = spawn(processorPath, [configPath]);
+    const proc = spawn(processorPath, [moduleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -869,7 +876,8 @@ ipcMain.handle('process-sigblocks', async (event, config) => {
 // signedPath can be a folder path (new two-folder workflow) or a single PDF file (legacy)
 ipcMain.handle('process-execution-version', async (event, originalsInput, signedPath) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('execution_version');
+    const moduleName = 'execution_version';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -918,7 +926,7 @@ ipcMain.handle('process-execution-version', async (event, originalsInput, signed
       return;
     }
 
-    const proc = spawn(processorPath, args);
+    const proc = spawn(processorPath, [moduleName, ...args]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -988,7 +996,8 @@ ipcMain.handle('select-docx-multiple', async () => {
 // Collate documents
 ipcMain.handle('collate-documents', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('document_collator');
+    const moduleName = 'document_collator';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -1008,7 +1017,7 @@ ipcMain.handle('collate-documents', async (event, config) => {
     const configPath = path.join(app.getPath('temp'), `collate-config-${Date.now()}.json`);
     fs.writeFileSync(configPath, JSON.stringify(config));
 
-    const proc = spawn(processorPath, [configPath]);
+    const proc = spawn(processorPath, [moduleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -1049,7 +1058,8 @@ ipcMain.handle('collate-documents', async (event, config) => {
 // Redline documents
 ipcMain.handle('redline-documents', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const processorPath = getProcessorPath('document_redline');
+    const moduleName = 'document_redline';
+    const processorPath = getProcessorPath(moduleName);
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -1069,7 +1079,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
     const configPath = path.join(app.getPath('temp'), `redline-config-${Date.now()}.json`);
     fs.writeFileSync(configPath, JSON.stringify(config));
 
-    const proc = spawn(processorPath, [configPath]);
+    const proc = spawn(processorPath, [moduleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -1110,7 +1120,8 @@ ipcMain.handle('redline-documents', async (event, config) => {
 // ========== EMAIL CSV PARSING ==========
 
 ipcMain.handle('parse-email-csv', async (event, csvPath) => {
-  const processorPath = getProcessorPath('email_csv_parser');
+  const emailModuleName = 'email_csv_parser';
+  const processorPath = getProcessorPath(emailModuleName);
 
   if (!processorPath) {
     // In development, parse CSV directly with Node.js
@@ -1212,7 +1223,7 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
   fs.writeFileSync(configPath, JSON.stringify(config));
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(processorPath, [configPath]);
+    const proc = spawn(processorPath, [emailModuleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -1248,7 +1259,8 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
 // ========== NATURAL LANGUAGE EMAIL SEARCH ==========
 
 ipcMain.handle('nl-search-emails', async (event, config) => {
-  const processorPath = getProcessorPath('email_nl_search');
+  const nlModuleName = 'email_nl_search';
+  const processorPath = getProcessorPath(nlModuleName);
 
   // Get the API key
   const apiKey = config.api_key || getApiKey();
@@ -1405,9 +1417,9 @@ Respond ONLY with the JSON object, no other text.`;
   return new Promise((resolve, reject) => {
     let args;
     if (app.isPackaged) {
-      args = [configPath];
+      args = [nlModuleName, configPath];
     } else {
-      args = [path.join(__dirname, 'python', 'email_nl_search.py'), configPath];
+      args = [nlModuleName, path.join(__dirname, 'python', 'email_nl_search.py'), configPath];
     }
 
     const proc = spawn(processorPath, args);
@@ -1449,7 +1461,8 @@ Respond ONLY with the JSON object, no other text.`;
 // ========== TIME TRACKING ==========
 
 ipcMain.handle('generate-time-summary', async (event, config) => {
-  const processorPath = getProcessorPath('time_tracker');
+  const timeModuleName = 'time_tracker';
+  const processorPath = getProcessorPath(timeModuleName);
 
   // In development, use simplified local processing
   if (!processorPath) {
@@ -1531,7 +1544,7 @@ ipcMain.handle('generate-time-summary', async (event, config) => {
   fs.writeFileSync(configPath, JSON.stringify(config));
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(processorPath, [configPath]);
+    const proc = spawn(processorPath, [timeModuleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2378,7 +2391,8 @@ ipcMain.handle('update-checklist', async (event, config) => {
   fs.mkdirSync(outputFolder, { recursive: true });
 
   // Get processor path using existing helper
-  const processorPath = getProcessorPath('checklist_updater');
+  const clModuleName = 'checklist_updater';
+  const processorPath = getProcessorPath(clModuleName);
 
   if (!processorPath) {
     return { success: false, error: 'Checklist updater not available' };
@@ -2398,10 +2412,10 @@ ipcMain.handle('update-checklist', async (event, config) => {
     const apiKey = getApiKey();  // Get API key for LLM-powered matching
 
     if (app.isPackaged) {
-      args = [checklistPath, emailPath, outputFolder];
+      args = [clModuleName, checklistPath, emailPath, outputFolder];
       if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     } else {
-      args = [path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder];
+      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder];
       if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     }
 
@@ -2456,7 +2470,8 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   fs.mkdirSync(outputFolder, { recursive: true });
 
   // Get processor path using existing helper
-  const processorPath = getProcessorPath('punchlist_generator');
+  const plModuleName = 'punchlist_generator';
+  const processorPath = getProcessorPath(plModuleName);
 
   if (!processorPath) {
     return { success: false, error: 'Punchlist generator not available' };
@@ -2477,10 +2492,10 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
     const apiKey = getApiKey();  // Get API key for LLM-powered categorization
 
     if (app.isPackaged) {
-      args = [checklistPath, outputFolder, filtersJson];
+      args = [plModuleName, checklistPath, outputFolder, filtersJson];
       if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     } else {
-      args = [path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson];
+      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson];
       if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
     }
 
