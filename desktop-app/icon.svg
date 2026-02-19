@@ -1,15 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <!-- EmmaNeigh App Icon - Simplified prancing horse for small sizes -->
+  <!-- EmmaNeigh App Icon - Clean white horse on dark background -->
 
-  <!-- White background circle for visibility -->
-  <circle cx="128" cy="128" r="120" fill="#ffffff"/>
+  <!-- Dark background -->
+  <rect width="256" height="256" fill="#1a1a2e"/>
 
-  <!-- Border ring -->
-  <circle cx="128" cy="128" r="115" fill="none" stroke="#000000" stroke-width="3"/>
-
-  <!-- Simplified Prancing Horse -->
-  <g fill="#000000" transform="translate(128,128) scale(0.8) translate(-128,-128)">
+  <!-- White Prancing Horse - Simple and elegant -->
+  <g fill="#ffffff" transform="translate(128,128) scale(0.85) translate(-128,-128)">
     <!-- Body -->
     <ellipse cx="130" cy="145" rx="45" ry="28"/>
 
@@ -22,8 +19,8 @@
     <!-- Ear -->
     <path d="M 195 48 L 205 30 L 200 50 Z"/>
 
-    <!-- Eye -->
-    <circle cx="198" cy="55" r="3" fill="#ffffff"/>
+    <!-- Eye (dark) -->
+    <circle cx="198" cy="55" r="3" fill="#1a1a2e"/>
 
     <!-- Mane -->
     <path d="M 170 75 Q 155 65 150 85 Q 165 80 170 75 Z"/>

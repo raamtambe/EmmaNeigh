@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 EmmaNeigh - Signature Packet Processor
-v5.1.4: Simplified signature detection - BY: blocks and NAME:/TITLE: patterns only.
-Removes loose heuristics that caused false positives on blank pages.
+v5.1.6:
+- Fixed folder processing (now properly handles folder input vs file list)
+- Fixed footer detection (only captures text in actual footer region near bottom of page)
+- Added Document ID extraction from bottom-left of footer
 """
 
 import fitz
@@ -67,40 +69,157 @@ def is_probable_person(name):
 def extract_footer_from_pdf_page(page):
     """
     Extract footer text from the bottom of a PDF page.
-    Looks for 'Signature Page to X' pattern or returns last meaningful line.
+    v5.1.6: Only captures text that is actually in the footer region (bottom 10% of page).
+    Returns "N/A" if no footer text is found.
     """
-    text = page.get_text()
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    page_height = page.rect.height
+    page_width = page.rect.width
 
-    if not lines:
-        return ""
+    # Footer region: bottom 10% of page (typical footer area)
+    footer_threshold = page_height * 0.90  # Text must be below this Y coordinate
 
-    # Check last 5 lines for footer patterns
-    footer_lines = lines[-5:] if len(lines) >= 5 else lines
+    # Get text blocks with position information
+    blocks = page.get_text("dict")["blocks"]
+
+    footer_texts = []
+
+    for block in blocks:
+        if "lines" not in block:
+            continue
+
+        for line in block["lines"]:
+            for span in line["spans"]:
+                # Check if text is in footer region (below 90% of page height)
+                y_pos = span["bbox"][1]  # Top Y position of text
+                if y_pos >= footer_threshold:
+                    text = span["text"].strip()
+                    if text and len(text) > 1:
+                        # Skip if it's just a page number
+                        if not re.match(r'^[\d\s\-\.]+$', text):
+                            footer_texts.append({
+                                "text": text,
+                                "x": span["bbox"][0],
+                                "y": y_pos
+                            })
+
+    if not footer_texts:
+        return "N/A"
+
+    # Sort by Y position (top to bottom), then combine texts on same line
+    footer_texts.sort(key=lambda t: (t["y"], t["x"]))
+
+    # Combine texts that are on approximately the same Y position
+    combined_lines = []
+    current_line = []
+    current_y = None
+
+    for ft in footer_texts:
+        if current_y is None or abs(ft["y"] - current_y) < 5:  # Same line if Y within 5 pts
+            current_line.append(ft["text"])
+            current_y = ft["y"]
+        else:
+            if current_line:
+                combined_lines.append(" ".join(current_line))
+            current_line = [ft["text"]]
+            current_y = ft["y"]
+
+    if current_line:
+        combined_lines.append(" ".join(current_line))
 
     # Priority 1: Look for "SIGNATURE PAGE TO X" pattern
-    for line in footer_lines:
-        line_upper = line.upper()
-        if 'SIGNATURE PAGE' in line_upper:
+    for line in combined_lines:
+        if 'SIGNATURE PAGE' in line.upper():
             return line.strip()
 
-    # Priority 2: Look for page numbers or document identifiers at bottom
-    for line in reversed(footer_lines):
-        # Skip very short lines (likely just page numbers)
-        if len(line) < 3:
-            continue
-        # Skip lines that are just numbers
-        if re.match(r'^[\d\s\-\.]+$', line):
-            continue
-        return line.strip()
+    # Return the first meaningful footer line
+    for line in combined_lines:
+        if len(line) > 3 and not re.match(r'^[\d\s\-\.]+$', line):
+            return line.strip()
 
-    return ""
+    return "N/A"
+
+
+def extract_document_id_from_pdf_page(page):
+    """
+    Extract document ID from bottom-left of footer area.
+    v5.1.6: Document IDs typically appear in bottom-left corner.
+    Returns "N/A" if no document ID found.
+    """
+    page_height = page.rect.height
+    page_width = page.rect.width
+
+    # Footer region: bottom 10% of page
+    footer_threshold = page_height * 0.90
+    # Left region: left 40% of page
+    left_threshold = page_width * 0.40
+
+    # Get text blocks with position information
+    blocks = page.get_text("dict")["blocks"]
+
+    bottom_left_texts = []
+
+    for block in blocks:
+        if "lines" not in block:
+            continue
+
+        for line in block["lines"]:
+            for span in line["spans"]:
+                x_pos = span["bbox"][0]  # Left X position
+                y_pos = span["bbox"][1]  # Top Y position
+
+                # Check if text is in bottom-left region
+                if y_pos >= footer_threshold and x_pos <= left_threshold:
+                    text = span["text"].strip()
+                    if text:
+                        bottom_left_texts.append({
+                            "text": text,
+                            "x": x_pos,
+                            "y": y_pos
+                        })
+
+    if not bottom_left_texts:
+        return "N/A"
+
+    # Sort by Y (bottom to top) then X (left to right)
+    bottom_left_texts.sort(key=lambda t: (t["y"], t["x"]))
+
+    # Look for document ID patterns:
+    # - Alphanumeric codes (e.g., "DOC-12345", "123456789", "ID: ABC-123")
+    # - Often starts with numbers or has specific prefixes
+
+    for item in bottom_left_texts:
+        text = item["text"]
+
+        # Pattern 1: ID with prefix like "Doc ID:", "ID:", "Ref:", etc.
+        id_match = re.search(r'(?:ID|Doc|Ref|No\.?|#)\s*[:\-]?\s*([A-Z0-9\-\.]+)', text, re.IGNORECASE)
+        if id_match:
+            return id_match.group(1).strip()
+
+        # Pattern 2: Standalone alphanumeric code (at least 4 chars, mix of letters/numbers)
+        if re.match(r'^[A-Z0-9\-\.]{4,}$', text, re.IGNORECASE):
+            # Avoid capturing simple page numbers
+            if not re.match(r'^\d{1,3}$', text):
+                return text
+
+        # Pattern 3: Number sequence that looks like an ID (5+ digits)
+        if re.match(r'^\d{5,}$', text):
+            return text
+
+    # If no clear ID pattern, return first bottom-left text as potential ID
+    if bottom_left_texts:
+        first_text = bottom_left_texts[0]["text"]
+        # Only return if it looks like an identifier (short, no spaces in middle)
+        if len(first_text) <= 30 and not re.match(r'^Page\s', first_text, re.IGNORECASE):
+            return first_text
+
+    return "N/A"
 
 
 def extract_footer_from_docx(docx_path):
     """
     Extract footer from DOCX document sections.
-    Falls back to last paragraph if no explicit footer.
+    v5.1.6: Only returns actual footer content, not last paragraph.
+    Returns "N/A" if no footer found.
     """
     try:
         doc = Document(docx_path)
@@ -118,18 +237,54 @@ def extract_footer_from_docx(docx_path):
             except Exception:
                 pass
 
-        # Fallback: check last few paragraphs for footer-like content
-        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        if paragraphs:
-            for para in reversed(paragraphs[-3:]):
-                if 'SIGNATURE PAGE' in para.upper():
-                    return para
-            # Return last non-empty paragraph
-            return paragraphs[-1] if paragraphs else ""
+        # No explicit footer found - return N/A (don't fall back to last paragraph)
+        return "N/A"
     except Exception:
         pass
 
-    return ""
+    return "N/A"
+
+
+def extract_document_id_from_docx(docx_path):
+    """
+    Extract document ID from DOCX footer (bottom-left).
+    v5.1.6: Looks for ID patterns in footer sections.
+    Returns "N/A" if no document ID found.
+    """
+    try:
+        doc = Document(docx_path)
+
+        # Check footer sections for document IDs
+        for section in doc.sections:
+            try:
+                footer = section.footer
+                if footer and footer.paragraphs:
+                    for para in footer.paragraphs:
+                        text = para.text.strip()
+                        if not text:
+                            continue
+
+                        # Pattern 1: ID with prefix
+                        id_match = re.search(r'(?:ID|Doc|Ref|No\.?|#)\s*[:\-]?\s*([A-Z0-9\-\.]+)', text, re.IGNORECASE)
+                        if id_match:
+                            return id_match.group(1).strip()
+
+                        # Pattern 2: Standalone alphanumeric code
+                        if re.match(r'^[A-Z0-9\-\.]{4,}$', text, re.IGNORECASE):
+                            if not re.match(r'^\d{1,3}$', text):
+                                return text
+
+                        # Pattern 3: Number sequence (5+ digits)
+                        if re.match(r'^\d{5,}$', text):
+                            return text
+            except Exception:
+                pass
+
+        return "N/A"
+    except Exception:
+        pass
+
+    return "N/A"
 
 
 # ========== EXTENDED SIGNATURE DETECTION ==========
@@ -849,7 +1004,7 @@ def main():
     file_paths = None
     output_format = 'preserve'  # Default: output format matches input format
 
-    # Check if we have --config argument (for file list) or folder path
+    # Check if we have --config argument (for file list or folder config) or direct folder path
     if sys.argv[1] == '--config':
         if len(sys.argv) < 3:
             emit("error", message="No config file provided.")
@@ -860,12 +1015,21 @@ def main():
                 config = json.load(f)
             file_paths = config.get('files', [])
             output_format = config.get('output_format', 'preserve')
-            if not file_paths:
-                emit("error", message="No files in config.")
+
+            # v5.1.6: Handle both 'files' list and 'folder' path from config
+            if file_paths:
+                # File list provided - use temp directory for output
+                import tempfile
+                input_dir = tempfile.mkdtemp(prefix='emmaneigh_packets_')
+            elif config.get('folder'):
+                # Folder path provided in config
+                input_dir = config.get('folder')
+                if not os.path.isdir(input_dir):
+                    emit("error", message=f"Invalid folder in config: {input_dir}")
+                    sys.exit(1)
+            else:
+                emit("error", message="No files or folder in config.")
                 sys.exit(1)
-            # Use temp directory for output
-            import tempfile
-            input_dir = tempfile.mkdtemp(prefix='emmaneigh_packets_')
         except Exception as e:
             emit("error", message=f"Failed to read config: {str(e)}")
             sys.exit(1)
@@ -883,15 +1047,24 @@ def main():
     os.makedirs(output_pdf_dir, exist_ok=True)
     os.makedirs(output_table_dir, exist_ok=True)
 
-    # Get document files - either from file_paths list or scan directory
+    # Get document files - either from file_paths list or scan directory (including subdirectories)
     if file_paths:
         # Filter to valid PDF/DOCX files
         document_files = [(os.path.basename(f), f) for f in file_paths
                           if os.path.isfile(f) and f.lower().endswith((".pdf", ".docx"))]
     else:
-        # Scan directory
-        document_files = [(f, os.path.join(input_dir, f)) for f in os.listdir(input_dir)
-                          if f.lower().endswith((".pdf", ".docx"))]
+        # v5.1.6: Scan directory recursively for all PDF/DOCX files
+        document_files = []
+        for root, dirs, files in os.walk(input_dir):
+            # Skip output directories
+            if 'signature_packets_output' in root:
+                continue
+            for f in files:
+                if f.lower().endswith((".pdf", ".docx")):
+                    filepath = os.path.join(root, f)
+                    # Use relative path as display name if in subdirectory
+                    rel_path = os.path.relpath(filepath, input_dir)
+                    document_files.append((rel_path, filepath))
 
     if not document_files:
         emit("error", message="No PDF or Word files found.")
@@ -916,13 +1089,15 @@ def main():
                 for page_num, page in enumerate(doc, start=1):
                     signers, detection_method = extract_person_signers(page)
                     if signers:
-                        # Extract footer for this page
+                        # Extract footer and document ID for this page
                         footer = extract_footer_from_pdf_page(page)
+                        doc_id = extract_document_id_from_pdf_page(page)
                         for signer in signers:
                             rows.append({
                                 "Signer Name": signer,
                                 "Document": filename,
                                 "Page": page_num,
+                                "Document ID": doc_id,
                                 "Footer": footer,
                                 "Detection Method": detection_method
                             })
@@ -931,13 +1106,15 @@ def main():
                 # DOCX processing
                 signers, detection_method = extract_signers_from_docx(filepath)
                 if signers:
-                    # Extract footer for DOCX
+                    # Extract footer and document ID for DOCX
                     footer = extract_footer_from_docx(filepath)
+                    doc_id = extract_document_id_from_docx(filepath)
                     for signer in signers:
                         rows.append({
                             "Signer Name": signer,
                             "Document": filename,
                             "Page": 1,  # DOCX doesn't have pages
+                            "Document ID": doc_id,
                             "Footer": footer,
                             "Detection Method": detection_method
                         })
@@ -949,10 +1126,10 @@ def main():
         sys.exit(1)
 
     # Create DataFrame and sort
-    # Columns: Signer Name, Document, Page, Footer, Detection Method
+    # Columns: Signer Name, Document, Page, Document ID, Footer, Detection Method
     df = pd.DataFrame(rows)
     # Reorder columns for cleaner output
-    column_order = ["Signer Name", "Document", "Page", "Footer", "Detection Method"]
+    column_order = ["Signer Name", "Document", "Page", "Document ID", "Footer", "Detection Method"]
     df = df[[col for col in column_order if col in df.columns]]
     df = df.sort_values(["Signer Name", "Document", "Page"])
 
