@@ -4,6 +4,16 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 ---
 
+## [5.2.0] - 2026-02-19
+
+### Fixed
+- Startup failure in packaged installs caused by missing `archiver-utils` module resolution
+
+### Changed
+- Added `archiver-utils` as an explicit runtime dependency to ensure reliable app startup
+
+---
+
 ## [5.0.1] - 2026-02-09
 
 ### Added
@@ -96,6 +106,7 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 5.2.0 | 2026-02-19 | Fixed startup failure by explicitly including `archiver-utils` |
 | 5.0.1 | 2026-02-09 | Format preservation (DOCX in = DOCX out) |
 | 5.0.0 | 2026-02-09 | Major UI redesign, email/time tracking, history |
 | 4.1.x | 2026-02 | DOCX support, collation |
