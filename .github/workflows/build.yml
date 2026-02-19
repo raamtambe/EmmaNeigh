@@ -25,22 +25,22 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Python executables
+      - name: Build Python executables (with --strip to reduce size)
         run: |
           cd desktop-app/python
-          pyinstaller --onefile --name signature_packets signature_packets.py
-          pyinstaller --onefile --name execution_version execution_version.py
-          pyinstaller --onefile --name checklist_parser checklist_parser.py
-          pyinstaller --onefile --name incumbency_parser incumbency_parser.py
-          pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
-          pyinstaller --onefile --name document_collator document_collator.py
-          pyinstaller --onefile --name email_csv_parser email_csv_parser.py
-          pyinstaller --onefile --name time_tracker time_tracker.py
-          pyinstaller --onefile --name checklist_updater checklist_updater.py
-          pyinstaller --onefile --name punchlist_generator punchlist_generator.py
-          pyinstaller --onefile --name email_nl_search email_nl_search.py
-          pyinstaller --onefile --name packet_shell_generator packet_shell_generator.py
-          pyinstaller --onefile --name document_redline document_redline.py
+          pyinstaller --onefile --strip --name signature_packets signature_packets.py
+          pyinstaller --onefile --strip --name execution_version execution_version.py
+          pyinstaller --onefile --strip --name checklist_parser checklist_parser.py
+          pyinstaller --onefile --strip --name incumbency_parser incumbency_parser.py
+          pyinstaller --onefile --strip --name sigblock_workflow sigblock_workflow.py
+          pyinstaller --onefile --strip --name document_collator document_collator.py
+          pyinstaller --onefile --strip --name email_csv_parser email_csv_parser.py
+          pyinstaller --onefile --strip --name time_tracker time_tracker.py
+          pyinstaller --onefile --strip --name checklist_updater checklist_updater.py
+          pyinstaller --onefile --strip --name punchlist_generator punchlist_generator.py
+          pyinstaller --onefile --strip --name email_nl_search email_nl_search.py
+          pyinstaller --onefile --strip --name packet_shell_generator packet_shell_generator.py
+          pyinstaller --onefile --strip --name document_redline document_redline.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -75,9 +75,12 @@ jobs:
           cp desktop-app/python/dist/email_nl_search.exe desktop-app/resources/win/
           cp desktop-app/python/dist/packet_shell_generator.exe desktop-app/resources/win/
           cp desktop-app/python/dist/document_redline.exe desktop-app/resources/win/
+          echo "=== Resource sizes ==="
+          du -sh desktop-app/resources/win/*.exe
+          du -sh desktop-app/resources/win/
         shell: bash
 
-      - name: Build Electron app (NSIS + Portable)
+      - name: Build Electron app (NSIS)
         run: |
           cd desktop-app
           npx electron-builder --win --publish never
@@ -88,7 +91,6 @@ jobs:
         with:
           files: |
             desktop-app/dist/EmmaNeigh-Setup.exe
-            desktop-app/dist/EmmaNeigh-Portable.exe
             desktop-app/dist/latest.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -111,22 +113,22 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Python executables
+      - name: Build Python executables (with --strip to reduce size)
         run: |
           cd desktop-app/python
-          pyinstaller --onefile --name signature_packets signature_packets.py
-          pyinstaller --onefile --name execution_version execution_version.py
-          pyinstaller --onefile --name checklist_parser checklist_parser.py
-          pyinstaller --onefile --name incumbency_parser incumbency_parser.py
-          pyinstaller --onefile --name sigblock_workflow sigblock_workflow.py
-          pyinstaller --onefile --name document_collator document_collator.py
-          pyinstaller --onefile --name email_csv_parser email_csv_parser.py
-          pyinstaller --onefile --name time_tracker time_tracker.py
-          pyinstaller --onefile --name checklist_updater checklist_updater.py
-          pyinstaller --onefile --name punchlist_generator punchlist_generator.py
-          pyinstaller --onefile --name email_nl_search email_nl_search.py
-          pyinstaller --onefile --name packet_shell_generator packet_shell_generator.py
-          pyinstaller --onefile --name document_redline document_redline.py
+          pyinstaller --onefile --strip --name signature_packets signature_packets.py
+          pyinstaller --onefile --strip --name execution_version execution_version.py
+          pyinstaller --onefile --strip --name checklist_parser checklist_parser.py
+          pyinstaller --onefile --strip --name incumbency_parser incumbency_parser.py
+          pyinstaller --onefile --strip --name sigblock_workflow sigblock_workflow.py
+          pyinstaller --onefile --strip --name document_collator document_collator.py
+          pyinstaller --onefile --strip --name email_csv_parser email_csv_parser.py
+          pyinstaller --onefile --strip --name time_tracker time_tracker.py
+          pyinstaller --onefile --strip --name checklist_updater checklist_updater.py
+          pyinstaller --onefile --strip --name punchlist_generator punchlist_generator.py
+          pyinstaller --onefile --strip --name email_nl_search email_nl_search.py
+          pyinstaller --onefile --strip --name packet_shell_generator packet_shell_generator.py
+          pyinstaller --onefile --strip --name document_redline document_redline.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
