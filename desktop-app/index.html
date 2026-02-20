@@ -2659,6 +2659,16 @@
           Get your API key from <a href="#" id="anthropicLink">console.anthropic.com</a>.
           Your key is encrypted and stored locally.
         </p>
+
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Claude Model</label>
+          <select id="claudeModelSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+            <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Recommended)</option>
+            <option value="claude-haiku-4-20250414">Claude Haiku 4 (Fast & affordable)</option>
+            <option value="claude-opus-4-20250514">Claude Opus 4 (Most capable)</option>
+          </select>
+          <p style="font-size: 11px; color: #666; margin-top: 4px;">Model used for NL search, checklist updates, and punchlist generation</p>
+        </div>
       </div>
 
       <div class="settings-section" id="securitySection">
@@ -2700,6 +2710,40 @@
             </label>
           </div>
           <p style="font-size: 11px; color: #666; margin-top: 4px;">Require email verification code on login</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>📧 SMTP Email Settings</h3>
+        <p style="font-size: 12px; color: #888; margin-bottom: 12px;">Configure SMTP to send 2FA verification codes via email</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+          <div>
+            <label style="font-size: 11px; color: #888;">SMTP Host</label>
+            <input type="text" id="smtpHost" class="settings-input" placeholder="smtp.gmail.com" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
+          </div>
+          <div>
+            <label style="font-size: 11px; color: #888;">Port</label>
+            <input type="text" id="smtpPort" class="settings-input" placeholder="587" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+          <div>
+            <label style="font-size: 11px; color: #888;">Username / Email</label>
+            <input type="text" id="smtpUser" class="settings-input" placeholder="you@gmail.com" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
+          </div>
+          <div>
+            <label style="font-size: 11px; color: #888;">Password / App Password</label>
+            <input type="password" id="smtpPass" class="settings-input" placeholder="••••••••" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
+          </div>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <label style="font-size: 11px; color: #888;">From Address (optional)</label>
+          <input type="text" id="smtpFrom" class="settings-input" placeholder="EmmaNeigh <noreply@yourdomain.com>" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="settings-btn settings-btn-secondary" id="testSmtpBtn">Test Connection</button>
+          <button class="settings-btn" id="saveSmtpBtn">Save SMTP</button>
+          <span id="smtpStatus" style="font-size: 12px; color: #888;"></span>
         </div>
       </div>
 
@@ -2965,15 +3009,11 @@
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
               <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
               <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <g class="front-legs">
-                <rect x="62" y="46" width="5" height="14" rx="2"/>
-                <rect x="54" y="46" width="5" height="14" rx="2"/>
-              </g>
-              <g class="back-legs">
-                <rect x="38" y="46" width="5" height="14" rx="2"/>
-                <rect x="30" y="46" width="5" height="14" rx="2"/>
-              </g>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
           </div>
           <div class="dust">
@@ -3050,15 +3090,11 @@
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
               <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
               <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <g class="front-legs">
-                <rect x="62" y="46" width="5" height="14" rx="2"/>
-                <rect x="54" y="46" width="5" height="14" rx="2"/>
-              </g>
-              <g class="back-legs">
-                <rect x="38" y="46" width="5" height="14" rx="2"/>
-                <rect x="30" y="46" width="5" height="14" rx="2"/>
-              </g>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
           </div>
           <div class="dust">
@@ -3177,15 +3213,11 @@
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
               <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
               <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <g class="front-legs">
-                <rect x="62" y="46" width="5" height="14" rx="2"/>
-                <rect x="54" y="46" width="5" height="14" rx="2"/>
-              </g>
-              <g class="back-legs">
-                <rect x="38" y="46" width="5" height="14" rx="2"/>
-                <rect x="30" y="46" width="5" height="14" rx="2"/>
-              </g>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
           </div>
           <div class="dust">
@@ -3288,15 +3320,11 @@
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
               <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
               <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <g class="front-legs">
-                <rect x="62" y="46" width="5" height="14" rx="2"/>
-                <rect x="54" y="46" width="5" height="14" rx="2"/>
-              </g>
-              <g class="back-legs">
-                <rect x="38" y="46" width="5" height="14" rx="2"/>
-                <rect x="30" y="46" width="5" height="14" rx="2"/>
-              </g>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
           </div>
           <div class="dust">
@@ -3414,15 +3442,11 @@
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
               <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
               <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <g class="front-legs">
-                <rect x="62" y="46" width="5" height="14" rx="2"/>
-                <rect x="54" y="46" width="5" height="14" rx="2"/>
-              </g>
-              <g class="back-legs">
-                <rect x="38" y="46" width="5" height="14" rx="2"/>
-                <rect x="30" y="46" width="5" height="14" rx="2"/>
-              </g>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
           </div>
           <div class="dust">
@@ -3457,7 +3481,8 @@
         </div>
 
         <div class="result-actions">
-          <button class="btn btn-primary" id="redlineOpenFolderBtn">Open Output Folder</button>
+          <button class="btn btn-primary" id="redlineDownloadZipBtn">Download ZIP</button>
+          <button class="btn btn-secondary" id="redlineOpenFolderBtn">Open Output Folder</button>
           <button class="btn btn-secondary" id="redlineResetBtn">Compare More Documents</button>
         </div>
       </div>
@@ -3598,15 +3623,17 @@
               <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
               <ellipse cx="88" cy="8" rx="11" ry="7"/>
               <path d="M 94 2 L 97 -4 L 96 3 Z"/>
-              <ellipse cx="80" cy="6" rx="2" ry="2"/>
-              <path d="M 18 40 Q 8 42 5 55"/>
-              <path d="M 28 45 Q 22 52 25 60"/>
-              <path d="M 62 45 Q 68 52 65 60"/>
-              <path d="M 72 40 Q 78 48 75 58"/>
-              <path d="M 22 32 Q 10 38 2 32 Q 8 28 22 32"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
           </div>
           <div class="dust">
+            <div class="dust-particle"></div>
             <div class="dust-particle"></div>
             <div class="dust-particle"></div>
             <div class="dust-particle"></div>
@@ -3677,7 +3704,21 @@
               <ellipse cx="50" cy="35" rx="28" ry="16"/>
               <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
               <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
           </div>
         </div>
         <p class="progress-text" id="timetrackProgressText">Analyzing activity...</p>
@@ -3777,7 +3818,21 @@
               <ellipse cx="50" cy="35" rx="28" ry="16"/>
               <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
               <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
           </div>
         </div>
         <p class="progress-text" id="checklistProgressText">Analyzing emails and updating checklist...</p>
@@ -3854,7 +3909,21 @@
               <ellipse cx="50" cy="35" rx="28" ry="16"/>
               <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
               <ellipse cx="88" cy="8" rx="11" ry="7"/>
+              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
             </svg>
+          </div>
+          <div class="dust">
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
+            <div class="dust-particle"></div>
           </div>
         </div>
         <p class="progress-text" id="punchlistProgressText">Generating punchlist...</p>
@@ -4226,6 +4295,29 @@
       require('electron').shell.openExternal('https://console.anthropic.com/');
     });
 
+    // ========== MODEL SELECTOR ==========
+    const claudeModelSelect = document.getElementById('claudeModelSelect');
+
+    // Load saved model on settings open
+    async function loadModelSetting() {
+      try {
+        const result = await ipcRenderer.invoke('get-setting', 'claude_model');
+        if (result.success && result.value) {
+          claudeModelSelect.value = result.value;
+        }
+      } catch (e) {}
+    }
+
+    // Save model on change
+    claudeModelSelect.addEventListener('change', async () => {
+      await ipcRenderer.invoke('save-setting', { key: 'claude_model', value: claudeModelSelect.value });
+    });
+
+    // Load when settings opens
+    settingsBtn.addEventListener('click', async () => {
+      await loadModelSetting();
+    });
+
     // ========== 2FA SETTINGS ==========
     const tfaEmailInput = document.getElementById('tfaEmailInput');
     const tfaUpdateEmailBtn = document.getElementById('tfaUpdateEmailBtn');
@@ -4415,6 +4507,89 @@
     const originalSettingsOpen = settingsBtn.onclick;
     settingsBtn.addEventListener('click', async () => {
       await load2FAStatus();
+    });
+
+    // ========== SMTP SETTINGS ==========
+    const smtpHost = document.getElementById('smtpHost');
+    const smtpPort = document.getElementById('smtpPort');
+    const smtpUser = document.getElementById('smtpUser');
+    const smtpPass = document.getElementById('smtpPass');
+    const smtpFrom = document.getElementById('smtpFrom');
+    const saveSmtpBtn = document.getElementById('saveSmtpBtn');
+    const testSmtpBtn = document.getElementById('testSmtpBtn');
+    const smtpStatus = document.getElementById('smtpStatus');
+
+    // Load SMTP settings when settings opens
+    async function loadSmtpSettings() {
+      try {
+        const result = await ipcRenderer.invoke('get-smtp-settings');
+        if (result.success) {
+          smtpHost.value = result.host || '';
+          smtpPort.value = result.port || '587';
+          smtpUser.value = result.user || '';
+          smtpFrom.value = result.from || '';
+          smtpPass.placeholder = result.hasPassword ? '••••••••' : 'Enter password';
+        }
+      } catch (e) {
+        console.error('Error loading SMTP settings:', e);
+      }
+    }
+
+    // Load on settings open
+    settingsBtn.addEventListener('click', async () => {
+      await loadSmtpSettings();
+    });
+
+    // Save SMTP settings
+    saveSmtpBtn.addEventListener('click', async () => {
+      smtpStatus.textContent = 'Saving...';
+      smtpStatus.style.color = '#888';
+      try {
+        const result = await ipcRenderer.invoke('save-smtp-settings', {
+          host: smtpHost.value.trim(),
+          port: smtpPort.value.trim() || '587',
+          user: smtpUser.value.trim(),
+          pass: smtpPass.value || null, // null = don't update password
+          from: smtpFrom.value.trim()
+        });
+        if (result.success) {
+          smtpStatus.textContent = '✓ Saved';
+          smtpStatus.style.color = '#22c55e';
+          smtpPass.value = '';
+          smtpPass.placeholder = '••••••••';
+        } else {
+          smtpStatus.textContent = result.error || 'Save failed';
+          smtpStatus.style.color = '#ef4444';
+        }
+      } catch (e) {
+        smtpStatus.textContent = 'Error: ' + e.message;
+        smtpStatus.style.color = '#ef4444';
+      }
+    });
+
+    // Test SMTP connection
+    testSmtpBtn.addEventListener('click', async () => {
+      smtpStatus.textContent = 'Testing...';
+      smtpStatus.style.color = '#888';
+      try {
+        const result = await ipcRenderer.invoke('test-smtp', {
+          host: smtpHost.value.trim(),
+          port: smtpPort.value.trim() || '587',
+          user: smtpUser.value.trim(),
+          pass: smtpPass.value,
+          from: smtpFrom.value.trim()
+        });
+        if (result.success) {
+          smtpStatus.textContent = '✓ Connection successful!';
+          smtpStatus.style.color = '#22c55e';
+        } else {
+          smtpStatus.textContent = result.error || 'Test failed';
+          smtpStatus.style.color = '#ef4444';
+        }
+      } catch (e) {
+        smtpStatus.textContent = 'Error: ' + e.message;
+        smtpStatus.style.color = '#ef4444';
+      }
     });
 
     // ========== UPDATE CHECK ==========
@@ -6135,6 +6310,7 @@
     const redlineParagraphChanges = document.getElementById('redlineParagraphChanges');
     const redlineTableChanges = document.getElementById('redlineTableChanges');
     const redlineOpenFolderBtn = document.getElementById('redlineOpenFolderBtn');
+    const redlineDownloadZipBtn = document.getElementById('redlineDownloadZipBtn');
     const redlineResetBtn = document.getElementById('redlineResetBtn');
     const redlineRetryBtn = document.getElementById('redlineRetryBtn');
     const redlineErrorText = document.getElementById('redlineErrorText');
@@ -6143,6 +6319,7 @@
     let redlineModifiedPath = null;
     let redlinePairs = []; // [{original: path, modified: path}]
     let redlineOutputFolder = null;
+    let redlineZipPath = null;
 
     const REDLINE_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'];
 
@@ -6349,6 +6526,10 @@
             redlineTableChanges.textContent = result.table_changes || 0;
           }
 
+          // Create ZIP for download
+          redlineProgressText.textContent = 'Creating ZIP file...';
+          redlineZipPath = await ipcRenderer.invoke('create-zip', redlineOutputFolder);
+
           // Log usage
           const duration = Date.now() - startTime;
           ipcRenderer.invoke('log-usage', {
@@ -6377,6 +6558,13 @@
       }
     });
 
+    // Download ZIP
+    redlineDownloadZipBtn.addEventListener('click', async () => {
+      if (redlineZipPath) {
+        await ipcRenderer.invoke('save-zip', redlineZipPath, 'EmmaNeigh-Redline.zip');
+      }
+    });
+
     // Open output folder
     redlineOpenFolderBtn.addEventListener('click', () => {
       if (redlineOutputFolder) {
@@ -6390,6 +6578,7 @@
       redlineModifiedPath = null;
       redlinePairs = [];
       redlineOutputFolder = null;
+      redlineZipPath = null;
 
       redlineOriginalSelected.textContent = '';
       redlineModifiedSelected.textContent = '';

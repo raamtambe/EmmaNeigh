@@ -190,7 +190,7 @@ Return a JSON object mapping each document name to its category:
 ONLY return the JSON object, no other text."""
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}]
         )

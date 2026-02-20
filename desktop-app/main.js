@@ -4,6 +4,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 // Password hashing functions
 function hashPassword(password) {
@@ -85,6 +86,14 @@ async function initDatabase() {
       )
     `);
 
+    // SMTP settings for 2FA email
+    db.run(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    `);
+
     db.run(`
       CREATE TABLE IF NOT EXISTS usage_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +110,9 @@ async function initDatabase() {
 
     saveDatabase();
     console.log('Database initialized at:', historyDbPath);
+
+    // Set Claude model env var for Python processors
+    initClaudeModel();
   } catch (e) {
     console.error('Failed to initialize database:', e);
   }
@@ -1313,7 +1325,7 @@ Respond with a JSON object containing:
 Respond ONLY with the JSON object, no other text.`;
 
       const requestData = JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
+        model: getClaudeModel(),
         max_tokens: 1024,
         messages: [{ role: 'user', content: prompt }]
       });
@@ -1327,7 +1339,7 @@ Respond ONLY with the JSON object, no other text.`;
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
+            'anthropic-version': '2024-10-22',
             'Content-Length': Buffer.byteLength(requestData)
           }
         };
@@ -1607,7 +1619,7 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
 
     return new Promise((resolve) => {
       const data = JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
+        model: getClaudeModel(),
         max_tokens: 10,
         messages: [{ role: 'user', content: 'Hi' }]
       });
@@ -1620,7 +1632,7 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
+          'anthropic-version': '2024-10-22',
           'Content-Length': Buffer.byteLength(data)
         }
       };
@@ -1978,35 +1990,88 @@ function generateVerificationCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Send verification email using system mail (or log for testing)
-async function sendVerificationEmail(email, code, type) {
-  // In production, you would integrate with an email service like SendGrid, AWS SES, etc.
-  // For now, we'll use the Anthropic API to format a nice email and log it
-  // In a real app, you'd call an email API here
+// Get SMTP settings from database
+function getSmtpSettings() {
+  if (!db) return null;
+  try {
+    const keys = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from'];
+    const settings = {};
+    for (const key of keys) {
+      const result = db.exec(`SELECT value FROM app_settings WHERE key = '${key}'`);
+      if (result.length > 0 && result[0].values.length > 0) {
+        settings[key] = result[0].values[0][0];
+      }
+    }
+    // Decrypt password if stored
+    if (settings.smtp_pass && safeStorage.isEncryptionAvailable()) {
+      try {
+        settings.smtp_pass = safeStorage.decryptString(Buffer.from(settings.smtp_pass, 'base64'));
+      } catch (e) {
+        // If decryption fails, try using as plain text
+      }
+    }
+    return settings;
+  } catch (e) {
+    console.error('Failed to get SMTP settings:', e);
+    return null;
+  }
+}
 
+// Send verification email using nodemailer SMTP
+async function sendVerificationEmail(email, code, type) {
   const subject = type === 'login'
     ? 'EmmaNeigh - Login Verification Code'
     : type === 'email_verify'
     ? 'EmmaNeigh - Verify Your Email'
     : 'EmmaNeigh - Verification Code';
 
-  const body = `Your EmmaNeigh verification code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`;
+  const htmlBody = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+      <h2 style="color: #333; text-align: center;">EmmaNeigh</h2>
+      <p style="color: #555; text-align: center;">Your verification code is:</p>
+      <div style="background: #f5f5f5; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
+        <span style="font-size: 32px; letter-spacing: 8px; font-weight: bold; color: #333;">${code}</span>
+      </div>
+      <p style="color: #888; font-size: 13px; text-align: center;">This code expires in 10 minutes.</p>
+      <p style="color: #888; font-size: 12px; text-align: center;">If you didn't request this code, please ignore this email.</p>
+    </div>`;
 
-  console.log(`[EMAIL] To: ${email}`);
-  console.log(`[EMAIL] Subject: ${subject}`);
-  console.log(`[EMAIL] Body: ${body}`);
+  const textBody = `Your EmmaNeigh verification code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`;
 
-  // Try to open default mail client with the code (for local testing)
-  // In production, replace this with actual email sending
-  try {
-    const { shell } = require('electron');
-    // We won't actually open mail client - just log for now
-    // shell.openExternal(`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-  } catch (e) {
-    console.error('Could not send email:', e);
+  // Get SMTP settings
+  const smtp = getSmtpSettings();
+
+  if (!smtp || !smtp.smtp_host || !smtp.smtp_user || !smtp.smtp_pass) {
+    console.log(`[2FA] SMTP not configured. Verification code for ${email}: ${code}`);
+    // Return true but with a flag indicating SMTP isn't set up
+    return { sent: false, reason: 'smtp_not_configured', code };
   }
 
-  return true;
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtp.smtp_host,
+      port: parseInt(smtp.smtp_port) || 587,
+      secure: parseInt(smtp.smtp_port) === 465,
+      auth: {
+        user: smtp.smtp_user,
+        pass: smtp.smtp_pass
+      }
+    });
+
+    await transporter.sendMail({
+      from: smtp.smtp_from || smtp.smtp_user,
+      to: email,
+      subject: subject,
+      text: textBody,
+      html: htmlBody
+    });
+
+    console.log(`[2FA] Verification email sent to ${email}`);
+    return { sent: true };
+  } catch (e) {
+    console.error('[2FA] Failed to send email:', e.message);
+    return { sent: false, reason: e.message, code };
+  }
 }
 
 // Request a verification code (for login 2FA or email verification)
@@ -2060,18 +2125,27 @@ ipcMain.handle('request-verification-code', async (event, { userId, email, type 
     saveDatabase();
 
     // Send the email
-    await sendVerificationEmail(userEmail, code, type);
+    const emailResult = await sendVerificationEmail(userEmail, code, type);
 
     // Mask email for display
     const maskedEmail = userEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3');
 
-    return {
+    const response = {
       success: true,
       message: `Verification code sent to ${maskedEmail}`,
       email: maskedEmail,
-      // For testing/development, include the code (remove in production!)
-      _devCode: code
+      emailSent: emailResult.sent
     };
+
+    // If SMTP is not configured, include the code so user can still verify
+    if (!emailResult.sent) {
+      response._devCode = code;
+      response.message = emailResult.reason === 'smtp_not_configured'
+        ? `SMTP not configured. Code: ${code} (Configure SMTP in Settings to send emails)`
+        : `Email failed: ${emailResult.reason}. Code: ${code}`;
+    }
+
+    return response;
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -2201,6 +2275,112 @@ ipcMain.handle('update-user-email', async (event, { userId, email }) => {
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
+  }
+});
+
+// ========== APP SETTINGS HANDLERS ==========
+
+ipcMain.handle('save-setting', async (event, { key, value }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${(value || '').replace(/'/g, "''")}')`);
+    saveDatabase();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-setting', async (event, key) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    const result = db.exec(`SELECT value FROM app_settings WHERE key = '${key}'`);
+    if (result.length > 0 && result[0].values.length > 0) {
+      return { success: true, value: result[0].values[0][0] };
+    }
+    return { success: true, value: null };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get the configured Claude model (or default)
+function getClaudeModel() {
+  if (!db) return 'claude-sonnet-4-20250514';
+  try {
+    const result = db.exec(`SELECT value FROM app_settings WHERE key = 'claude_model'`);
+    if (result.length > 0 && result[0].values.length > 0 && result[0].values[0][0]) {
+      const model = result[0].values[0][0];
+      // Also set env var for Python processors
+      process.env.CLAUDE_MODEL = model;
+      return model;
+    }
+  } catch (e) {}
+  return 'claude-sonnet-4-20250514';
+}
+
+// Initialize model env var on startup (called after DB init)
+function initClaudeModel() {
+  process.env.CLAUDE_MODEL = getClaudeModel();
+}
+
+// ========== SMTP SETTINGS HANDLERS ==========
+
+// Save SMTP settings
+ipcMain.handle('save-smtp-settings', async (event, { host, port, user, pass, from }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Encrypt password if possible
+    let encryptedPass = pass;
+    if (pass && safeStorage.isEncryptionAvailable()) {
+      encryptedPass = safeStorage.encryptString(pass).toString('base64');
+    }
+
+    const settings = { smtp_host: host, smtp_port: port, smtp_user: user, smtp_pass: encryptedPass, smtp_from: from || user };
+    for (const [key, value] of Object.entries(settings)) {
+      db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${(value || '').replace(/'/g, "''")}' )`);
+    }
+    saveDatabase();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get SMTP settings (without password)
+ipcMain.handle('get-smtp-settings', async (event) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    const smtp = getSmtpSettings();
+    return {
+      success: true,
+      host: smtp?.smtp_host || '',
+      port: smtp?.smtp_port || '587',
+      user: smtp?.smtp_user || '',
+      from: smtp?.smtp_from || '',
+      hasPassword: !!(smtp?.smtp_pass)
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Test SMTP connection
+ipcMain.handle('test-smtp', async (event, { host, port, user, pass, from }) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: host,
+      port: parseInt(port) || 587,
+      secure: parseInt(port) === 465,
+      auth: { user, pass }
+    });
+
+    await transporter.verify();
+    return { success: true, message: 'SMTP connection successful' };
+  } catch (e) {
+    return { success: false, error: `SMTP test failed: ${e.message}` };
   }
 });
 

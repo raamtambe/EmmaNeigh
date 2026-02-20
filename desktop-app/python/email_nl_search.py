@@ -114,7 +114,7 @@ Respond ONLY with the JSON object, no other text."""
         emit("progress", percent=50, message="Waiting for AI response...")
 
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": prompt}
