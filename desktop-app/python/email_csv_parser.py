@@ -137,7 +137,11 @@ def parse_outlook_csv(csv_path):
                             email_data['date_sent'] = parse_date(value)
                         elif key_lower in ['date received', 'received', 'receive date', 'date']:
                             email_data['date_received'] = parse_date(value)
-                        elif key_lower in ['attachments', 'attachment', 'has attachments']:
+                        elif key_lower == 'has attachments':
+                            # Boolean column from Outlook - just TRUE/FALSE
+                            email_data['has_attachments'] = bool(value and value.lower() not in ['no', 'false', '0', ''])
+                        elif key_lower in ['attachments', 'attachment']:
+                            # Actual attachment filename(s)
                             email_data['attachments'] = value
                             email_data['has_attachments'] = bool(value and value.lower() not in ['no', 'false', '0', ''])
 

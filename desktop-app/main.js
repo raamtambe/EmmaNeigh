@@ -583,6 +583,27 @@ ipcMain.handle('create-zip', async (event, outputPath) => {
   });
 });
 
+// Create ZIP from specific files (not a whole directory)
+ipcMain.handle('create-zip-files', async (event, filePaths) => {
+  const zipPath = path.join(app.getPath('temp'), `EmmaNeigh-Output-${Date.now()}.zip`);
+
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    output.on('close', () => resolve(zipPath));
+    archive.on('error', reject);
+
+    archive.pipe(output);
+    for (const fp of filePaths) {
+      if (fs.existsSync(fp)) {
+        archive.file(fp, { name: path.basename(fp) });
+      }
+    }
+    archive.finalize();
+  });
+});
+
 // Save ZIP to user location
 ipcMain.handle('save-zip', async (event, zipPath, suggestedName) => {
   const defaultName = suggestedName || 'EmmaNeigh-Output.zip';
@@ -1224,7 +1245,11 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
           else if (header.includes('body') || header.includes('content') || header === 'message') email.body = value;
           else if (header.includes('sent') || header === 'send date') email.date_sent = value;
           else if (header.includes('received') || header === 'date' || header === 'receive date') email.date_received = value;
-          else if (header.includes('attachment')) {
+          else if (header === 'has attachments') {
+            // Boolean column from Outlook - just TRUE/FALSE
+            email.has_attachments = !!(value && value.toLowerCase() !== 'no' && value.toLowerCase() !== 'false' && value !== '0');
+          } else if (header.includes('attachment')) {
+            // Actual attachment filename(s)
             email.attachments = value;
             email.has_attachments = !!(value && value.toLowerCase() !== 'no' && value.toLowerCase() !== 'false' && value !== '0');
           }
@@ -1720,6 +1745,10 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
     return { success: false, error: 'Username and password are required' };
   }
 
+  if (!email || !email.includes('@')) {
+    return { success: false, error: 'A valid email address is required for two-factor authentication' };
+  }
+
   if (password.length < 4) {
     return { success: false, error: 'Password must be at least 4 characters' };
   }
@@ -1734,8 +1763,8 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
       securityAnswerHash = hashPassword(securityAnswer.toLowerCase().trim());
     }
 
-    db.run(`INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, username.toLowerCase().trim(), email || null, passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
+    db.run(`INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+      [id, username.toLowerCase().trim(), email.trim(), passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
     saveDatabase();
 
     return { success: true, userId: id };
@@ -1769,9 +1798,8 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
       return { success: false, error: 'Invalid password' };
     }
 
-    // Check if 2FA is enabled
-    if (twoFactorEnabled && email) {
-      // Don't log in yet - require 2FA verification
+    // 2FA is mandatory for all users with an email address
+    if (email) {
       // Generate and send verification code
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -1784,29 +1812,32 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
         [id, code, 'login', expiresAt]);
       saveDatabase();
 
-      // Log the code (in production, send email)
-      console.log(`[2FA] Verification code for ${uname}: ${code}`);
+      // Send verification email
+      const emailResult = await sendVerificationEmail(email, code, 'login');
 
       // Mask email for display
       const maskedEmail = email.replace(/(.{2})(.*)(@.*)/, '$1***$3');
 
-      return {
+      const response = {
         success: true,
         requires2FA: true,
         userId: id,
-        email: maskedEmail,
-        _devCode: code // Remove in production!
+        email: maskedEmail
       };
+
+      // If SMTP not configured, include code for development/fallback
+      if (!emailResult.sent) {
+        response._devCode = code;
+        response._smtpNote = emailResult.reason || 'Email not sent';
+      }
+
+      return response;
     }
 
-    // No 2FA - complete login
-    db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
-    saveDatabase();
-
+    // No email on account - require email to be set (2FA mandatory)
     return {
-      success: true,
-      requires2FA: false,
-      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+      success: false,
+      error: 'Email address required for login. Please contact your administrator to add an email to your account.'
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -1863,6 +1894,45 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
     return {
       success: true,
       user: { id, username, displayName: displayName || username, hasApiKey: !!apiKeyEnc }
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get user statistics (for admin tracking)
+ipcMain.handle('get-user-stats', async () => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Total registered users
+    const totalResult = db.exec(`SELECT COUNT(*) FROM users`);
+    const totalUsers = totalResult.length > 0 ? totalResult[0].values[0][0] : 0;
+
+    // Users active in last 30 days
+    const activeResult = db.exec(`SELECT COUNT(*) FROM users WHERE last_login >= datetime('now', '-30 days')`);
+    const activeUsers = activeResult.length > 0 ? activeResult[0].values[0][0] : 0;
+
+    // Users active in last 7 days
+    const weeklyResult = db.exec(`SELECT COUNT(*) FROM users WHERE last_login >= datetime('now', '-7 days')`);
+    const weeklyActive = weeklyResult.length > 0 ? weeklyResult[0].values[0][0] : 0;
+
+    // User list with last login (no sensitive data)
+    const usersResult = db.exec(`SELECT username, display_name, email, last_login, created_at FROM users ORDER BY last_login DESC`);
+    const users = usersResult.length > 0 ? usersResult[0].values.map(row => ({
+      username: row[0],
+      displayName: row[1],
+      email: row[2] ? row[2].replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
+      lastLogin: row[3],
+      createdAt: row[4]
+    })) : [];
+
+    return {
+      success: true,
+      totalUsers,
+      activeUsers,
+      weeklyActive,
+      users
     };
   } catch (e) {
     return { success: false, error: e.message };
