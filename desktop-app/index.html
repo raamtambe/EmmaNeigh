@@ -2073,6 +2073,7 @@
 
     .email-search {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       margin-top: 12px;
     }
@@ -2338,10 +2339,16 @@
       padding: 12px;
       cursor: pointer;
       transition: background 0.2s;
+      border: 1px solid transparent;
     }
 
     .email-item:hover {
       background: #1a1a1a;
+      border-color: #333;
+    }
+
+    .email-item:active {
+      background: #222;
     }
 
     .email-item-subject {
@@ -2356,10 +2363,154 @@
       color: #666;
     }
 
+    .email-item-attachments {
+      font-size: 11px;
+      color: #f59e0b;
+      margin-top: 3px;
+    }
+
     .email-item-match {
       font-size: 10px;
       color: #22c55e;
       margin-top: 4px;
+    }
+
+    /* Email Preview Modal */
+    .email-preview-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 3000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    .email-preview-overlay.visible {
+      display: flex;
+    }
+
+    .email-preview {
+      background: #1a1a1a;
+      border-radius: 12px;
+      width: 680px;
+      max-width: 90vw;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #333;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    .email-preview-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
+    }
+
+    .email-preview-header h3 {
+      font-size: 14px;
+      color: #888;
+      margin: 0;
+      font-weight: 500;
+    }
+
+    .email-preview-close {
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 24px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 4px;
+      transition: color 0.2s;
+    }
+
+    .email-preview-close:hover {
+      color: #fff;
+    }
+
+    .email-preview-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .email-preview-subject {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 16px;
+      line-height: 1.3;
+    }
+
+    .email-preview-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #222;
+    }
+
+    .email-preview-field {
+      display: flex;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .email-preview-field-label {
+      color: #666;
+      min-width: 50px;
+      flex-shrink: 0;
+      font-weight: 500;
+    }
+
+    .email-preview-field-value {
+      color: #ccc;
+      word-break: break-word;
+    }
+
+    .email-preview-attachments {
+      background: #111;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .email-preview-attachments-label {
+      font-size: 12px;
+      color: #f59e0b;
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+
+    .email-preview-attachments-list {
+      font-size: 12px;
+      color: #ccc;
+      line-height: 1.6;
+    }
+
+    .email-preview-content {
+      font-size: 13px;
+      color: #ddd;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    .email-preview-no-body {
+      font-size: 13px;
+      color: #555;
+      font-style: italic;
     }
 
     .privacy-toggle {
@@ -2631,6 +2782,42 @@
     </div>
   </div>
 
+  <!-- Email Preview Modal -->
+  <div class="email-preview-overlay" id="emailPreviewOverlay">
+    <div class="email-preview">
+      <div class="email-preview-header">
+        <h3>Email Preview</h3>
+        <button class="email-preview-close" id="emailPreviewClose">&times;</button>
+      </div>
+      <div class="email-preview-body">
+        <div class="email-preview-subject" id="emailPreviewSubject"></div>
+        <div class="email-preview-fields">
+          <div class="email-preview-field">
+            <span class="email-preview-field-label">From:</span>
+            <span class="email-preview-field-value" id="emailPreviewFrom"></span>
+          </div>
+          <div class="email-preview-field">
+            <span class="email-preview-field-label">To:</span>
+            <span class="email-preview-field-value" id="emailPreviewTo"></span>
+          </div>
+          <div class="email-preview-field" id="emailPreviewCcRow" style="display: none;">
+            <span class="email-preview-field-label">CC:</span>
+            <span class="email-preview-field-value" id="emailPreviewCc"></span>
+          </div>
+          <div class="email-preview-field">
+            <span class="email-preview-field-label">Date:</span>
+            <span class="email-preview-field-value" id="emailPreviewDate"></span>
+          </div>
+        </div>
+        <div class="email-preview-attachments" id="emailPreviewAttachments" style="display: none;">
+          <div class="email-preview-attachments-label">Attachments</div>
+          <div class="email-preview-attachments-list" id="emailPreviewAttachmentsList"></div>
+        </div>
+        <div class="email-preview-content" id="emailPreviewContent"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Modal -->
   <div class="settings-modal" id="settingsModal">
     <div class="settings-content">
@@ -2663,9 +2850,10 @@
         <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Claude Model</label>
           <select id="claudeModelSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
-            <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Recommended)</option>
-            <option value="claude-haiku-4-20250414">Claude Haiku 4 (Fast & affordable)</option>
-            <option value="claude-opus-4-20250514">Claude Opus 4 (Most capable)</option>
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Recommended)</option>
+            <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Legacy)</option>
+            <option value="claude-haiku-4-5">Claude Haiku 4.5 (Fast & affordable)</option>
+            <option value="claude-opus-4-6">Claude Opus 4.6 (Most capable)</option>
           </select>
           <p style="font-size: 11px; color: #666; margin-top: 4px;">Model used for NL search, checklist updates, and punchlist generation</p>
         </div>
@@ -3534,8 +3722,11 @@
 
         <!-- Keyword Search Box -->
         <div class="email-search" id="emailSearchBox" style="display: none;">
-          <input type="text" class="email-search-input" id="emailSearchInput" placeholder='Search: "purchase agreement" OR credit AND loan NOT draft'>
+          <input type="text" class="email-search-input" id="emailSearchInput" placeholder='Search emails & attachments: "purchase agreement" OR attachment:contract.pdf'>
           <button class="btn btn-primary" id="emailSearchBtn">Search</button>
+          <div style="width: 100%; font-size: 10px; color: #555; margin-top: 2px; padding-left: 2px;">
+            Tips: Use <b style="color:#777;">AND</b>, <b style="color:#777;">OR</b>, <b style="color:#777;">NOT</b> operators &bull; <b style="color:#777;">"quoted phrase"</b> for exact match &bull; <b style="color:#777;">attachment:filename</b> to search by attachment name &bull; <b style="color:#777;">has:attachment</b> to filter emails with attachments
+          </div>
         </div>
 
         <!-- AI Search Panel -->
@@ -3577,8 +3768,8 @@
             <input type="text" class="email-filter-input" id="emailFilterSubject" placeholder="e.g. Agreement Draft">
           </div>
           <div class="email-filter-group">
-            <label>Attachment Filename</label>
-            <input type="text" class="email-filter-input" id="emailFilterAttachment" placeholder="e.g. contract.pdf">
+            <label>Attachment Name Search</label>
+            <input type="text" class="email-filter-input" id="emailFilterAttachment" placeholder="e.g. contract.pdf, agreement, .xlsx">
           </div>
           <div class="email-filter-group">
             <label>Date Range</label>
@@ -6896,24 +7087,111 @@
         meta.className = 'email-item-meta' + (blur ? ' blurred' : '');
         const date = email.date_sent || email.date_received || '';
         const dateStr = date ? new Date(date).toLocaleDateString() : '';
-
-        // Show attachment info if present
-        let attachmentInfo = '';
-        if (email.has_attachments && email.attachments) {
-          attachmentInfo = ` | 📎 ${email.attachments.substring(0, 30)}${email.attachments.length > 30 ? '...' : ''}`;
-        } else if (email.has_attachments) {
-          attachmentInfo = ' | 📎 Attachment';
-        }
-
-        meta.textContent = `From: ${email.from || 'Unknown'} | ${dateStr}${attachmentInfo}`;
+        meta.textContent = `From: ${email.from || 'Unknown'} | To: ${email.to || 'Unknown'} | ${dateStr}`;
 
         item.appendChild(subject);
         item.appendChild(meta);
+
+        // Show attachment filenames on a separate line
+        if (email.has_attachments && email.attachments) {
+          const attachLine = document.createElement('div');
+          attachLine.className = 'email-item-attachments' + (blur ? ' blurred' : '');
+          attachLine.textContent = `📎 ${email.attachments}`;
+          item.appendChild(attachLine);
+        }
+
+        // Click handler to open email preview
+        item.addEventListener('click', () => openEmailPreview(email));
+
         emailList.appendChild(item);
       });
 
       emailResults.style.display = 'block';
     }
+
+    // --- Email Preview Modal ---
+    const emailPreviewOverlay = document.getElementById('emailPreviewOverlay');
+    const emailPreviewClose = document.getElementById('emailPreviewClose');
+    const emailPreviewSubject = document.getElementById('emailPreviewSubject');
+    const emailPreviewFrom = document.getElementById('emailPreviewFrom');
+    const emailPreviewTo = document.getElementById('emailPreviewTo');
+    const emailPreviewCcRow = document.getElementById('emailPreviewCcRow');
+    const emailPreviewCc = document.getElementById('emailPreviewCc');
+    const emailPreviewDate = document.getElementById('emailPreviewDate');
+    const emailPreviewAttachments = document.getElementById('emailPreviewAttachments');
+    const emailPreviewAttachmentsList = document.getElementById('emailPreviewAttachmentsList');
+    const emailPreviewContent = document.getElementById('emailPreviewContent');
+
+    function openEmailPreview(email) {
+      // Subject
+      emailPreviewSubject.textContent = email.subject || '(No Subject)';
+
+      // From
+      emailPreviewFrom.textContent = email.from || 'Unknown';
+
+      // To
+      emailPreviewTo.textContent = email.to || 'Unknown';
+
+      // CC (show row only if CC exists)
+      if (email.cc && email.cc.trim()) {
+        emailPreviewCcRow.style.display = 'flex';
+        emailPreviewCc.textContent = email.cc;
+      } else {
+        emailPreviewCcRow.style.display = 'none';
+      }
+
+      // Date
+      const date = email.date_sent || email.date_received || '';
+      if (date) {
+        try {
+          const d = new Date(date);
+          emailPreviewDate.textContent = d.toLocaleString('en-US', {
+            weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit', hour12: true
+          });
+        } catch(e) {
+          emailPreviewDate.textContent = date;
+        }
+      } else {
+        emailPreviewDate.textContent = 'Unknown';
+      }
+
+      // Attachments
+      if (email.has_attachments && email.attachments) {
+        emailPreviewAttachments.style.display = 'block';
+        // Split attachment names by semicolons or commas
+        const attachNames = email.attachments.split(/[;,]/).map(a => a.trim()).filter(a => a);
+        emailPreviewAttachmentsList.innerHTML = attachNames.map(a => `📎 ${a}`).join('<br>');
+      } else {
+        emailPreviewAttachments.style.display = 'none';
+      }
+
+      // Body
+      if (email.body && email.body.trim()) {
+        emailPreviewContent.textContent = email.body;
+        emailPreviewContent.className = 'email-preview-content';
+      } else {
+        emailPreviewContent.textContent = 'No email body available in CSV export.';
+        emailPreviewContent.className = 'email-preview-content email-preview-no-body';
+      }
+
+      // Show the modal
+      emailPreviewOverlay.classList.add('visible');
+    }
+
+    function closeEmailPreview() {
+      emailPreviewOverlay.classList.remove('visible');
+    }
+
+    emailPreviewClose.addEventListener('click', closeEmailPreview);
+    emailPreviewOverlay.addEventListener('click', (e) => {
+      if (e.target === emailPreviewOverlay) closeEmailPreview();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && emailPreviewOverlay.classList.contains('visible')) {
+        closeEmailPreview();
+      }
+    });
 
     // Privacy blur toggle
     emailBlurToggle.addEventListener('change', () => {

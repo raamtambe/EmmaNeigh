@@ -1138,9 +1138,14 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
   if (!processorPath) {
     // In development, parse CSV directly with Node.js
     try {
-      const csvContent = fs.readFileSync(csvPath, 'utf-8');
+      // Read with BOM stripping
+      let csvContent = fs.readFileSync(csvPath, 'utf-8');
+      // Strip BOM (UTF-8 BOM: \uFEFF, also handle other BOMs)
+      if (csvContent.charCodeAt(0) === 0xFEFF) {
+        csvContent = csvContent.slice(1);
+      }
 
-      // Proper CSV parsing that handles quoted fields
+      // Proper CSV parsing that handles quoted fields and multiline values
       function parseCSVLine(line) {
         const result = [];
         let current = '';
@@ -1166,13 +1171,37 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
         return result;
       }
 
-      const lines = csvContent.split(/\r?\n/);
-      const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
+      // Split into lines but handle multiline quoted fields
+      function splitCSVLines(content) {
+        const lines = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < content.length; i++) {
+          const char = content[i];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+            current += char;
+          } else if ((char === '\n' || char === '\r') && !inQuotes) {
+            if (char === '\r' && content[i + 1] === '\n') i++;
+            if (current.trim()) lines.push(current);
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        if (current.trim()) lines.push(current);
+        return lines;
+      }
+
+      const lines = splitCSVLines(csvContent);
+      // Clean and normalize headers - strip BOM, quotes, whitespace
+      const headers = parseCSVLine(lines[0]).map(h =>
+        h.replace(/^\uFEFF/, '').replace(/^["']|["']$/g, '').trim().toLowerCase()
+      );
 
       const emails = [];
       for (let i = 1; i < lines.length; i++) {
-        if (!lines[i].trim()) continue;
-
         const values = parseCSVLine(lines[i]);
         const email = {
           subject: '',
@@ -1339,7 +1368,7 @@ Respond ONLY with the JSON object, no other text.`;
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
-            'anthropic-version': '2024-10-22',
+            'anthropic-version': '2023-06-01',
             'Content-Length': Buffer.byteLength(requestData)
           }
         };
@@ -1632,7 +1661,7 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'anthropic-version': '2024-10-22',
+          'anthropic-version': '2023-06-01',
           'Content-Length': Buffer.byteLength(data)
         }
       };
@@ -1646,7 +1675,15 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
           } else if (res.statusCode === 401) {
             resolve({ success: false, error: 'Invalid API key' });
           } else {
-            resolve({ success: false, error: `API error: ${res.statusCode}` });
+            // Try to extract meaningful error from response
+            let errMsg = `API error: ${res.statusCode}`;
+            try {
+              const parsed = JSON.parse(body);
+              if (parsed.error && parsed.error.message) {
+                errMsg = `API error (${res.statusCode}): ${parsed.error.message}`;
+              }
+            } catch(e) {}
+            resolve({ success: false, error: errMsg });
           }
         });
       });
@@ -2306,7 +2343,7 @@ ipcMain.handle('get-setting', async (event, key) => {
 
 // Get the configured Claude model (or default)
 function getClaudeModel() {
-  if (!db) return 'claude-sonnet-4-20250514';
+  if (!db) return 'claude-sonnet-4-6';
   try {
     const result = db.exec(`SELECT value FROM app_settings WHERE key = 'claude_model'`);
     if (result.length > 0 && result[0].values.length > 0 && result[0].values[0][0]) {

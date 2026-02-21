@@ -77,8 +77,8 @@ def parse_outlook_csv(csv_path):
     """
     emails = []
 
-    # Try different encodings
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
+    # Try different encodings (utf-8-sig first to handle BOM)
+    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']
 
     for encoding in encodings:
         try:
@@ -113,7 +113,8 @@ def parse_outlook_csv(csv_path):
                         if not key:
                             continue
 
-                        key_lower = key.lower().strip()
+                        # Strip BOM and whitespace from key
+                        key_lower = key.replace('\ufeff', '').lower().strip()
                         value = value.strip() if value else ''
 
                         if key_lower in ['subject', 'title']:
