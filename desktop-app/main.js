@@ -1221,6 +1221,17 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
         h.replace(/^\uFEFF/, '').replace(/^["']|["']$/g, '').trim().toLowerCase()
       );
 
+      // Check if headers contain an actual attachment filename column
+      const hasAttachmentColumn = headers.some(h => h === 'attachments' || h === 'attachment');
+
+      // Extract filenames from text (when no attachment column in CSV)
+      function extractFilenamesFromText(text) {
+        if (!text) return [];
+        const pattern = /[\w\-\.\s]+\.(?:pdf|docx?|xlsx?|pptx?|csv|txt|zip|rar|png|jpg|jpeg|gif|bmp|tiff?|msg|eml|htm|html)\b/gi;
+        const matches = text.match(pattern) || [];
+        return matches.map(m => m.trim()).filter(m => m.length > 4);
+      }
+
       const emails = [];
       for (let i = 1; i < lines.length; i++) {
         const values = parseCSVLine(lines[i]);
@@ -1255,6 +1266,20 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
           }
         });
 
+        // If no attachment column exists, try to extract filenames from subject/body
+        if (!hasAttachmentColumn) {
+          const foundFiles = [
+            ...extractFilenamesFromText(email.subject),
+            ...extractFilenamesFromText(email.body)
+          ];
+          if (foundFiles.length > 0) {
+            // Deduplicate
+            const uniqueFiles = [...new Set(foundFiles)];
+            email.attachments = uniqueFiles.join('; ');
+            email.has_attachments = true;
+          }
+        }
+
         emails.push(email);
       }
 
@@ -1262,18 +1287,29 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
       const dates = emails.map(e => e.date_sent || e.date_received).filter(d => d).sort();
       const withAttachments = emails.filter(e => e.has_attachments).length;
 
+      const summary = {
+        total_emails: emails.length,
+        unique_senders: uniqueSenders.size,
+        with_attachments: withAttachments,
+        date_range: {
+          earliest: dates[0] || null,
+          latest: dates[dates.length - 1] || null
+        },
+        found_columns: headers,
+        has_attachment_column: hasAttachmentColumn
+      };
+
+      if (!hasAttachmentColumn) {
+        summary.attachment_note =
+          'No dedicated attachment column found in CSV. ' +
+          'Filenames were extracted from email body/subject text where possible. ' +
+          'For full attachment data, export as MSG files or use Microsoft Graph API.';
+      }
+
       return {
         success: true,
         emails: emails,
-        summary: {
-          total_emails: emails.length,
-          unique_senders: uniqueSenders.size,
-          with_attachments: withAttachments,
-          date_range: {
-            earliest: dates[0] || null,
-            latest: dates[dates.length - 1] || null
-          }
-        }
+        summary: summary
       };
     } catch (e) {
       return { success: false, error: e.message };

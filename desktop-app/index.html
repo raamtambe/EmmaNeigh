@@ -6914,6 +6914,21 @@
           emailFilters.style.display = 'grid';
           emailPrivacyToggle.style.display = 'block';
 
+          // Show attachment column warning if applicable
+          let attachWarning = document.getElementById('attachmentColumnWarning');
+          if (!attachWarning) {
+            attachWarning = document.createElement('div');
+            attachWarning.id = 'attachmentColumnWarning';
+            attachWarning.style.cssText = 'background: #2a2000; border: 1px solid #f5a623; border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 12px; color: #f5a623; display: none;';
+            emailStats.parentNode.insertBefore(attachWarning, emailStats.nextSibling);
+          }
+          if (result.summary.attachment_note) {
+            attachWarning.textContent = '⚠ ' + result.summary.attachment_note;
+            attachWarning.style.display = 'block';
+          } else {
+            attachWarning.style.display = 'none';
+          }
+
           // Log usage
           await logUsage('email', 'parse', 1, result.summary.total_emails, Date.now() - startTime);
 

@@ -64,6 +64,17 @@ def extract_domain(email):
     return ""
 
 
+def extract_filenames_from_text(text):
+    """Extract likely attachment filenames from email body/subject text."""
+    if not text:
+        return []
+    # Match common file extensions
+    pattern = r'[\w\-\.\s]+\.(?:pdf|docx?|xlsx?|pptx?|csv|txt|zip|rar|png|jpg|jpeg|gif|bmp|tiff?|msg|eml|htm|html)\b'
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    # Clean up matches - strip leading whitespace
+    return [m.strip() for m in matches if len(m.strip()) > 4]
+
+
 def parse_outlook_csv(csv_path):
     """
     Parse an Outlook CSV export.
@@ -71,11 +82,14 @@ def parse_outlook_csv(csv_path):
     Common Outlook CSV columns:
     - Subject, Body, From, To, CC, BCC
     - Date Sent, Date Received
-    - Attachments
+    - Attachments (not always present)
+    - Has Attachments (boolean, some exports)
 
-    Returns list of email dictionaries.
+    Returns tuple: (list of email dicts, list of column names found)
     """
     emails = []
+    found_columns = []
+    has_attachment_column = False
 
     # Try different encodings (utf-8-sig first to handle BOM)
     encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']
@@ -93,6 +107,16 @@ def parse_outlook_csv(csv_path):
                     dialect = csv.excel
 
                 reader = csv.DictReader(f, dialect=dialect)
+
+                # Capture column names
+                if reader.fieldnames:
+                    found_columns = [c.replace('\ufeff', '').strip() for c in reader.fieldnames if c]
+                    # Check if we have an attachment column
+                    for col in found_columns:
+                        col_lower = col.lower()
+                        if 'attachment' in col_lower:
+                            has_attachment_column = True
+                            break
 
                 # Normalize column names (Outlook exports vary)
                 for row in reader:
@@ -131,8 +155,11 @@ def parse_outlook_csv(csv_path):
                                 email_data['to'] += '; ' + value
                             else:
                                 email_data['to'] = value
-                        elif key_lower in ['cc', 'carbon copy']:
-                            email_data['cc'] = value
+                        elif key_lower in ['cc', 'carbon copy', 'cc: (name)', 'cc: (address)']:
+                            if email_data['cc']:
+                                email_data['cc'] += '; ' + value
+                            else:
+                                email_data['cc'] = value
                         elif key_lower in ['date sent', 'sent', 'send date']:
                             email_data['date_sent'] = parse_date(value)
                         elif key_lower in ['date received', 'received', 'receive date', 'date']:
@@ -144,6 +171,17 @@ def parse_outlook_csv(csv_path):
                             # Actual attachment filename(s)
                             email_data['attachments'] = value
                             email_data['has_attachments'] = bool(value and value.lower() not in ['no', 'false', '0', ''])
+
+                    # If no attachment column exists, try to extract filenames from subject/body
+                    if not has_attachment_column:
+                        found_files = []
+                        found_files.extend(extract_filenames_from_text(email_data['subject']))
+                        found_files.extend(extract_filenames_from_text(email_data['body']))
+                        if found_files:
+                            # Deduplicate
+                            unique_files = list(dict.fromkeys(found_files))
+                            email_data['attachments'] = '; '.join(unique_files)
+                            email_data['has_attachments'] = True
 
                     # Extract domains for filtering
                     email_data['from_domain'] = extract_domain(email_data['from'])
@@ -159,7 +197,7 @@ def parse_outlook_csv(csv_path):
             emit("progress", percent=0, message=f"Warning: Error with encoding {encoding}: {str(e)}")
             continue
 
-    return emails
+    return emails, found_columns, has_attachment_column
 
 
 def parse_boolean_query(query):
@@ -485,11 +523,21 @@ def main():
 
         emit("progress", percent=10, message="Reading CSV file...")
 
-        emails = parse_outlook_csv(csv_path)
+        emails, found_columns, has_attachment_column = parse_outlook_csv(csv_path)
 
         emit("progress", percent=70, message="Generating summary...")
 
         summary = generate_summary(emails)
+
+        # Add column detection info to summary
+        summary['found_columns'] = found_columns
+        summary['has_attachment_column'] = has_attachment_column
+        if not has_attachment_column:
+            summary['attachment_note'] = (
+                'No dedicated attachment column found in CSV. '
+                'Filenames were extracted from email body/subject text where possible. '
+                'For full attachment data, export as MSG files or use Microsoft Graph API.'
+            )
 
         emit("progress", percent=100, message="Complete!")
 
