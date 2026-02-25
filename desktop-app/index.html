@@ -2377,6 +2377,180 @@
       margin-top: 4px;
     }
 
+    /* Task Detection UI */
+    .task-detect-btn {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 12px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+
+    .task-detect-btn:hover {
+      background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+      transform: translateY(-1px);
+    }
+
+    .task-detect-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .task-detect-btn .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .detected-tasks-panel {
+      margin-top: 16px;
+      border: 1px solid #7c3aed;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .detected-tasks-header {
+      background: linear-gradient(135deg, #7c3aed22, #6d28d922);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #7c3aed44;
+    }
+
+    .detected-tasks-header h3 {
+      font-size: 13px;
+      color: #c4b5fd;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .detected-tasks-header .task-count {
+      background: #7c3aed;
+      color: #fff;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+
+    .detected-tasks-list {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .task-card {
+      padding: 14px 16px;
+      border-bottom: 1px solid #1a1a2e;
+      transition: background 0.2s;
+    }
+
+    .task-card:last-child {
+      border-bottom: none;
+    }
+
+    .task-card:hover {
+      background: #111122;
+    }
+
+    .task-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .task-type-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .task-type-badge.collate { background: #14532d; color: #4ade80; }
+    .task-type-badge.redline { background: #7f1d1d; color: #fca5a5; }
+    .task-type-badge.sig_packets { background: #1e3a5f; color: #93c5fd; }
+    .task-type-badge.execution_version { background: #713f12; color: #fcd34d; }
+    .task-type-badge.review { background: #312e81; color: #a5b4fc; }
+
+    .task-priority {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .task-priority.high { background: #dc2626; color: #fff; }
+    .task-priority.medium { background: #f59e0b; color: #000; }
+    .task-priority.low { background: #6b7280; color: #fff; }
+
+    .task-card-summary {
+      font-size: 13px;
+      color: #e5e5e5;
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+
+    .task-card-meta {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    .task-card-meta span {
+      color: #aaa;
+    }
+
+    .task-card-docs {
+      font-size: 11px;
+      color: #a78bfa;
+      margin-bottom: 8px;
+    }
+
+    .task-execute-btn {
+      background: #7c3aed;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .task-execute-btn:hover {
+      background: #8b5cf6;
+    }
+
+    .task-no-results {
+      padding: 20px;
+      text-align: center;
+      color: #666;
+      font-size: 13px;
+    }
+
     /* Email Preview Modal */
     .email-preview-overlay {
       position: fixed;
@@ -3814,6 +3988,21 @@
         <div class="email-results" id="emailResults" style="display: none;">
           <h3 id="emailResultsTitle">Search Results</h3>
           <div class="email-list" id="emailList"></div>
+        </div>
+
+        <!-- Detect Tasks Button -->
+        <button class="task-detect-btn" id="detectTasksBtn" style="display: none;">
+          <span id="detectTasksBtnIcon">&#129302;</span>
+          <span id="detectTasksBtnText">Detect Tasks from Emails</span>
+        </button>
+
+        <!-- Detected Tasks Panel -->
+        <div class="detected-tasks-panel" id="detectedTasksPanel" style="display: none;">
+          <div class="detected-tasks-header">
+            <h3><span>&#129302;</span> Detected Tasks</h3>
+            <span class="task-count" id="taskCount">0</span>
+          </div>
+          <div class="detected-tasks-list" id="detectedTasksList"></div>
         </div>
 
         <!-- Privacy Toggle -->
@@ -6829,6 +7018,17 @@
     const emailFilterHasAttachment = document.getElementById('emailFilterHasAttachment');
     const emailClearFilters = document.getElementById('emailClearFilters');
 
+    // Task detection elements
+    const detectTasksBtn = document.getElementById('detectTasksBtn');
+    const detectedTasksPanel = document.getElementById('detectedTasksPanel');
+    const detectedTasksList = document.getElementById('detectedTasksList');
+    const taskCount = document.getElementById('taskCount');
+    const detectTasksBtnText = document.getElementById('detectTasksBtnText');
+    const detectTasksBtnIcon = document.getElementById('detectTasksBtnIcon');
+
+    // Global task context for cross-tab data passing
+    let taskContext = null;
+
     // AI Search elements
     const searchModeToggle = document.getElementById('searchModeToggle');
     const keywordSearchMode = document.getElementById('keywordSearchMode');
@@ -6913,6 +7113,7 @@
           emailSearchBox.style.display = 'flex';
           emailFilters.style.display = 'grid';
           emailPrivacyToggle.style.display = 'block';
+          detectTasksBtn.style.display = 'flex';
 
           // Show attachment column warning if applicable
           let attachWarning = document.getElementById('attachmentColumnWarning');
@@ -7423,6 +7624,212 @@
     ipcRenderer.on('nl-search-progress', (event, data) => {
       aiSearchLoadingText.textContent = data.message || 'Processing...';
     });
+
+    // ========== TASK DETECTION ==========
+
+    detectTasksBtn.addEventListener('click', async () => {
+      if (!emailData || emailData.length === 0) {
+        alert('Please upload and parse an email CSV first.');
+        return;
+      }
+
+      // Show loading state
+      detectTasksBtn.disabled = true;
+      detectTasksBtnIcon.innerHTML = '<span class="spinner"></span>';
+      detectTasksBtnText.textContent = 'Analyzing emails for tasks...';
+      detectedTasksPanel.style.display = 'none';
+
+      try {
+        const apiKey = localStorage.getItem('claude_api_key') || '';
+        const result = await ipcRenderer.invoke('detect-tasks', {
+          emails: emailData,
+          api_key: apiKey
+        });
+
+        if (result.success) {
+          const tasks = result.actionable_tasks || result.tasks || [];
+          const actionable = tasks.filter(t => t.task_type !== 'NONE');
+
+          if (actionable.length > 0) {
+            taskCount.textContent = actionable.length;
+            detectedTasksList.innerHTML = '';
+
+            actionable.forEach((task, idx) => {
+              const sourceEmail = emailData[task.source_email_index] || {};
+              const taskTypeIcons = {
+                'COLLATE': '&#128196;',
+                'REDLINE': '&#128269;',
+                'SIG_PACKETS': '&#9997;&#65039;',
+                'EXECUTION_VERSION': '&#128221;',
+                'REVIEW': '&#128065;&#65039;'
+              };
+              const taskTypeLabels = {
+                'COLLATE': 'collate',
+                'REDLINE': 'redline',
+                'SIG_PACKETS': 'sig_packets',
+                'EXECUTION_VERSION': 'execution_version',
+                'REVIEW': 'review'
+              };
+
+              const card = document.createElement('div');
+              card.className = 'task-card';
+
+              const docsHtml = task.documents && task.documents.length > 0
+                ? `<div class="task-card-docs">Documents: ${task.documents.join(', ')}</div>`
+                : '';
+
+              const signersHtml = task.signers && task.signers.length > 0
+                ? `<div class="task-card-meta">Signers: <span>${task.signers.join(', ')}</span></div>`
+                : '';
+
+              const deadlineHtml = task.deadline
+                ? ` | Deadline: ${task.deadline}`
+                : '';
+
+              const tabMap = {
+                'COLLATE': 'collate',
+                'REDLINE': 'redline',
+                'SIG_PACKETS': 'packets',
+                'EXECUTION_VERSION': 'execution',
+                'REVIEW': null
+              };
+
+              const targetTab = tabMap[task.task_type];
+              const executeBtn = targetTab
+                ? `<button class="task-execute-btn" data-task-index="${idx}" data-task-type="${task.task_type}">Execute Task &#8594;</button>`
+                : `<span style="font-size: 11px; color: #888; font-style: italic;">Manual review needed</span>`;
+
+              card.innerHTML = `
+                <div class="task-card-header">
+                  <span class="task-type-badge ${taskTypeLabels[task.task_type] || ''}">${taskTypeIcons[task.task_type] || ''} ${task.task_type}</span>
+                  <span class="task-priority ${(task.priority || 'low').toLowerCase()}">${task.priority || 'LOW'}</span>
+                </div>
+                <div class="task-card-summary">${task.summary || 'No description'}</div>
+                <div class="task-card-meta">From: <span>${sourceEmail.from || 'Unknown'}</span> - "${sourceEmail.subject || 'No Subject'}"${deadlineHtml}</div>
+                ${docsHtml}
+                ${signersHtml}
+                ${executeBtn}
+              `;
+
+              // Add click handler for execute button
+              const execBtn = card.querySelector('.task-execute-btn');
+              if (execBtn) {
+                execBtn.addEventListener('click', () => {
+                  executeDetectedTask(task, sourceEmail);
+                });
+              }
+
+              detectedTasksList.appendChild(card);
+            });
+
+            detectedTasksPanel.style.display = 'block';
+          } else {
+            detectedTasksList.innerHTML = '<div class="task-no-results">No actionable tasks detected in these emails. Try uploading emails that contain task requests (e.g. "please collate", "run a redline", "prepare signature packets").</div>';
+            taskCount.textContent = '0';
+            detectedTasksPanel.style.display = 'block';
+          }
+        } else {
+          alert('Task detection failed: ' + (result.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Task detection error: ' + err.message);
+      } finally {
+        detectTasksBtn.disabled = false;
+        detectTasksBtnIcon.innerHTML = '&#129302;';
+        detectTasksBtnText.textContent = 'Detect Tasks from Emails';
+      }
+    });
+
+    // Listen for task detection progress
+    ipcRenderer.on('task-detect-progress', (event, data) => {
+      detectTasksBtnText.textContent = data.message || 'Detecting tasks...';
+    });
+
+    function executeDetectedTask(task, sourceEmail) {
+      // Store task context for cross-tab data passing
+      taskContext = {
+        taskType: task.task_type,
+        documents: task.documents || [],
+        signers: task.signers || [],
+        deadline: task.deadline,
+        priority: task.priority,
+        summary: task.summary,
+        emailSubject: sourceEmail.subject || '',
+        emailFrom: sourceEmail.from || '',
+        emailBody: sourceEmail.body || '',
+        emailAttachments: sourceEmail.attachments || ''
+      };
+
+      // Map task types to tab names
+      const tabMap = {
+        'COLLATE': 'collate',
+        'REDLINE': 'redline',
+        'SIG_PACKETS': 'packets',
+        'EXECUTION_VERSION': 'execution'
+      };
+
+      const targetTab = tabMap[task.task_type];
+      if (targetTab) {
+        switchTab(targetTab);
+        // After switching, populate the target tab with context
+        setTimeout(() => applyTaskContext(targetTab), 100);
+      }
+    }
+
+    function applyTaskContext(tabName) {
+      if (!taskContext) return;
+
+      const docListText = taskContext.documents.length > 0
+        ? taskContext.documents.join(', ')
+        : 'No specific documents identified';
+
+      // Create or update the task context banner in the target tab
+      let banner = document.getElementById('taskContextBanner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'taskContextBanner';
+        banner.style.cssText = 'background: linear-gradient(135deg, #7c3aed22, #6d28d922); border: 1px solid #7c3aed; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; position: relative;';
+      }
+
+      const priorityBadge = taskContext.priority
+        ? `<span style="font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; margin-left: 8px; ${taskContext.priority === 'HIGH' ? 'background:#dc2626;color:#fff;' : taskContext.priority === 'MEDIUM' ? 'background:#f59e0b;color:#000;' : 'background:#6b7280;color:#fff;'}">${taskContext.priority}</span>`
+        : '';
+
+      const deadlineText = taskContext.deadline
+        ? `<div style="font-size: 11px; color: #fca5a5; margin-top: 4px;">Deadline: ${taskContext.deadline}</div>`
+        : '';
+
+      banner.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div style="font-size: 12px; color: #c4b5fd; font-weight: 600; margin-bottom: 4px;">
+              &#129302; Task from Email ${priorityBadge}
+            </div>
+            <div style="font-size: 13px; color: #e5e5e5; margin-bottom: 4px;">${taskContext.summary || ''}</div>
+            <div style="font-size: 11px; color: #888;">From: ${taskContext.emailFrom} - "${taskContext.emailSubject}"</div>
+            <div style="font-size: 11px; color: #a78bfa; margin-top: 4px;">Documents: ${docListText}</div>
+            ${taskContext.signers.length > 0 ? `<div style="font-size: 11px; color: #93c5fd; margin-top: 2px;">Signers: ${taskContext.signers.join(', ')}</div>` : ''}
+            ${deadlineText}
+          </div>
+          <button onclick="this.parentElement.parentElement.remove(); taskContext = null;" style="background: none; border: none; color: #666; cursor: pointer; font-size: 16px; padding: 0; line-height: 1;">&times;</button>
+        </div>
+      `;
+
+      // Insert banner into the appropriate tab
+      const tabIdMap = {
+        'collate': 'collateTab',
+        'redline': 'redlineTab',
+        'packets': 'packetsTab',
+        'execution': 'executionTab'
+      };
+      const tabElementId = tabIdMap[tabName];
+      if (tabElementId) {
+        const targetElement = document.getElementById(tabElementId);
+        if (targetElement && !targetElement.querySelector('#taskContextBanner')) {
+          targetElement.insertBefore(banner, targetElement.firstChild);
+        }
+      }
+    }
 
     // ========== TIME TRACKING TAB ==========
     const timetrackEmailDrop = document.getElementById('timetrackEmailDrop');

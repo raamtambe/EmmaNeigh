@@ -1560,6 +1560,237 @@ Respond ONLY with the JSON object, no other text.`;
   });
 });
 
+// ========== TASK DETECTION ==========
+
+ipcMain.handle('detect-tasks', async (event, config) => {
+  const taskModuleName = 'task_detector';
+  const processorPath = getProcessorPath(taskModuleName);
+
+  // Get the API key
+  const apiKey = config.api_key || getApiKey();
+
+  if (!apiKey) {
+    return { success: false, error: 'No API key configured. Please add your Claude API key in Settings.' };
+  }
+
+  const emails = config.emails || [];
+  if (!emails.length) {
+    return { success: false, error: 'No emails to analyze for tasks.' };
+  }
+
+  // In development without processor, make direct API call
+  if (!processorPath) {
+    try {
+      const https = require('https');
+
+      // Prepare email context (limit to 50 emails, 500 char bodies)
+      const emailContext = emails.slice(0, 50).map((email, i) => ({
+        index: i,
+        from: email.from || 'Unknown',
+        to: email.to || '',
+        cc: email.cc || '',
+        subject: email.subject || '(No Subject)',
+        body: (email.body || '').substring(0, 500),
+        date: email.date_received || email.date_sent || '',
+        attachments: email.attachments || '',
+        has_attachments: email.has_attachments || false
+      }));
+
+      const taskPrompt = `You are a legal transaction assistant analyzing emails sent to a first-year associate at a law firm. Your job is to identify actionable tasks that the associate needs to perform.
+
+TASK CATEGORIES:
+- COLLATE: Merge comments or track changes from multiple document versions into a single document. Keywords: "collate", "merge comments", "consolidate changes", "combine markups", "track changes from all parties"
+- REDLINE: Compare two document versions to identify and mark up changes. Keywords: "redline", "compare", "blackline", "show changes", "amended version", "mark up differences"
+- SIG_PACKETS: Extract signature pages from closing documents and organize them per signer. Keywords: "signature pages", "sig packets", "closing binder", "execution pages", "signing set"
+- EXECUTION_VERSION: Merge signed/executed pages back into the original unsigned agreements. Keywords: "execution version", "conformed copy", "insert signed pages", "final executed"
+- REVIEW: Review a document but no automated action is needed. Keywords: "please review", "take a look", "your thoughts on", "comments on"
+- NONE: No actionable task detected (informational emails, FYIs, scheduling, etc.)
+
+IMPORTANT RULES:
+- Only detect tasks where there is a clear action being requested
+- Do NOT classify FYI emails, scheduling emails, or status updates as tasks
+- An email saying "attached is the agreement" without asking for action = NONE
+- An email saying "please compare the attached against the original" = REDLINE
+- Look for action verbs: "please collate", "can you compare", "extract signature pages", etc.
+
+For each task detected, extract:
+- task_type: one of COLLATE, REDLINE, SIG_PACKETS, EXECUTION_VERSION, REVIEW, NONE
+- source_email_index: the email index this task came from
+- documents: list of document filenames or descriptions referenced
+- signers: list of person/entity names mentioned as signers (for SIG_PACKETS only)
+- deadline: any deadline mentioned (date string or null)
+- priority: HIGH (urgent/ASAP/today), MEDIUM (this week/soon), LOW (when you get a chance/no rush)
+- summary: one-sentence description of what needs to be done
+
+Respond with a JSON object:
+{
+    "tasks": [
+        {
+            "task_type": "COLLATE",
+            "source_email_index": 3,
+            "documents": ["Credit Agreement v3.docx"],
+            "signers": [],
+            "deadline": null,
+            "priority": "HIGH",
+            "summary": "Collate client comments on Credit Agreement"
+        }
+    ],
+    "total_emails_analyzed": ${emailContext.length},
+    "emails_with_tasks": 0
+}
+
+Respond ONLY with the JSON object, no other text.
+
+EMAILS TO ANALYZE (${emailContext.length} emails):
+${JSON.stringify(emailContext, null, 2)}`;
+
+      const requestData = JSON.stringify({
+        model: getClaudeModel(),
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: taskPrompt }]
+      });
+
+      return new Promise((resolve) => {
+        const options = {
+          hostname: 'api.anthropic.com',
+          path: '/v1/messages',
+          method: 'POST',
+          rejectUnauthorized: false,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'Content-Length': Buffer.byteLength(requestData)
+          }
+        };
+
+        const req = https.request(options, (res) => {
+          let body = '';
+          res.on('data', chunk => body += chunk);
+          res.on('end', () => {
+            try {
+              if (res.statusCode !== 200) {
+                let errorDetail = '';
+                try { errorDetail = JSON.parse(body).error?.message || body.substring(0, 200); } catch(e) { errorDetail = body.substring(0, 200); }
+                resolve({ success: false, error: `API error (${res.statusCode}): ${errorDetail}` });
+                return;
+              }
+
+              const response = JSON.parse(body);
+              const responseText = response.content[0].text.trim();
+
+              // Parse JSON from response
+              let result;
+              try {
+                let jsonText = responseText;
+                if (jsonText.startsWith('```')) {
+                  const lines = jsonText.split('\n');
+                  const jsonLines = [];
+                  let inJson = false;
+                  for (const line of lines) {
+                    if (line.startsWith('```json') || (line.startsWith('```') && !inJson)) { inJson = true; continue; }
+                    if (line.startsWith('```') && inJson) { inJson = false; continue; }
+                    if (inJson) jsonLines.push(line);
+                  }
+                  jsonText = jsonLines.join('\n');
+                }
+                result = JSON.parse(jsonText);
+              } catch (e) {
+                result = { tasks: [], total_emails_analyzed: emailContext.length, emails_with_tasks: 0 };
+              }
+
+              const tasks = result.tasks || [];
+              const actionableTasks = tasks.filter(t => t.task_type !== 'NONE');
+
+              resolve({
+                success: true,
+                tasks: tasks,
+                actionable_tasks: actionableTasks,
+                total_emails_analyzed: result.total_emails_analyzed || emailContext.length,
+                emails_with_tasks: result.emails_with_tasks || actionableTasks.length
+              });
+            } catch (e) {
+              resolve({ success: false, error: `Parse error: ${e.message}` });
+            }
+          });
+        });
+
+        req.on('error', (e) => {
+          resolve({ success: false, error: `Network error: ${e.message}` });
+        });
+
+        req.setTimeout(90000, () => {
+          req.destroy();
+          resolve({ success: false, error: 'Request timed out (90s). Try with fewer emails.' });
+        });
+
+        req.write(requestData);
+        req.end();
+      });
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  // Production: spawn Python subprocess
+  if (app.isPackaged && !fs.existsSync(processorPath)) {
+    return { success: false, error: 'Task detector processor not found' };
+  }
+
+  if (process.platform !== 'win32' && app.isPackaged) {
+    try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+  }
+
+  const configPath = path.join(app.getPath('temp'), `task_detect_${Date.now()}.json`);
+  const configData = {
+    emails: emails,
+    api_key: apiKey
+  };
+  fs.writeFileSync(configPath, JSON.stringify(configData));
+
+  return new Promise((resolve, reject) => {
+    let args;
+    if (app.isPackaged) {
+      args = [taskModuleName, configPath];
+    } else {
+      args = [taskModuleName, path.join(__dirname, 'python', 'task_detector.py'), configPath];
+    }
+
+    const proc = spawn(processorPath, args);
+    let result = null;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'result') {
+            result = msg;
+          } else if (msg.type === 'progress') {
+            event.sender.send('task-detect-progress', msg);
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      console.error('Task detector stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      try { fs.unlinkSync(configPath); } catch (e) {}
+
+      if (code === 0 && result) {
+        resolve(result);
+      } else if (!result) {
+        reject(new Error('Task detection failed with code ' + code));
+      }
+    });
+
+    proc.on('error', reject);
+  });
+});
+
 // ========== TIME TRACKING ==========
 
 ipcMain.handle('generate-time-summary', async (event, config) => {
