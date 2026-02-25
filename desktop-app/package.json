@@ -1,6 +1,6 @@
 {
   "name": "emmaneigh",
-  "version": "5.3.0",
+  "version": "5.3.1",
   "description": "Transaction Management & Document Automation",
   "main": "main.js",
   "scripts": {
@@ -13,7 +13,9 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.1.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5"
   },
   "dependencies": {
     "archiver": "^6.0.1",
@@ -53,10 +55,16 @@
       "icon": "icon.icns"
     },
     "nsis": {
+      "guid": "emmaneigh-transaction-app",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "EmmaNeigh-Setup.exe",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico",
+      "uninstallDisplayName": "EmmaNeigh",
+      "allowElevation": true
     }
   }
 }
