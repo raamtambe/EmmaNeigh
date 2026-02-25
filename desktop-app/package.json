@@ -1,6 +1,6 @@
 {
   "name": "emmaneigh",
-  "version": "5.3.1",
+  "version": "5.3.2",
   "description": "Transaction Management & Document Automation",
   "main": "main.js",
   "scripts": {
@@ -64,7 +64,8 @@
       "uninstallerIcon": "icon.ico",
       "installerHeaderIcon": "icon.ico",
       "uninstallDisplayName": "EmmaNeigh",
-      "allowElevation": true
+      "allowElevation": true,
+      "license": "license.txt"
     }
   }
 }

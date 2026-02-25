@@ -1,0 +1,26 @@
+EmmaNeigh - Transaction Management & Document Automation
+Copyright (c) 2024-2026 Raam Tambe / Agon Equity. All rights reserved.
+
+END USER LICENSE AGREEMENT
+
+By installing and using EmmaNeigh, you agree to the following terms:
+
+1. LICENSE GRANT: You are granted a non-exclusive, non-transferable license
+   to use this software for business and personal purposes.
+
+2. RESTRICTIONS: You may not redistribute, sublicense, or reverse engineer
+   this software without prior written consent.
+
+3. AI FEATURES: Features powered by Claude AI require a valid Anthropic API
+   key. API usage is subject to Anthropic's terms of service and usage policies.
+
+4. DATA PRIVACY: EmmaNeigh processes documents locally on your machine.
+   Email data and documents are not transmitted to external servers unless
+   you explicitly use AI-powered features (which send data to the Anthropic API).
+
+5. NO WARRANTY: This software is provided "as is" without warranty of any kind.
+
+6. LIMITATION OF LIABILITY: In no event shall the author be liable for any
+   damages arising from the use of this software.
+
+Click "I Agree" to continue installation.
