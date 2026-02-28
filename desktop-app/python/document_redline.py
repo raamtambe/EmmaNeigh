@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-EmmaNeigh - Document Redline
-v5.1.7: Compare documents and generate redline markup
+EmmaNeigh - Table Comparison / Redline
+v5.3.4: Compare tables across documents and generate redline markup
 
-Supports: PDF, DOCX, PPTX, XLSX
-Features:
-- Fast paragraph comparison with hash-based pre-filtering
-- Superior table handling (row additions, column reordering, re-sorting)
-- Batch processing with parallel execution
-- Multi-format support
+Supports extracting tables from: PDF, DOCX, PPTX, XLSX
+Output: XLSX (color-coded comparison showing actual row/cell changes)
+
+Core feature: Content-based row matching (not position-based).
+When a row is inserted mid-table, only that insertion is marked — subsequent
+rows are matched by content fingerprint, not by position. This solves the
+"every row after an insert shows as changed" problem.
+
+Table comparison approach:
+1. Extract all tables from both documents
+2. Match tables between documents (by header similarity + content overlap)
+3. Match rows by content fingerprint (hash of cell values)
+4. Fallback: match by key columns (first 1-2 columns, e.g. party name, date)
+5. Cell-level diff for matched rows
+6. Output: Excel workbook with color-coded changes
 """
 
 import os
@@ -16,6 +25,7 @@ import sys
 import json
 import hashlib
 import difflib
+import re
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
@@ -31,8 +41,6 @@ except ImportError:
 
 try:
     from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     HAS_DOCX = True
 except ImportError:
     HAS_DOCX = False
@@ -45,6 +53,8 @@ except ImportError:
 
 try:
     from openpyxl import load_workbook
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     HAS_OPENPYXL = True
 except ImportError:
     HAS_OPENPYXL = False
@@ -60,6 +70,27 @@ def emit(msg_type, **kwargs):
 
 
 # =============================================================================
+# Text Normalization
+# =============================================================================
+
+def normalize_text(text: str) -> str:
+    """Normalize text for comparison."""
+    if not text:
+        return ""
+    text = re.sub(r'[\xa0\t\r]+', ' ', text)
+    text = re.sub(r' +', ' ', text)
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
+    text = text.replace('\u2013', '-').replace('\u2014', '-')
+    return text.strip()
+
+
+def texts_are_equivalent(text1: str, text2: str) -> bool:
+    """Check if two texts are effectively the same after normalization."""
+    return normalize_text(text1).lower() == normalize_text(text2).lower()
+
+
+# =============================================================================
 # Data Classes
 # =============================================================================
 
@@ -72,9 +103,7 @@ class Cell:
 
     @property
     def fingerprint(self) -> str:
-        """Content-based fingerprint for matching."""
-        normalized = self.text.strip().lower()
-        return hashlib.md5(normalized.encode()).hexdigest()[:8]
+        return hashlib.md5(normalize_text(self.text).lower().encode()).hexdigest()[:8]
 
 
 @dataclass
@@ -86,14 +115,19 @@ class TableRow:
 
     @property
     def fingerprint(self) -> str:
-        """Row fingerprint for move/reorder detection."""
+        """Content-based fingerprint — position independent."""
         cell_fps = [c.fingerprint for c in self.cells]
-        return hashlib.md5('|'.join(cell_fps).encode()).hexdigest()[:12]
+        return hashlib.md5('|'.join(cell_fps).encode()).hexdigest()[:16]
+
+    @property
+    def text_content(self) -> str:
+        """Concatenated text for fuzzy matching."""
+        return ' | '.join(normalize_text(c.text) for c in self.cells)
 
     @property
     def key_values(self) -> List[str]:
-        """First 2 columns often contain unique identifiers."""
-        return [c.text.strip() for c in self.cells[:2]]
+        """First 3 columns — often contain unique identifiers."""
+        return [normalize_text(c.text).lower() for c in self.cells[:3]]
 
 
 @dataclass
@@ -101,7 +135,7 @@ class Table:
     """Table structure with rows."""
     id: str
     rows: List[TableRow]
-    position: Tuple[int, int]  # (page/slide/sheet, index)
+    position: Tuple[int, int]  # (page/sheet, index_within_page)
 
     @property
     def header_row(self) -> Optional[TableRow]:
@@ -119,15 +153,10 @@ class Table:
     def column_count(self) -> int:
         return max(len(row.cells) for row in self.rows) if self.rows else 0
 
-
-@dataclass
-class DiffBlock:
-    """Represents a difference between documents."""
-    operation: str  # 'equal', 'insert', 'delete', 'replace', 'move'
-    original_text: str = ""
-    modified_text: str = ""
-    original_index: int = -1
-    modified_index: int = -1
+    @property
+    def data_rows(self) -> List[TableRow]:
+        """All non-header rows."""
+        return [r for r in self.rows if not r.is_header]
 
 
 @dataclass
@@ -153,360 +182,166 @@ class RowChange:
 @dataclass
 class TableDiff:
     """Complete diff between two tables."""
+    table_name: str
     row_changes: List[RowChange]
-    column_mapping: Dict[int, int]  # {orig_col: mod_col}
+    column_mapping: Dict[int, int]
     is_resorted: bool
     added_columns: List[int]
     deleted_columns: List[int]
-
-
-@dataclass
-class DocumentContent:
-    """Extracted content from a document."""
-    paragraphs: List[Dict[str, Any]]
-    tables: List[Table]
-    file_path: str
-    format: str
+    stats: Dict[str, int] = field(default_factory=dict)
 
 
 # =============================================================================
-# Content Extractors
+# Content Extractors — Tables Only
 # =============================================================================
 
-def extract_from_pdf(file_path: str) -> DocumentContent:
-    """Extract content from PDF using PyMuPDF."""
+def extract_tables_from_pdf(file_path: str) -> List[Table]:
+    """Extract tables from PDF using PyMuPDF."""
     if not HAS_FITZ:
         raise ImportError("PyMuPDF (fitz) not installed")
 
-    paragraphs = []
     tables = []
-
     doc = fitz.open(file_path)
 
     for page_num, page in enumerate(doc):
-        # Extract text blocks as paragraphs
-        blocks = page.get_text("dict")["blocks"]
-
-        for block in blocks:
-            if block["type"] == 0:  # Text block
-                para_text = ""
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        para_text += span["text"]
-
-                if para_text.strip():
-                    paragraphs.append({
-                        "text": para_text.strip(),
-                        "page": page_num,
-                        "index": len(paragraphs)
-                    })
-
-        # Extract tables
         try:
             page_tables = page.find_tables()
             for table_idx, table_data in enumerate(page_tables):
                 rows = []
                 extracted = table_data.extract()
-
                 for row_idx, row_data in enumerate(extracted):
-                    cells = []
-                    for col_idx, cell_text in enumerate(row_data):
-                        cells.append(Cell(
-                            row=row_idx,
-                            col=col_idx,
-                            text=cell_text or ""
-                        ))
-
-                    rows.append(TableRow(
-                        index=row_idx,
-                        cells=cells,
-                        is_header=(row_idx == 0)
-                    ))
-
+                    cells = [Cell(row=row_idx, col=col_idx, text=cell_text or "")
+                             for col_idx, cell_text in enumerate(row_data)]
+                    rows.append(TableRow(index=row_idx, cells=cells, is_header=(row_idx == 0)))
                 if rows:
                     tables.append(Table(
-                        id=f"p{page_num}_t{table_idx}",
+                        id=f"Page{page_num + 1}_Table{table_idx + 1}",
                         rows=rows,
                         position=(page_num, table_idx)
                     ))
         except Exception:
-            pass  # Table detection may fail on some pages
+            pass
 
     doc.close()
-
-    return DocumentContent(
-        paragraphs=paragraphs,
-        tables=tables,
-        file_path=file_path,
-        format='pdf'
-    )
+    return tables
 
 
-def extract_from_docx(file_path: str) -> DocumentContent:
-    """Extract content from Word document."""
+def extract_tables_from_docx(file_path: str) -> List[Table]:
+    """Extract tables from Word document."""
     if not HAS_DOCX:
         raise ImportError("python-docx not installed")
 
-    paragraphs = []
     tables = []
-
     doc = Document(file_path)
 
-    # Extract paragraphs
-    for para_idx, para in enumerate(doc.paragraphs):
-        if para.text.strip():
-            paragraphs.append({
-                "text": para.text.strip(),
-                "style": para.style.name if para.style else "Normal",
-                "index": para_idx
-            })
-
-    # Extract tables
     for table_idx, docx_table in enumerate(doc.tables):
         rows = []
-
         for row_idx, docx_row in enumerate(docx_table.rows):
-            cells = []
-
-            for col_idx, docx_cell in enumerate(docx_row.cells):
-                cells.append(Cell(
-                    row=row_idx,
-                    col=col_idx,
-                    text=docx_cell.text
-                ))
-
-            rows.append(TableRow(
-                index=row_idx,
-                cells=cells,
-                is_header=(row_idx == 0)
-            ))
-
+            cells = [Cell(row=row_idx, col=col_idx, text=docx_cell.text)
+                     for col_idx, docx_cell in enumerate(docx_row.cells)]
+            rows.append(TableRow(index=row_idx, cells=cells, is_header=(row_idx == 0)))
         if rows:
             tables.append(Table(
-                id=f"table_{table_idx}",
+                id=f"Table{table_idx + 1}",
                 rows=rows,
                 position=(0, table_idx)
             ))
 
-    return DocumentContent(
-        paragraphs=paragraphs,
-        tables=tables,
-        file_path=file_path,
-        format='docx'
-    )
+    return tables
 
 
-def extract_from_pptx(file_path: str) -> DocumentContent:
-    """Extract content from PowerPoint."""
+def extract_tables_from_pptx(file_path: str) -> List[Table]:
+    """Extract tables from PowerPoint."""
     if not HAS_PPTX:
         raise ImportError("python-pptx not installed")
 
-    paragraphs = []
     tables = []
-
     prs = Presentation(file_path)
 
     for slide_idx, slide in enumerate(prs.slides):
-        # Extract text from shapes
+        table_count = 0
         for shape in slide.shapes:
-            if hasattr(shape, "text") and shape.text.strip():
-                paragraphs.append({
-                    "text": shape.text.strip(),
-                    "slide": slide_idx,
-                    "index": len(paragraphs)
-                })
-
-            # Extract tables from shapes
             if shape.has_table:
                 pptx_table = shape.table
                 rows = []
-
                 for row_idx in range(len(pptx_table.rows)):
-                    cells = []
-                    for col_idx in range(len(pptx_table.columns)):
-                        cell = pptx_table.cell(row_idx, col_idx)
-                        cells.append(Cell(
-                            row=row_idx,
-                            col=col_idx,
-                            text=cell.text
-                        ))
-
-                    rows.append(TableRow(
-                        index=row_idx,
-                        cells=cells,
-                        is_header=(row_idx == 0)
-                    ))
-
+                    cells = [Cell(row=row_idx, col=col_idx, text=pptx_table.cell(row_idx, col_idx).text)
+                             for col_idx in range(len(pptx_table.columns))]
+                    rows.append(TableRow(index=row_idx, cells=cells, is_header=(row_idx == 0)))
                 if rows:
+                    table_count += 1
                     tables.append(Table(
-                        id=f"s{slide_idx}_t{len(tables)}",
+                        id=f"Slide{slide_idx + 1}_Table{table_count}",
                         rows=rows,
-                        position=(slide_idx, len(tables))
+                        position=(slide_idx, table_count - 1)
                     ))
 
-    return DocumentContent(
-        paragraphs=paragraphs,
-        tables=tables,
-        file_path=file_path,
-        format='pptx'
-    )
+    return tables
 
 
-def extract_from_xlsx(file_path: str) -> DocumentContent:
-    """Extract content from Excel. Each sheet becomes a table."""
+def extract_tables_from_xlsx(file_path: str) -> List[Table]:
+    """Extract tables from Excel. Each sheet = one table."""
     if not HAS_OPENPYXL:
         raise ImportError("openpyxl not installed")
 
-    paragraphs = []  # Excel doesn't have paragraphs
     tables = []
-
     wb = load_workbook(file_path, data_only=True)
 
     for sheet_idx, sheet_name in enumerate(wb.sheetnames):
         sheet = wb[sheet_name]
         rows = []
-
         for row_idx, row in enumerate(sheet.iter_rows()):
             cells = []
             has_content = False
-
             for col_idx, cell in enumerate(row):
                 cell_value = str(cell.value) if cell.value is not None else ""
                 if cell_value:
                     has_content = True
-
-                cells.append(Cell(
-                    row=row_idx,
-                    col=col_idx,
-                    text=cell_value
-                ))
-
+                cells.append(Cell(row=row_idx, col=col_idx, text=cell_value))
             if has_content:
-                rows.append(TableRow(
-                    index=row_idx,
-                    cells=cells,
-                    is_header=(row_idx == 0)
-                ))
-
+                rows.append(TableRow(index=row_idx, cells=cells, is_header=(row_idx == 0)))
         if rows:
             tables.append(Table(
-                id=f"sheet_{sheet_name}",
+                id=sheet_name,
                 rows=rows,
                 position=(sheet_idx, 0)
             ))
 
     wb.close()
-
-    return DocumentContent(
-        paragraphs=paragraphs,
-        tables=tables,
-        file_path=file_path,
-        format='xlsx'
-    )
+    return tables
 
 
-def extract_content(file_path: str) -> DocumentContent:
-    """Extract content based on file type."""
+def extract_tables(file_path: str) -> List[Table]:
+    """Extract all tables from a document."""
     ext = os.path.splitext(file_path)[1].lower()
-
     if ext == '.pdf':
-        return extract_from_pdf(file_path)
+        return extract_tables_from_pdf(file_path)
     elif ext in ['.docx', '.doc']:
-        return extract_from_docx(file_path)
+        return extract_tables_from_docx(file_path)
     elif ext in ['.pptx', '.ppt']:
-        return extract_from_pptx(file_path)
+        return extract_tables_from_pptx(file_path)
     elif ext in ['.xlsx', '.xls']:
-        return extract_from_xlsx(file_path)
+        return extract_tables_from_xlsx(file_path)
     else:
         raise ValueError(f"Unsupported file format: {ext}")
 
 
 # =============================================================================
-# Paragraph Comparison (with hash-based pre-filtering)
-# =============================================================================
-
-def compute_paragraph_hash(text: str) -> str:
-    """Hash normalized paragraph for fast comparison."""
-    normalized = ' '.join(text.lower().split())
-    return hashlib.md5(normalized.encode()).hexdigest()
-
-
-def compare_paragraphs(orig_paras: List[Dict], mod_paras: List[Dict]) -> List[DiffBlock]:
-    """Compare paragraphs using difflib with hash pre-filtering."""
-
-    # Extract text and compute hashes
-    orig_texts = [p['text'] for p in orig_paras]
-    mod_texts = [p['text'] for p in mod_paras]
-
-    orig_hashes = [compute_paragraph_hash(t) for t in orig_texts]
-    mod_hashes = [compute_paragraph_hash(t) for t in mod_texts]
-
-    # Use SequenceMatcher on hashes for speed
-    matcher = difflib.SequenceMatcher(None, orig_hashes, mod_hashes)
-
-    diffs = []
-
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == 'equal':
-            for k in range(i2 - i1):
-                diffs.append(DiffBlock(
-                    operation='equal',
-                    original_text=orig_texts[i1 + k],
-                    modified_text=mod_texts[j1 + k],
-                    original_index=i1 + k,
-                    modified_index=j1 + k
-                ))
-
-        elif tag == 'delete':
-            for k in range(i1, i2):
-                diffs.append(DiffBlock(
-                    operation='delete',
-                    original_text=orig_texts[k],
-                    original_index=k
-                ))
-
-        elif tag == 'insert':
-            for k in range(j1, j2):
-                diffs.append(DiffBlock(
-                    operation='insert',
-                    modified_text=mod_texts[k],
-                    modified_index=k
-                ))
-
-        elif tag == 'replace':
-            # Do word-level diff for replace blocks
-            for k in range(max(i2 - i1, j2 - j1)):
-                orig_text = orig_texts[i1 + k] if i1 + k < i2 else ""
-                mod_text = mod_texts[j1 + k] if j1 + k < j2 else ""
-
-                diffs.append(DiffBlock(
-                    operation='replace',
-                    original_text=orig_text,
-                    modified_text=mod_text,
-                    original_index=i1 + k if i1 + k < i2 else -1,
-                    modified_index=j1 + k if j1 + k < j2 else -1
-                ))
-
-    return diffs
-
-
-# =============================================================================
-# Table Comparison
+# Table Matching (between documents)
 # =============================================================================
 
 def match_tables(orig_tables: List[Table], mod_tables: List[Table]) -> List[Tuple[Optional[Table], Optional[Table]]]:
-    """Match original tables to modified tables."""
+    """Match original tables to modified tables by content similarity."""
     matches = []
     used_modified = set()
 
     for orig in orig_tables:
         best_match = None
-        best_score = 0.5  # Minimum threshold
+        best_score = 0.3  # Low threshold — prefer matching over orphaning
 
         for i, mod in enumerate(mod_tables):
             if i in used_modified:
                 continue
-
             score = compute_table_similarity(orig, mod)
             if score > best_score:
                 best_score = score
@@ -516,9 +351,8 @@ def match_tables(orig_tables: List[Table], mod_tables: List[Table]) -> List[Tupl
             used_modified.add(best_match[0])
             matches.append((orig, best_match[1]))
         else:
-            matches.append((orig, None))  # Deleted table
+            matches.append((orig, None))
 
-    # Remaining modified tables are additions
     for i, mod in enumerate(mod_tables):
         if i not in used_modified:
             matches.append((None, mod))
@@ -527,225 +361,267 @@ def match_tables(orig_tables: List[Table], mod_tables: List[Table]) -> List[Tupl
 
 
 def compute_table_similarity(t1: Table, t2: Table) -> float:
-    """Compute similarity score between two tables (0-1)."""
+    """Compute similarity between two tables."""
     scores = []
 
-    # Header match (40% weight)
+    # Header similarity (50% weight) — strongest signal
     if t1.header_fingerprint and t2.header_fingerprint:
-        header_match = 1.0 if t1.header_fingerprint == t2.header_fingerprint else 0.0
-        scores.append(('header', header_match, 0.4))
-
-    # Position match (30% weight)
-    if t1.position[0] == t2.position[0]:  # Same page/slide
-        scores.append(('position', 1.0, 0.3))
-    else:
-        scores.append(('position', 0.0, 0.3))
+        if t1.header_fingerprint == t2.header_fingerprint:
+            scores.append(1.0 * 0.5)
+        else:
+            # Partial header match
+            h1_cells = [normalize_text(c.text).lower() for c in (t1.header_row.cells if t1.header_row else [])]
+            h2_cells = [normalize_text(c.text).lower() for c in (t2.header_row.cells if t2.header_row else [])]
+            if h1_cells and h2_cells:
+                overlap = len(set(h1_cells) & set(h2_cells))
+                scores.append((overlap / max(len(h1_cells), len(h2_cells))) * 0.5)
 
     # Content overlap (30% weight)
-    fp1 = set(row.fingerprint for row in t1.rows)
-    fp2 = set(row.fingerprint for row in t2.rows)
-    intersection = len(fp1 & fp2)
-    union = len(fp1 | fp2)
-    content_score = intersection / union if union > 0 else 0
-    scores.append(('content', content_score, 0.3))
+    fp1 = set(row.fingerprint for row in t1.data_rows)
+    fp2 = set(row.fingerprint for row in t2.data_rows)
+    if fp1 or fp2:
+        intersection = len(fp1 & fp2)
+        union = len(fp1 | fp2)
+        scores.append((intersection / union if union > 0 else 0) * 0.3)
 
-    # Weighted average
-    total_weight = sum(s[2] for s in scores)
-    if total_weight == 0:
-        return 0
-    return sum(s[1] * s[2] for s in scores) / total_weight
+    # Position (20% weight)
+    if t1.position[0] == t2.position[0]:
+        scores.append(0.2)
 
-
-def detect_column_reorder(orig_table: Table, mod_table: Table) -> Dict[int, int]:
-    """Detect column reordering by matching header cells."""
-    if not orig_table.header_row or not mod_table.header_row:
-        # No headers, assume columns unchanged
-        return {i: i for i in range(orig_table.column_count)}
-
-    orig_headers = [c.text.strip().lower() for c in orig_table.header_row.cells]
-    mod_headers = [c.text.strip().lower() for c in mod_table.header_row.cells]
-
-    mapping = {}
-    for i, orig_h in enumerate(orig_headers):
-        if orig_h in mod_headers:
-            mapping[i] = mod_headers.index(orig_h)
-
-    return mapping
+    return sum(scores)
 
 
-def reorder_row_cells(row: TableRow, col_mapping: Dict[int, int]) -> List[str]:
-    """Reorder row cells according to column mapping."""
-    result = [''] * len(col_mapping)
-    for orig_col, mod_col in col_mapping.items():
-        if orig_col < len(row.cells) and mod_col < len(result):
-            result[mod_col] = row.cells[orig_col].text.strip().lower()
-    return result
+# =============================================================================
+# Row Matching — Content-Based (solves the "inserted row cascades" problem)
+# =============================================================================
 
+def match_rows_by_content(orig_table: Table, mod_table: Table, col_mapping: Dict[int, int]) -> Dict[int, Tuple[int, float]]:
+    """
+    Match rows between tables by CONTENT, not position.
 
-def compute_reordered_fingerprint(row: TableRow, col_mapping: Dict[int, int]) -> str:
-    """Compute row fingerprint accounting for column reorder."""
-    reordered = reorder_row_cells(row, col_mapping)
-    return hashlib.md5('|'.join(reordered).encode()).hexdigest()[:12]
+    This is the key algorithm that solves the "one inserted row makes
+    everything after it show as changed" problem.
 
+    Strategy:
+    1. Exact fingerprint match (hash of all cell values) — O(n)
+    2. Key column match (first 1-3 columns) — catches rows where only some cells changed
+    3. Fuzzy text similarity — last resort for heavily modified rows
 
-def match_rows(orig_table: Table, mod_table: Table, col_mapping: Dict[int, int]) -> Dict[int, Tuple[int, float]]:
-    """Match rows between tables, accounting for column reorder."""
+    Returns: {orig_row_index: (mod_row_index, confidence)}
+    """
     matches = {}
     used_modified = set()
 
-    # Skip header row
-    orig_data_rows = [(i, r) for i, r in enumerate(orig_table.rows) if not r.is_header]
-    mod_data_rows = [(i, r) for i, r in enumerate(mod_table.rows) if not r.is_header]
+    orig_data = [(i, r) for i, r in enumerate(orig_table.rows) if not r.is_header]
+    mod_data = [(i, r) for i, r in enumerate(mod_table.rows) if not r.is_header]
 
-    # Pass 1: Exact fingerprint matches
-    for orig_idx, orig_row in orig_data_rows:
-        orig_fp = compute_reordered_fingerprint(orig_row, col_mapping)
+    # Build lookup indices for speed
+    mod_fp_index = {}  # fingerprint → list of (mod_idx, mod_row)
+    for mod_idx, mod_row in mod_data:
+        fp = mod_row.fingerprint
+        mod_fp_index.setdefault(fp, []).append((mod_idx, mod_row))
 
-        for mod_idx, mod_row in mod_data_rows:
-            if mod_idx in used_modified:
-                continue
+    mod_key_index = {}  # (key1, key2) → list of (mod_idx, mod_row)
+    for mod_idx, mod_row in mod_data:
+        key = tuple(mod_row.key_values)
+        mod_key_index.setdefault(key, []).append((mod_idx, mod_row))
 
-            mod_fp = hashlib.md5('|'.join(c.text.strip().lower() for c in mod_row.cells).encode()).hexdigest()[:12]
+    # === Pass 1: Exact fingerprint match ===
+    for orig_idx, orig_row in orig_data:
+        fp = orig_row.fingerprint
+        if fp in mod_fp_index:
+            for mod_idx, mod_row in mod_fp_index[fp]:
+                if mod_idx not in used_modified:
+                    matches[orig_idx] = (mod_idx, 1.0)
+                    used_modified.add(mod_idx)
+                    break
 
-            if orig_fp == mod_fp:
-                matches[orig_idx] = (mod_idx, 1.0)
-                used_modified.add(mod_idx)
-                break
-
-    # Pass 2: Key column matching (first 2 columns)
-    for orig_idx, orig_row in orig_data_rows:
+    # === Pass 2: Key column match ===
+    for orig_idx, orig_row in orig_data:
         if orig_idx in matches:
             continue
 
-        orig_keys = orig_row.key_values
-        best_match = None
-        best_score = 0.5
+        orig_key = tuple(orig_row.key_values)
 
-        for mod_idx, mod_row in mod_data_rows:
+        # Skip empty keys
+        if all(k == '' for k in orig_key):
+            continue
+
+        if orig_key in mod_key_index:
+            for mod_idx, mod_row in mod_key_index[orig_key]:
+                if mod_idx not in used_modified:
+                    matches[orig_idx] = (mod_idx, 0.8)
+                    used_modified.add(mod_idx)
+                    break
+
+    # === Pass 3: Fuzzy similarity for remaining unmatched rows ===
+    unmatched_orig = [(i, r) for i, r in orig_data if i not in matches]
+    unmatched_mod = [(i, r) for i, r in mod_data if i not in used_modified]
+
+    for orig_idx, orig_row in unmatched_orig:
+        best_score = 0.6  # High threshold for fuzzy — avoid false matches
+        best_mod_idx = None
+
+        orig_text = orig_row.text_content
+
+        for mod_idx, mod_row in unmatched_mod:
             if mod_idx in used_modified:
                 continue
 
-            mod_keys = mod_row.key_values
+            mod_text = mod_row.text_content
+            sim = difflib.SequenceMatcher(None, orig_text, mod_text).ratio()
 
-            # Count matching keys
-            match_count = sum(1 for k1, k2 in zip(orig_keys, mod_keys)
-                            if k1.strip().lower() == k2.strip().lower())
-            score = match_count / max(len(orig_keys), 1)
+            if sim > best_score:
+                best_score = sim
+                best_mod_idx = mod_idx
 
-            if score > best_score:
-                best_score = score
-                best_match = mod_idx
-
-        if best_match is not None:
-            matches[orig_idx] = (best_match, best_score)
-            used_modified.add(best_match)
+        if best_mod_idx is not None:
+            matches[orig_idx] = (best_mod_idx, best_score)
+            used_modified.add(best_mod_idx)
 
     return matches
 
 
-def is_table_resorted(orig_table: Table, mod_table: Table, row_matches: Dict[int, Tuple[int, float]]) -> bool:
-    """Check if tables have same rows but in different order."""
-    # Get data row indices (excluding header)
-    orig_data_indices = [i for i, r in enumerate(orig_table.rows) if not r.is_header]
+# =============================================================================
+# Column Matching
+# =============================================================================
 
-    # All rows must be matched
-    if len(row_matches) != len(orig_data_indices):
-        return False
+def detect_column_reorder(orig_table: Table, mod_table: Table) -> Dict[int, int]:
+    """Detect column reordering by matching header cells."""
+    if not orig_table.header_row or not mod_table.header_row:
+        # No headers — assume identity mapping up to min column count
+        n = min(orig_table.column_count, mod_table.column_count)
+        return {i: i for i in range(n)}
 
-    # Check if order changed
-    mod_indices = [row_matches[i][0] for i in orig_data_indices if i in row_matches]
+    orig_headers = [normalize_text(c.text).lower() for c in orig_table.header_row.cells]
+    mod_headers = [normalize_text(c.text).lower() for c in mod_table.header_row.cells]
 
-    return mod_indices != sorted(mod_indices)
+    mapping = {}
+    used_mod = set()
+
+    # Exact match first
+    for i, oh in enumerate(orig_headers):
+        if not oh:
+            continue
+        for j, mh in enumerate(mod_headers):
+            if j in used_mod:
+                continue
+            if oh == mh:
+                mapping[i] = j
+                used_mod.add(j)
+                break
+
+    # Fuzzy match for remaining
+    for i, oh in enumerate(orig_headers):
+        if i in mapping or not oh:
+            continue
+        best_j = None
+        best_sim = 0.7
+        for j, mh in enumerate(mod_headers):
+            if j in used_mod or not mh:
+                continue
+            sim = difflib.SequenceMatcher(None, oh, mh).ratio()
+            if sim > best_sim:
+                best_sim = sim
+                best_j = j
+        if best_j is not None:
+            mapping[i] = best_j
+            used_mod.add(best_j)
+
+    # Remaining unmapped columns: identity if within range
+    for i in range(orig_table.column_count):
+        if i not in mapping and i < mod_table.column_count and i not in used_mod:
+            mapping[i] = i
+            used_mod.add(i)
+
+    return mapping
 
 
-def compare_tables(orig_tables: List[Table], mod_tables: List[Table]) -> List[Tuple[Optional[Table], Optional[Table], Optional[TableDiff]]]:
-    """Compare all tables between documents."""
-    results = []
-
-    # Match tables
-    table_pairs = match_tables(orig_tables, mod_tables)
-
-    for orig, mod in table_pairs:
-        if orig is None:
-            # Added table
-            results.append((None, mod, None))
-        elif mod is None:
-            # Deleted table
-            results.append((orig, None, None))
-        else:
-            # Compare matched tables
-            diff = diff_tables(orig, mod)
-            results.append((orig, mod, diff))
-
-    return results
-
+# =============================================================================
+# Table Diff Generation
+# =============================================================================
 
 def diff_tables(orig: Table, mod: Table) -> TableDiff:
     """Generate detailed diff between two matched tables."""
-
-    # Detect column reordering
     col_mapping = detect_column_reorder(orig, mod)
 
-    # Find added/deleted columns
     orig_cols = set(range(orig.column_count))
     mod_cols = set(range(mod.column_count))
     mapped_orig = set(col_mapping.keys())
     mapped_mod = set(col_mapping.values())
 
-    deleted_columns = list(orig_cols - mapped_orig)
-    added_columns = list(mod_cols - mapped_mod)
+    deleted_columns = sorted(orig_cols - mapped_orig)
+    added_columns = sorted(mod_cols - mapped_mod)
 
-    # Match rows
-    row_matches = match_rows(orig, mod, col_mapping)
+    # Content-based row matching
+    row_matches = match_rows_by_content(orig, mod, col_mapping)
 
-    # Detect re-sorting
-    is_resorted = is_table_resorted(orig, mod, row_matches)
+    # Detect resorting
+    matched_orig_indices = sorted(row_matches.keys())
+    matched_mod_indices = [row_matches[i][0] for i in matched_orig_indices]
+    is_resorted = matched_mod_indices != sorted(matched_mod_indices) if matched_mod_indices else False
 
     # Generate row changes
     row_changes = []
     used_mod_rows = set()
 
+    # Process original rows in order
     for orig_idx, orig_row in enumerate(orig.rows):
+        if orig_row.is_header:
+            # Header row — compare but don't flag as change
+            if mod.header_row:
+                cell_changes = []
+                for oc, mc in col_mapping.items():
+                    if oc < len(orig_row.cells):
+                        ov = orig_row.cells[oc].text
+                        mv = mod.header_row.cells[mc].text if mc < len(mod.header_row.cells) else ""
+                        ct = 'unchanged' if texts_are_equivalent(ov, mv) else 'modified'
+                        cell_changes.append(CellChange(change_type=ct, original_value=ov, modified_value=mv, row=orig_idx, col=oc))
+                row_changes.append(RowChange(change_type='unchanged', original_index=orig_idx, modified_index=0, cells=cell_changes))
+                used_mod_rows.add(0)
+            continue
+
         if orig_idx in row_matches:
             mod_idx, confidence = row_matches[orig_idx]
             mod_row = mod.rows[mod_idx]
             used_mod_rows.add(mod_idx)
 
-            # Compare cells
+            # Cell-level comparison
             cell_changes = []
+            has_cell_change = False
+
             for orig_col, mod_col in col_mapping.items():
                 if orig_col >= len(orig_row.cells):
                     continue
-
                 orig_cell = orig_row.cells[orig_col]
 
                 if mod_col < len(mod_row.cells):
                     mod_cell = mod_row.cells[mod_col]
-
-                    if orig_cell.text.strip() == mod_cell.text.strip():
-                        change_type = 'unchanged'
+                    if texts_are_equivalent(orig_cell.text, mod_cell.text):
+                        ct = 'unchanged'
                     else:
-                        change_type = 'modified'
-
+                        ct = 'modified'
+                        has_cell_change = True
                     cell_changes.append(CellChange(
-                        change_type=change_type,
+                        change_type=ct,
                         original_value=orig_cell.text,
                         modified_value=mod_cell.text,
-                        row=orig_idx,
-                        col=orig_col
+                        row=orig_idx, col=orig_col
                     ))
                 else:
                     cell_changes.append(CellChange(
                         change_type='deleted',
                         original_value=orig_cell.text,
-                        row=orig_idx,
-                        col=orig_col
+                        row=orig_idx, col=orig_col
                     ))
+                    has_cell_change = True
 
             # Determine row change type
-            if mod_idx != orig_idx:
+            if mod_idx != orig_idx and has_cell_change:
+                row_type = 'modified'  # Moved AND modified
+            elif mod_idx != orig_idx:
                 row_type = 'moved'
-            elif any(c.change_type == 'modified' for c in cell_changes):
+            elif has_cell_change:
                 row_type = 'modified'
             else:
                 row_type = 'unchanged'
@@ -759,186 +635,272 @@ def diff_tables(orig: Table, mod: Table) -> TableDiff:
             ))
         else:
             # Deleted row
-            cell_changes = [CellChange(
-                change_type='deleted',
-                original_value=c.text,
-                row=orig_idx,
-                col=c.col
-            ) for c in orig_row.cells]
+            cell_changes = [CellChange(change_type='deleted', original_value=c.text, row=orig_idx, col=c.col)
+                            for c in orig_row.cells]
+            row_changes.append(RowChange(change_type='deleted', original_index=orig_idx, cells=cell_changes))
 
-            row_changes.append(RowChange(
-                change_type='deleted',
-                original_index=orig_idx,
-                cells=cell_changes
-            ))
-
-    # Added rows
+    # Added rows (in modified but not matched)
     for mod_idx, mod_row in enumerate(mod.rows):
-        if mod_idx not in used_mod_rows:
-            cell_changes = [CellChange(
-                change_type='added',
-                modified_value=c.text,
-                row=mod_idx,
-                col=c.col
-            ) for c in mod_row.cells]
+        if mod_idx not in used_mod_rows and not mod_row.is_header:
+            cell_changes = [CellChange(change_type='added', modified_value=c.text, row=mod_idx, col=c.col)
+                            for c in mod_row.cells]
+            row_changes.append(RowChange(change_type='added', modified_index=mod_idx, cells=cell_changes))
 
-            row_changes.append(RowChange(
-                change_type='added',
-                modified_index=mod_idx,
-                cells=cell_changes
-            ))
+    # Compute stats
+    stats = {
+        'total_rows_orig': len(orig.data_rows),
+        'total_rows_mod': len(mod.data_rows),
+        'unchanged': sum(1 for r in row_changes if r.change_type == 'unchanged'),
+        'added': sum(1 for r in row_changes if r.change_type == 'added'),
+        'deleted': sum(1 for r in row_changes if r.change_type == 'deleted'),
+        'modified': sum(1 for r in row_changes if r.change_type == 'modified'),
+        'moved': sum(1 for r in row_changes if r.change_type == 'moved'),
+    }
 
     return TableDiff(
+        table_name=orig.id,
         row_changes=row_changes,
         column_mapping=col_mapping,
         is_resorted=is_resorted,
         added_columns=added_columns,
-        deleted_columns=deleted_columns
+        deleted_columns=deleted_columns,
+        stats=stats
     )
 
 
+def compare_all_tables(orig_tables: List[Table], mod_tables: List[Table]) -> List[Tuple[Optional[Table], Optional[Table], Optional[TableDiff]]]:
+    """Compare all tables between two documents."""
+    results = []
+    table_pairs = match_tables(orig_tables, mod_tables)
+
+    for orig, mod in table_pairs:
+        if orig is None:
+            results.append((None, mod, None))
+        elif mod is None:
+            results.append((orig, None, None))
+        else:
+            td = diff_tables(orig, mod)
+            results.append((orig, mod, td))
+
+    return results
+
+
 # =============================================================================
-# Output Generation
+# Excel Output — Color-Coded Comparison
 # =============================================================================
 
-# Color scheme
-DELETED_COLOR = RGBColor(255, 0, 0)    # Red
-ADDED_COLOR = RGBColor(0, 0, 255)       # Blue
-MOVED_COLOR = RGBColor(0, 128, 0)       # Green
+FILL_ADDED = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+FILL_DELETED = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+FILL_MODIFIED = PatternFill(start_color="FFFFCC", end_color="FFFFCC", fill_type="solid")
+FILL_MOVED = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
+FILL_HEADER = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+
+FONT_ADDED = Font(color="0000CC")
+FONT_DELETED = Font(color="CC0000", strikethrough=True)
+FONT_MODIFIED_OLD = Font(color="CC0000", strikethrough=True, size=9)
+FONT_MODIFIED_NEW = Font(color="0000CC", size=9)
+FONT_HEADER = Font(bold=True)
+FONT_LABEL = Font(bold=True, size=9, color="555555")
+
+THIN_BORDER = Border(
+    left=Side(style='thin', color='AAAAAA'),
+    right=Side(style='thin', color='AAAAAA'),
+    top=Side(style='thin', color='AAAAAA'),
+    bottom=Side(style='thin', color='AAAAAA')
+)
 
 
-def generate_redline_docx(para_diffs: List[DiffBlock],
-                          table_results: List[Tuple],
-                          output_path: str,
-                          orig_file: str,
-                          mod_file: str):
-    """Generate Word document with redline markup."""
-    if not HAS_DOCX:
-        raise ImportError("python-docx not installed")
+def generate_output_xlsx(table_results: List[Tuple],
+                         output_path: str,
+                         orig_file: str,
+                         mod_file: str):
+    """Generate Excel workbook with color-coded table comparison."""
+    if not HAS_OPENPYXL:
+        raise ImportError("openpyxl not installed")
 
-    doc = Document()
+    wb = Workbook()
+    if 'Sheet' in wb.sheetnames:
+        del wb['Sheet']
 
-    # Add header
-    header = doc.add_paragraph()
-    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = header.add_run("DOCUMENT COMPARISON")
-    run.bold = True
-    run.font.size = Pt(14)
+    # === Summary Sheet ===
+    ws_sum = wb.create_sheet(title="Summary", index=0)
+    ws_sum.cell(row=1, column=1, value="Table Comparison Report").font = Font(bold=True, size=14)
+    ws_sum.cell(row=3, column=1, value="Original:").font = Font(bold=True)
+    ws_sum.cell(row=3, column=2, value=os.path.basename(orig_file))
+    ws_sum.cell(row=4, column=1, value="Modified:").font = Font(bold=True)
+    ws_sum.cell(row=4, column=2, value=os.path.basename(mod_file))
+    ws_sum.cell(row=5, column=1, value="Generated:").font = Font(bold=True)
+    ws_sum.cell(row=5, column=2, value=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
-    # Add metadata
-    meta = doc.add_paragraph()
-    meta.add_run(f"Original: {os.path.basename(orig_file)}\n").italic = True
-    meta.add_run(f"Modified: {os.path.basename(mod_file)}\n").italic = True
-    meta.add_run(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n").italic = True
+    # Legend
+    row = 7
+    ws_sum.cell(row=row, column=1, value="Color Legend:").font = Font(bold=True)
+    row += 1
+    for label, fill, font in [
+        ("Row Added", FILL_ADDED, FONT_ADDED),
+        ("Row Deleted", FILL_DELETED, FONT_DELETED),
+        ("Cell Modified", FILL_MODIFIED, Font(color="CC6600")),
+        ("Row Moved", FILL_MOVED, Font(color="006600")),
+        ("Unchanged", PatternFill(), Font()),
+    ]:
+        c = ws_sum.cell(row=row, column=1, value=label)
+        c.fill = fill
+        c.font = font
+        row += 1
 
-    doc.add_paragraph()  # Spacer
+    # Stats table
+    row += 1
+    headers = ["Table", "Orig Rows", "Mod Rows", "Unchanged", "Added", "Deleted", "Modified", "Moved"]
+    for ci, h in enumerate(headers, 1):
+        c = ws_sum.cell(row=row, column=ci, value=h)
+        c.font = Font(bold=True)
+        c.fill = FILL_HEADER
+    row += 1
 
-    # Add legend
-    legend = doc.add_paragraph()
-    legend.add_run("Legend: ").bold = True
+    for orig_table, mod_table, table_diff in table_results:
+        name = (orig_table or mod_table).id
+        ws_sum.cell(row=row, column=1, value=name)
 
-    del_run = legend.add_run("Deleted text")
-    del_run.font.strike = True
-    del_run.font.color.rgb = DELETED_COLOR
+        if table_diff:
+            s = table_diff.stats
+            ws_sum.cell(row=row, column=2, value=s.get('total_rows_orig', 0))
+            ws_sum.cell(row=row, column=3, value=s.get('total_rows_mod', 0))
+            ws_sum.cell(row=row, column=4, value=s.get('unchanged', 0))
+            ws_sum.cell(row=row, column=5, value=s.get('added', 0))
+            ws_sum.cell(row=row, column=6, value=s.get('deleted', 0))
+            ws_sum.cell(row=row, column=7, value=s.get('modified', 0))
+            ws_sum.cell(row=row, column=8, value=s.get('moved', 0))
+        elif orig_table is None:
+            ws_sum.cell(row=row, column=5, value="Entire table added")
+        elif mod_table is None:
+            ws_sum.cell(row=row, column=6, value="Entire table deleted")
+        row += 1
 
-    legend.add_run(" | ")
+    for col_letter in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']:
+        ws_sum.column_dimensions[col_letter].width = 15
 
-    add_run = legend.add_run("Added text")
-    add_run.font.underline = True
-    add_run.font.color.rgb = ADDED_COLOR
+    # === Per-Table Sheets ===
+    for orig_table, mod_table, table_diff in table_results:
+        tbl = orig_table or mod_table
+        sheet_name = tbl.id[:31]  # Excel max 31 chars
 
-    legend.add_run(" | ")
+        # Ensure unique sheet name
+        base_name = sheet_name
+        counter = 1
+        while sheet_name in wb.sheetnames:
+            sheet_name = f"{base_name[:28]}_{counter}"
+            counter += 1
 
-    move_run = legend.add_run("Moved text")
-    move_run.font.italic = True
-    move_run.font.color.rgb = MOVED_COLOR
+        ws = wb.create_sheet(title=sheet_name)
 
-    doc.add_paragraph()  # Spacer
+        if orig_table is None and mod_table is not None:
+            # Entire table added
+            ws.cell(row=1, column=1, value="[ENTIRE TABLE ADDED]").font = FONT_ADDED
+            for ri, row_obj in enumerate(mod_table.rows, 2):
+                for cell in row_obj.cells:
+                    c = ws.cell(row=ri, column=cell.col + 1, value=cell.text)
+                    c.fill = FILL_ADDED
+                    c.font = FONT_ADDED
+                    c.border = THIN_BORDER
+            _auto_width(ws)
+            continue
 
-    # Add paragraph differences
-    section_header = doc.add_paragraph()
-    section_header.add_run("TEXT CHANGES").bold = True
+        if mod_table is None and orig_table is not None:
+            # Entire table deleted
+            ws.cell(row=1, column=1, value="[ENTIRE TABLE DELETED]").font = FONT_DELETED
+            for ri, row_obj in enumerate(orig_table.rows, 2):
+                for cell in row_obj.cells:
+                    c = ws.cell(row=ri, column=cell.col + 1, value=cell.text)
+                    c.fill = FILL_DELETED
+                    c.font = FONT_DELETED
+                    c.border = THIN_BORDER
+            _auto_width(ws)
+            continue
 
-    for diff in para_diffs:
-        para = doc.add_paragraph()
+        if table_diff is None:
+            continue
 
-        if diff.operation == 'equal':
-            para.add_run(diff.original_text)
+        # Add a "Change" label column
+        max_col = max(orig_table.column_count, mod_table.column_count)
+        change_col = max_col + 2  # Leave a gap
 
-        elif diff.operation == 'delete':
-            run = para.add_run(diff.original_text)
-            run.font.strike = True
-            run.font.color.rgb = DELETED_COLOR
+        # Write header for change label
+        ws.cell(row=1, column=change_col, value="Change").font = FONT_LABEL
 
-        elif diff.operation == 'insert':
-            run = para.add_run(diff.modified_text)
-            run.font.underline = True
-            run.font.color.rgb = ADDED_COLOR
+        current_row = 1
 
-        elif diff.operation == 'replace':
-            # Show deleted text
-            if diff.original_text:
-                del_run = para.add_run(diff.original_text)
-                del_run.font.strike = True
-                del_run.font.color.rgb = DELETED_COLOR
-                para.add_run(" ")
+        # Sort row_changes: header first, then by position
+        sorted_changes = sorted(table_diff.row_changes,
+                                key=lambda rc: (
+                                    0 if rc.original_index == 0 or rc.modified_index == 0 else 1,
+                                    rc.original_index if rc.original_index is not None else 99999,
+                                    rc.modified_index if rc.modified_index is not None else 99999
+                                ))
 
-            # Show added text
-            if diff.modified_text:
-                add_run = para.add_run(diff.modified_text)
-                add_run.font.underline = True
-                add_run.font.color.rgb = ADDED_COLOR
+        for rc in sorted_changes:
+            if rc.change_type == 'unchanged':
+                for cc in rc.cells:
+                    val = cc.modified_value if cc.modified_value is not None else cc.original_value or ""
+                    c = ws.cell(row=current_row, column=cc.col + 1, value=val)
+                    c.border = THIN_BORDER
+                    if rc.original_index == 0:  # Header
+                        c.fill = FILL_HEADER
+                        c.font = FONT_HEADER
 
-    # Add table differences
-    if table_results:
-        doc.add_paragraph()  # Spacer
-        section_header = doc.add_paragraph()
-        section_header.add_run("TABLE CHANGES").bold = True
+            elif rc.change_type == 'added':
+                for cc in rc.cells:
+                    c = ws.cell(row=current_row, column=cc.col + 1, value=cc.modified_value or "")
+                    c.fill = FILL_ADDED
+                    c.font = FONT_ADDED
+                    c.border = THIN_BORDER
+                ws.cell(row=current_row, column=change_col, value="ADDED").font = FONT_ADDED
 
-        for orig_table, mod_table, table_diff in table_results:
-            # Table header
-            table_para = doc.add_paragraph()
+            elif rc.change_type == 'deleted':
+                for cc in rc.cells:
+                    c = ws.cell(row=current_row, column=cc.col + 1, value=cc.original_value or "")
+                    c.fill = FILL_DELETED
+                    c.font = FONT_DELETED
+                    c.border = THIN_BORDER
+                ws.cell(row=current_row, column=change_col, value="DELETED").font = FONT_DELETED
 
-            if orig_table is None:
-                table_para.add_run(f"[Table Added: {mod_table.id}]").font.color.rgb = ADDED_COLOR
-            elif mod_table is None:
-                table_para.add_run(f"[Table Deleted: {orig_table.id}]").font.color.rgb = DELETED_COLOR
-            elif table_diff:
-                table_para.add_run(f"Table: {orig_table.id}")
+            elif rc.change_type == 'modified':
+                for cc in rc.cells:
+                    if cc.change_type == 'modified':
+                        # Show "old → new" in the cell
+                        val = f"{cc.original_value} → {cc.modified_value}"
+                        c = ws.cell(row=current_row, column=cc.col + 1, value=val)
+                        c.fill = FILL_MODIFIED
+                        c.font = Font(color="CC6600")
+                    else:
+                        val = cc.modified_value if cc.modified_value is not None else cc.original_value or ""
+                        c = ws.cell(row=current_row, column=cc.col + 1, value=val)
+                    c.border = THIN_BORDER
+                ws.cell(row=current_row, column=change_col, value="MODIFIED").font = Font(color="CC6600")
 
-                if table_diff.is_resorted:
-                    table_para.add_run(" [RESORTED]").font.color.rgb = MOVED_COLOR
+            elif rc.change_type == 'moved':
+                for cc in rc.cells:
+                    val = cc.modified_value if cc.modified_value is not None else cc.original_value or ""
+                    c = ws.cell(row=current_row, column=cc.col + 1, value=val)
+                    c.fill = FILL_MOVED
+                    c.border = THIN_BORDER
+                label = f"MOVED (was row {rc.moved_from + 1})" if rc.moved_from is not None else "MOVED"
+                ws.cell(row=current_row, column=change_col, value=label).font = Font(color="006600")
 
-                # Summarize changes
-                added_rows = sum(1 for r in table_diff.row_changes if r.change_type == 'added')
-                deleted_rows = sum(1 for r in table_diff.row_changes if r.change_type == 'deleted')
-                modified_rows = sum(1 for r in table_diff.row_changes if r.change_type == 'modified')
-                moved_rows = sum(1 for r in table_diff.row_changes if r.change_type == 'moved')
+            current_row += 1
 
-                summary = []
-                if added_rows:
-                    summary.append(f"+{added_rows} rows")
-                if deleted_rows:
-                    summary.append(f"-{deleted_rows} rows")
-                if modified_rows:
-                    summary.append(f"~{modified_rows} modified")
-                if moved_rows:
-                    summary.append(f"↕{moved_rows} moved")
+        _auto_width(ws)
 
-                if summary:
-                    table_para.add_run(f" ({', '.join(summary)})")
+    wb.save(output_path)
 
-                # Show column changes
-                if table_diff.added_columns:
-                    col_para = doc.add_paragraph()
-                    col_para.add_run(f"  Columns added: {table_diff.added_columns}").font.color.rgb = ADDED_COLOR
 
-                if table_diff.deleted_columns:
-                    col_para = doc.add_paragraph()
-                    col_para.add_run(f"  Columns deleted: {table_diff.deleted_columns}").font.color.rgb = DELETED_COLOR
-
-    # Save document
-    doc.save(output_path)
+def _auto_width(ws):
+    """Auto-fit column widths."""
+    for col_cells in ws.columns:
+        max_len = 0
+        for cell in col_cells:
+            if cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 2, 60)
 
 
 # =============================================================================
@@ -946,37 +908,51 @@ def generate_redline_docx(para_diffs: List[DiffBlock],
 # =============================================================================
 
 def compare_documents(original_path: str, modified_path: str, output_path: str) -> Dict:
-    """Compare two documents and generate redline output."""
+    """Compare tables in two documents and generate Excel output."""
 
-    # Extract content
-    emit("progress", percent=10, message=f"Extracting content from {os.path.basename(original_path)}...")
-    orig_content = extract_content(original_path)
+    emit("progress", percent=10, message=f"Extracting tables from {os.path.basename(original_path)}...")
+    orig_tables = extract_tables(original_path)
 
-    emit("progress", percent=30, message=f"Extracting content from {os.path.basename(modified_path)}...")
-    mod_content = extract_content(modified_path)
+    emit("progress", percent=30, message=f"Extracting tables from {os.path.basename(modified_path)}...")
+    mod_tables = extract_tables(modified_path)
 
-    # Compare paragraphs
-    emit("progress", percent=50, message="Comparing paragraphs...")
-    para_diffs = compare_paragraphs(orig_content.paragraphs, mod_content.paragraphs)
+    if not orig_tables and not mod_tables:
+        emit("progress", percent=100, message="No tables found in either document.")
+        return {
+            'output_path': output_path,
+            'tables_compared': 0,
+            'table_changes': 0,
+            'message': 'No tables found in either document'
+        }
 
-    # Compare tables
-    emit("progress", percent=70, message="Comparing tables...")
-    table_results = compare_tables(orig_content.tables, mod_content.tables)
+    emit("progress", percent=60, message=f"Comparing {len(orig_tables)} original table(s) with {len(mod_tables)} modified table(s)...")
+    table_results = compare_all_tables(orig_tables, mod_tables)
 
-    # Generate output
-    emit("progress", percent=90, message="Generating redline document...")
-    generate_redline_docx(para_diffs, table_results, output_path, original_path, modified_path)
+    emit("progress", percent=85, message="Generating comparison spreadsheet...")
 
-    # Calculate statistics
-    para_changes = sum(1 for d in para_diffs if d.operation != 'equal')
-    table_changes = sum(1 for _, _, d in table_results if d is not None)
+    # Always output as xlsx
+    if not output_path.endswith('.xlsx'):
+        output_path = os.path.splitext(output_path)[0] + '.xlsx'
+
+    generate_output_xlsx(table_results, output_path, original_path, modified_path)
+
+    # Stats
+    total_added = 0
+    total_deleted = 0
+    total_modified = 0
+    for _, _, td in table_results:
+        if td:
+            total_added += td.stats.get('added', 0)
+            total_deleted += td.stats.get('deleted', 0)
+            total_modified += td.stats.get('modified', 0)
 
     return {
         'output_path': output_path,
-        'paragraphs_compared': len(orig_content.paragraphs),
-        'paragraph_changes': para_changes,
-        'tables_compared': len(orig_content.tables),
-        'table_changes': table_changes
+        'tables_compared': len(orig_tables),
+        'table_changes': sum(1 for _, _, d in table_results if d is not None),
+        'rows_added': total_added,
+        'rows_deleted': total_deleted,
+        'rows_modified': total_modified
     }
 
 
@@ -985,7 +961,6 @@ def compare_documents(original_path: str, modified_path: str, output_path: str) 
 # =============================================================================
 
 def process_single_pair(args: Tuple[str, str, str]) -> Dict:
-    """Process a single document pair (for multiprocessing)."""
     original, modified, output = args
     try:
         result = compare_documents(original, modified, output)
@@ -1001,25 +976,19 @@ def process_single_pair(args: Tuple[str, str, str]) -> Dict:
 
 
 def process_batch(pairs: List[Dict], output_folder: str) -> List[Dict]:
-    """Process multiple document pairs in parallel."""
     results = []
     total = len(pairs)
 
-    # Prepare arguments
     args_list = []
-    for i, pair in enumerate(pairs):
+    for pair in pairs:
         original = pair['original']
         modified = pair['modified']
-
-        # Generate output filename
         orig_name = os.path.splitext(os.path.basename(original))[0]
         mod_name = os.path.splitext(os.path.basename(modified))[0]
-        output_name = f"Redline_{orig_name}_vs_{mod_name}.docx"
+        output_name = f"Redline_{orig_name}_vs_{mod_name}.xlsx"
         output_path = os.path.join(output_folder, output_name)
-
         args_list.append((original, modified, output_path))
 
-    # Process in parallel (use half of available CPUs)
     max_workers = max(1, mp.cpu_count() // 2)
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -1033,11 +1002,7 @@ def process_batch(pairs: List[Dict], output_folder: str) -> List[Dict]:
                 result = future.result()
                 results.append(result)
             except Exception as e:
-                results.append({
-                    'success': False,
-                    'error': str(e),
-                    'index': idx
-                })
+                results.append({'success': False, 'error': str(e), 'index': idx})
 
             completed += 1
             emit("progress",
@@ -1052,13 +1017,11 @@ def process_batch(pairs: List[Dict], output_folder: str) -> List[Dict]:
 # =============================================================================
 
 def main():
-    """CLI entry point."""
     if len(sys.argv) < 2:
         emit("error", message="Usage: document_redline.py <config_json_path>")
         sys.exit(1)
 
     config_path = sys.argv[1]
-
     if not os.path.isfile(config_path):
         emit("error", message=f"Config file not found: {config_path}")
         sys.exit(1)
@@ -1072,25 +1035,13 @@ def main():
 
     try:
         if config.get('batch'):
-            # Batch processing
             pairs = config.get('pairs', [])
             output_folder = config.get('output_folder', os.path.dirname(config_path))
-
             os.makedirs(output_folder, exist_ok=True)
-
             results = process_batch(pairs, output_folder)
-
             successful = sum(1 for r in results if r.get('success'))
-
-            emit("result",
-                 success=True,
-                 mode="batch",
-                 total=len(pairs),
-                 successful=successful,
-                 results=results)
-
+            emit("result", success=True, mode="batch", total=len(pairs), successful=successful, results=results)
         else:
-            # Single comparison
             original = config.get('original')
             modified = config.get('modified')
             output = config.get('output')
@@ -1100,20 +1051,15 @@ def main():
                 sys.exit(1)
 
             if not output:
-                # Generate output path
                 orig_name = os.path.splitext(os.path.basename(original))[0]
                 mod_name = os.path.splitext(os.path.basename(modified))[0]
                 output = os.path.join(
                     os.path.dirname(original),
-                    f"Redline_{orig_name}_vs_{mod_name}.docx"
+                    f"Redline_{orig_name}_vs_{mod_name}.xlsx"
                 )
 
             result = compare_documents(original, modified, output)
-
-            emit("result",
-                 success=True,
-                 mode="single",
-                 **result)
+            emit("result", success=True, mode="single", **result)
 
     except Exception as e:
         emit("error", message=f"Processing failed: {str(e)}")

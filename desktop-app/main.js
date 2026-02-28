@@ -23,6 +23,21 @@ function verifyPassword(password, storedHash) {
 let db = null;
 let SQL = null;
 const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db');
+const userActivityLogPath = path.join(app.getPath('userData'), 'user_activity.csv');
+
+// Log user activity to a private CSV file (only accessible on the machine's filesystem)
+function logUserActivity(username, action) {
+  const timestamp = new Date().toISOString();
+  const line = `"${timestamp}","${(username || '').replace(/"/g, '""')}","${action}"\n`;
+  try {
+    if (!fs.existsSync(userActivityLogPath)) {
+      fs.writeFileSync(userActivityLogPath, '"Timestamp","Username","Action"\n');
+    }
+    fs.appendFileSync(userActivityLogPath, line);
+  } catch (e) {
+    console.error('Failed to log user activity:', e.message);
+  }
+}
 
 async function initDatabase() {
   try {
@@ -1088,8 +1103,324 @@ ipcMain.handle('collate-documents', async (event, config) => {
   });
 });
 
-// Redline documents
+// ========== LITERA COMPARE INTEGRATION ==========
+
+// Known Litera Compare installation paths (checked in order)
+const LITERA_INSTALL_PATHS = [
+  'C:\\Program Files (x86)\\Litera\\Compare',
+  'C:\\Program Files\\Litera\\Compare',
+  'C:\\Program Files (x86)\\Litera Compare',
+  'C:\\Program Files\\Litera Compare'
+];
+
+// Cache the Litera install path once found
+let literaInstallPath = null;
+let literaChecked = false;
+
+/**
+ * Find Litera Compare installation directory.
+ * Returns the path if found, null otherwise.
+ */
+function findLiteraInstallation() {
+  if (literaChecked) return literaInstallPath;
+  literaChecked = true;
+
+  if (process.platform !== 'win32') {
+    console.log('Litera Compare is Windows-only');
+    return null;
+  }
+
+  for (const installPath of LITERA_INSTALL_PATHS) {
+    const autoExe = path.join(installPath, 'lcp_auto.exe');
+    if (fs.existsSync(autoExe)) {
+      literaInstallPath = installPath;
+      console.log('Found Litera Compare at:', installPath);
+      return installPath;
+    }
+  }
+
+  console.log('Litera Compare not found');
+  return null;
+}
+
+/**
+ * Get the appropriate Litera executable for a given file extension.
+ * Returns { exe, args_template } or null if unsupported.
+ */
+function getLiteraExecutable(fileExt) {
+  const literaPath = findLiteraInstallation();
+  if (!literaPath) return null;
+
+  const ext = fileExt.toLowerCase().replace('.', '');
+
+  switch (ext) {
+    case 'docx':
+    case 'doc':
+    case 'rtf':
+    case 'txt':
+      return {
+        exe: path.join(literaPath, 'lcp_auto.exe'),
+        type: 'word'
+      };
+    case 'pdf':
+      return {
+        exe: path.join(literaPath, 'lcp_pdfcmp.exe'),
+        type: 'pdf'
+      };
+    case 'pptx':
+    case 'ppt':
+      return {
+        exe: path.join(literaPath, 'lcp_ppt.exe'),
+        type: 'powerpoint'
+      };
+    case 'xlsx':
+    case 'xls':
+      return {
+        exe: path.join(literaPath, 'lcx_main.exe'),
+        type: 'excel'
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Run Litera Compare on a single document pair.
+ * Returns a Promise that resolves with the comparison result.
+ */
+function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingStyle) {
+  return new Promise((resolve, reject) => {
+    const origExt = path.extname(originalPath);
+    const literaExe = getLiteraExecutable(origExt);
+
+    if (!literaExe) {
+      reject(new Error(`Litera Compare does not support ${origExt} files`));
+      return;
+    }
+
+    if (!fs.existsSync(literaExe.exe)) {
+      reject(new Error(`Litera executable not found: ${literaExe.exe}`));
+      return;
+    }
+
+    // Build CLI arguments based on Litera Compare conventions
+    // lcp_auto.exe /1 "original" /2 "modified" /r "result" /s "style"
+    const style = renderingStyle || 'Color (Kirkland Default)';
+    const args = [
+      '/1', originalPath,
+      '/2', modifiedPath,
+      '/r', outputPath
+    ];
+
+    // Only add style for word comparisons (lcp_auto)
+    if (literaExe.type === 'word') {
+      args.push('/s', style);
+    }
+
+    console.log(`Running Litera: ${literaExe.exe} ${args.map(a => `"${a}"`).join(' ')}`);
+
+    mainWindow.webContents.send('redline-progress', {
+      percent: 30,
+      message: `Running Litera Compare (${literaExe.type})...`
+    });
+
+    const proc = spawn(literaExe.exe, args, {
+      cwd: path.dirname(literaExe.exe),
+      windowsHide: true
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+      console.error('Litera stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(outputPath)) {
+        mainWindow.webContents.send('redline-progress', {
+          percent: 90,
+          message: 'Litera comparison complete'
+        });
+        resolve({
+          success: true,
+          engine: 'litera',
+          output_path: outputPath,
+          litera_type: literaExe.type
+        });
+      } else if (fs.existsSync(outputPath)) {
+        // Some Litera tools return non-zero but still produce output
+        console.warn(`Litera exited with code ${code} but output exists`);
+        resolve({
+          success: true,
+          engine: 'litera',
+          output_path: outputPath,
+          litera_type: literaExe.type,
+          warning: `Litera exited with code ${code}`
+        });
+      } else {
+        const errMsg = stderr || stdout || `Litera Compare failed with exit code ${code}`;
+        reject(new Error(errMsg));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(new Error(`Failed to launch Litera Compare: ${err.message}`));
+    });
+  });
+}
+
+// IPC handler: Check if Litera Compare is installed
+ipcMain.handle('check-litera-installed', async () => {
+  const literaPath = findLiteraInstallation();
+  if (!literaPath) {
+    return { installed: false };
+  }
+
+  // Check which executables are available
+  const executables = {
+    word: fs.existsSync(path.join(literaPath, 'lcp_auto.exe')),
+    pdf: fs.existsSync(path.join(literaPath, 'lcp_pdfcmp.exe')),
+    powerpoint: fs.existsSync(path.join(literaPath, 'lcp_ppt.exe')),
+    excel: fs.existsSync(path.join(literaPath, 'lcx_main.exe'))
+  };
+
+  return {
+    installed: true,
+    path: literaPath,
+    capabilities: executables
+  };
+});
+
+// ========== REDLINE DOCUMENTS ==========
+
+// Redline documents — routes through Litera Compare when available, falls back to EmmaNeigh table comparison
 ipcMain.handle('redline-documents', async (event, config) => {
+  const engine = config.engine || 'auto'; // 'auto', 'litera', 'emmaneigh'
+
+  // Determine if we should use Litera
+  let useLitera = false;
+  if (engine === 'litera' || engine === 'auto') {
+    const literaPath = findLiteraInstallation();
+    if (literaPath) {
+      // Check if file types are supported by Litera
+      const origExt = path.extname(config.original || (config.pairs && config.pairs[0] ? config.pairs[0].original : ''));
+      const literaExe = origExt ? getLiteraExecutable(origExt) : null;
+      if (literaExe) {
+        useLitera = true;
+      } else if (engine === 'litera') {
+        throw new Error('Litera Compare does not support this file type');
+      }
+    } else if (engine === 'litera') {
+      throw new Error('Litera Compare is not installed on this machine');
+    }
+  }
+
+  // ---- LITERA COMPARE PATH ----
+  if (useLitera) {
+    mainWindow.webContents.send('redline-progress', {
+      percent: 10,
+      message: 'Preparing Litera Compare...'
+    });
+
+    try {
+      if (config.batch && config.pairs) {
+        // Batch mode with Litera
+        const results = [];
+        const outputFolder = config.output_folder || path.dirname(config.pairs[0].original);
+
+        for (let i = 0; i < config.pairs.length; i++) {
+          const pair = config.pairs[i];
+          const pct = 10 + Math.round((i / config.pairs.length) * 80);
+          mainWindow.webContents.send('redline-progress', {
+            percent: pct,
+            message: `Comparing pair ${i + 1} of ${config.pairs.length} with Litera...`
+          });
+
+          const origName = path.parse(pair.original).name;
+          const modName = path.parse(pair.modified).name;
+          const origExt = path.extname(pair.original);
+          // Litera outputs in the same format as input (docx→docx, pdf→pdf)
+          const outputExt = origExt === '.pdf' ? '.pdf' : '.docx';
+          const outputPath = path.join(outputFolder, `Redline_${origName}_vs_${modName}${outputExt}`);
+
+          try {
+            const result = await runLiteraComparison(pair.original, pair.modified, outputPath, config.rendering_style);
+            results.push({ ...result, pair_index: i });
+          } catch (err) {
+            results.push({ success: false, error: err.message, pair_index: i });
+          }
+        }
+
+        const successful = results.filter(r => r.success).length;
+        return {
+          type: 'result',
+          success: true,
+          mode: 'batch',
+          engine: 'litera',
+          total: config.pairs.length,
+          successful,
+          results
+        };
+      } else {
+        // Single pair with Litera
+        const origExt = path.extname(config.original);
+        const outputExt = origExt === '.pdf' ? '.pdf' : '.docx';
+        const origName = path.parse(config.original).name;
+        const modName = path.parse(config.modified).name;
+        const outputPath = config.output || path.join(
+          path.dirname(config.original),
+          `Redline_${origName}_vs_${modName}${outputExt}`
+        );
+
+        mainWindow.webContents.send('redline-progress', {
+          percent: 20,
+          message: 'Running Litera Compare...'
+        });
+
+        const result = await runLiteraComparison(
+          config.original,
+          config.modified,
+          outputPath,
+          config.rendering_style
+        );
+
+        mainWindow.webContents.send('redline-progress', {
+          percent: 100,
+          message: 'Litera comparison complete'
+        });
+
+        return {
+          type: 'result',
+          success: true,
+          mode: 'single',
+          engine: 'litera',
+          output_path: result.output_path,
+          litera_type: result.litera_type,
+          warning: result.warning || null
+        };
+      }
+    } catch (err) {
+      // If Litera fails and engine was 'auto', fall back to EmmaNeigh
+      if (engine === 'auto') {
+        console.warn('Litera Compare failed, falling back to EmmaNeigh:', err.message);
+        mainWindow.webContents.send('redline-progress', {
+          percent: 15,
+          message: 'Litera unavailable — using EmmaNeigh table comparison...'
+        });
+        // Fall through to EmmaNeigh below
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // ---- EMMANEIGH TABLE COMPARISON PATH (fallback) ----
   return new Promise((resolve, reject) => {
     const moduleName = 'document_redline';
     const processorPath = getProcessorPath(moduleName);
@@ -1124,6 +1455,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
             mainWindow.webContents.send('redline-progress', msg);
           } else if (msg.type === 'result') {
             result = msg;
+            result.engine = 'emmaneigh'; // Tag the engine
           } else if (msg.type === 'error') {
             reject(new Error(msg.message));
           }
@@ -1425,7 +1757,6 @@ Respond ONLY with the JSON object, no other text.`;
           hostname: 'api.anthropic.com',
           path: '/v1/messages',
           method: 'POST',
-          rejectUnauthorized: false,  // Allow self-signed certs (corporate proxies)
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
@@ -1655,7 +1986,6 @@ ${JSON.stringify(emailContext, null, 2)}`;
           hostname: 'api.anthropic.com',
           path: '/v1/messages',
           method: 'POST',
-          rejectUnauthorized: false,
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
@@ -1949,7 +2279,6 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
-        rejectUnauthorized: false,  // Allow self-signed certs (corporate proxies)
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
@@ -2158,6 +2487,9 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
     saveDatabase();
 
+    // Log to private activity file
+    logUserActivity(username, 'login');
+
     return {
       success: true,
       user: { id, username, displayName: displayName || username, hasApiKey: !!apiKeyEnc }
@@ -2204,6 +2536,11 @@ ipcMain.handle('get-user-stats', async () => {
   } catch (e) {
     return { success: false, error: e.message };
   }
+});
+
+// Get path to user activity log file
+ipcMain.handle('get-activity-log-path', async () => {
+  return { success: true, path: userActivityLogPath };
 });
 
 // Save API key for logged-in user
@@ -2690,7 +3027,7 @@ function getClaudeModel() {
       return model;
     }
   } catch (e) {}
-  return 'claude-sonnet-4-20250514';
+  return 'claude-sonnet-4-6';
 }
 
 // Initialize model env var on startup (called after DB init)

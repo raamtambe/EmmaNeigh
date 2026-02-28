@@ -419,6 +419,19 @@
       flex-direction: column;
       gap: 8px;
       -webkit-app-region: no-drag;
+      overflow-y: auto;
+      max-height: calc(100vh - 80px);
+    }
+
+    .nav-sidebar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .nav-sidebar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .nav-sidebar::-webkit-scrollbar-thumb {
+      background: #333;
+      border-radius: 4px;
     }
 
     .nav-category {
@@ -3095,7 +3108,7 @@
         </div>
       </div>
 
-      <div class="settings-section" id="userStatsSection">
+      <div class="settings-section" id="userStatsSection" style="display: none;">
         <h3>📊 User Statistics</h3>
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px;">
           <div style="background: #1a1a1a; border-radius: 8px; padding: 12px; text-align: center;">
@@ -3769,7 +3782,20 @@
     <div id="redlineTab" style="display: none;">
       <!-- Input State -->
       <div id="redlineInputs" class="exec-inputs">
-        <p class="subtitle" style="margin-bottom: 8px;">Compare documents and generate redline markup showing changes</p>
+        <p class="subtitle" style="margin-bottom: 8px;">Compare documents using Litera Compare or EmmaNeigh table comparison</p>
+
+        <!-- Engine Indicator -->
+        <div id="redlineEngineBar" style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 12px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+          <div id="redlineEngineStatus" style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <span id="redlineEngineDot" style="width: 8px; height: 8px; border-radius: 50%; background: #666; flex-shrink: 0;"></span>
+            <span id="redlineEngineLabel" style="font-size: 12px; color: #999;">Checking comparison engine...</span>
+          </div>
+          <select id="redlineEngineSelect" style="background: rgba(255,255,255,0.06); color: #ccc; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
+            <option value="auto">Auto (best available)</option>
+            <option value="litera">Litera Compare only</option>
+            <option value="emmaneigh">EmmaNeigh only</option>
+          </select>
+        </div>
 
         <!-- Document Pair Input -->
         <div class="sigblock-step">
@@ -3851,14 +3877,41 @@
         <h2>Redline Complete</h2>
         <p id="redlineResultText">Generated 1 comparison document</p>
 
-        <div class="collate-stats">
+        <!-- Engine badge shown in results -->
+        <div id="redlineEngineResult" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 11px; margin-bottom: 12px; background: rgba(59,130,246,0.15); color: #93c5fd;">
+          <span id="redlineEngineResultIcon">⚡</span>
+          <span id="redlineEngineResultLabel">Powered by Litera Compare</span>
+        </div>
+
+        <!-- EmmaNeigh stats (shown for table comparison) -->
+        <div class="collate-stats" id="redlineStatsEmmaNeigh">
           <div class="stat-box">
-            <div class="stat-value" id="redlineParagraphChanges">0</div>
-            <div class="stat-label">Text Changes</div>
+            <div class="stat-value" id="redlineRowsAdded">0</div>
+            <div class="stat-label">Rows Added</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="redlineRowsDeleted">0</div>
+            <div class="stat-label">Rows Deleted</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="redlineRowsModified">0</div>
+            <div class="stat-label">Rows Modified</div>
           </div>
           <div class="stat-box">
             <div class="stat-value" id="redlineTableChanges">0</div>
-            <div class="stat-label">Table Changes</div>
+            <div class="stat-label">Tables Compared</div>
+          </div>
+        </div>
+
+        <!-- Litera stats (shown for Litera comparison) -->
+        <div class="collate-stats" id="redlineStatsLitera" style="display: none;">
+          <div class="stat-box">
+            <div class="stat-value" id="redlineLiteraType">—</div>
+            <div class="stat-label">Document Type</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-value" id="redlineLiteraFormat">—</div>
+            <div class="stat-label">Output Format</div>
           </div>
         </div>
 
@@ -4089,6 +4142,10 @@
           <label style="font-size: 13px; color: #888; margin-left: 16px;">
             <input type="radio" name="timetrackPeriod" value="week"> This Week
           </label>
+        </div>
+
+        <div id="timetrackReadyMsg" style="display: none; margin-top: 12px; padding: 10px 14px; background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.3); border-radius: 8px; font-size: 12px; color: #4ade80;">
+          <span id="timetrackReadyText"></span>
         </div>
 
         <div class="btn-row" style="margin-top: 16px;">
@@ -6693,7 +6750,9 @@
     const redlineProgressText = document.getElementById('redlineProgressText');
     const redlineProgressFill = document.getElementById('redlineProgressFill');
     const redlineResultText = document.getElementById('redlineResultText');
-    const redlineParagraphChanges = document.getElementById('redlineParagraphChanges');
+    const redlineRowsAdded = document.getElementById('redlineRowsAdded');
+    const redlineRowsDeleted = document.getElementById('redlineRowsDeleted');
+    const redlineRowsModified = document.getElementById('redlineRowsModified');
     const redlineTableChanges = document.getElementById('redlineTableChanges');
     const redlineOpenFolderBtn = document.getElementById('redlineOpenFolderBtn');
     const redlineDownloadZipBtn = document.getElementById('redlineDownloadZipBtn');
@@ -6701,11 +6760,56 @@
     const redlineRetryBtn = document.getElementById('redlineRetryBtn');
     const redlineErrorText = document.getElementById('redlineErrorText');
 
+    // Engine indicator elements
+    const redlineEngineDot = document.getElementById('redlineEngineDot');
+    const redlineEngineLabel = document.getElementById('redlineEngineLabel');
+    const redlineEngineSelect = document.getElementById('redlineEngineSelect');
+    const redlineEngineResult = document.getElementById('redlineEngineResult');
+    const redlineEngineResultIcon = document.getElementById('redlineEngineResultIcon');
+    const redlineEngineResultLabel = document.getElementById('redlineEngineResultLabel');
+    const redlineStatsEmmaNeigh = document.getElementById('redlineStatsEmmaNeigh');
+    const redlineStatsLitera = document.getElementById('redlineStatsLitera');
+    const redlineLiteraType = document.getElementById('redlineLiteraType');
+    const redlineLiteraFormat = document.getElementById('redlineLiteraFormat');
+
     let redlineOriginalPath = null;
     let redlineModifiedPath = null;
     let redlinePairs = []; // [{original: path, modified: path}]
     let redlineOutputFolder = null;
     let redlineZipPath = null;
+    let literaInstalled = false;
+    let literaCapabilities = {};
+
+    // Check for Litera Compare on startup
+    async function checkLiteraStatus() {
+      try {
+        const status = await ipcRenderer.invoke('check-litera-installed');
+        literaInstalled = status.installed;
+        literaCapabilities = status.capabilities || {};
+
+        if (literaInstalled) {
+          redlineEngineDot.style.background = '#22c55e'; // green
+          const caps = Object.entries(literaCapabilities)
+            .filter(([k, v]) => v)
+            .map(([k]) => k.charAt(0).toUpperCase() + k.slice(1));
+          redlineEngineLabel.textContent = `Litera Compare available (${caps.join(', ')})`;
+          redlineEngineLabel.style.color = '#86efac';
+        } else {
+          redlineEngineDot.style.background = '#f59e0b'; // amber
+          redlineEngineLabel.textContent = 'Litera Compare not found — using EmmaNeigh table comparison';
+          redlineEngineLabel.style.color = '#fcd34d';
+          // Hide Litera-only option
+          const literaOption = redlineEngineSelect.querySelector('option[value="litera"]');
+          if (literaOption) literaOption.disabled = true;
+        }
+      } catch (err) {
+        redlineEngineDot.style.background = '#ef4444'; // red
+        redlineEngineLabel.textContent = 'Engine check failed';
+        redlineEngineLabel.style.color = '#fca5a5';
+      }
+    }
+
+    checkLiteraStatus();
 
     const REDLINE_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'];
 
@@ -6869,6 +6973,7 @@
       redlineProgressFill.style.width = '0%';
 
       const startTime = Date.now();
+      const selectedEngine = redlineEngineSelect.value; // 'auto', 'litera', 'emmaneigh'
 
       try {
         // Determine output folder (same as first original document)
@@ -6877,11 +6982,13 @@
         const config = redlinePairs.length === 1 ? {
           original: redlinePairs[0].original,
           modified: redlinePairs[0].modified,
-          output: null // Let Python generate output path
+          output: null, // Let backend generate output path
+          engine: selectedEngine
         } : {
           batch: true,
           pairs: redlinePairs,
-          output_folder: redlineOutputFolder
+          output_folder: redlineOutputFolder,
+          engine: selectedEngine
         };
 
         const result = await ipcRenderer.invoke('redline-documents', config);
@@ -6889,32 +6996,74 @@
         if (result.success) {
           showRedlineState('complete');
 
+          // Show engine-specific result badge
+          const usedLitera = result.engine === 'litera';
+          redlineEngineResult.style.display = 'inline-flex';
+
+          if (usedLitera) {
+            redlineEngineResult.style.background = 'rgba(59,130,246,0.15)';
+            redlineEngineResult.style.color = '#93c5fd';
+            redlineEngineResultIcon.textContent = '⚡';
+            redlineEngineResultLabel.textContent = 'Powered by Litera Compare';
+            redlineStatsLitera.style.display = '';
+            redlineStatsEmmaNeigh.style.display = 'none';
+          } else {
+            redlineEngineResult.style.background = 'rgba(34,197,94,0.15)';
+            redlineEngineResult.style.color = '#86efac';
+            redlineEngineResultIcon.textContent = '🐴';
+            redlineEngineResultLabel.textContent = 'EmmaNeigh Table Comparison';
+            redlineStatsLitera.style.display = 'none';
+            redlineStatsEmmaNeigh.style.display = '';
+          }
+
           if (result.mode === 'batch') {
             redlineResultText.textContent = `Generated ${result.successful} of ${result.total} comparison documents`;
             redlineOutputFolder = config.output_folder;
 
-            // Sum up changes
-            let totalParaChanges = 0;
-            let totalTableChanges = 0;
-            result.results.forEach(r => {
-              if (r.paragraph_changes) totalParaChanges += r.paragraph_changes;
-              if (r.table_changes) totalTableChanges += r.table_changes;
-            });
-            redlineParagraphChanges.textContent = totalParaChanges;
-            redlineTableChanges.textContent = totalTableChanges;
+            if (usedLitera) {
+              // Litera batch — show document type info
+              const types = new Set(result.results.filter(r => r.litera_type).map(r => r.litera_type));
+              redlineLiteraType.textContent = Array.from(types).join(', ') || '—';
+              redlineLiteraFormat.textContent = result.successful + ' file(s)';
+            } else {
+              // EmmaNeigh batch — sum up table stats
+              let totalAdded = 0, totalDeleted = 0, totalModified = 0, totalTables = 0;
+              result.results.forEach(r => {
+                if (r.rows_added) totalAdded += r.rows_added;
+                if (r.rows_deleted) totalDeleted += r.rows_deleted;
+                if (r.rows_modified) totalModified += r.rows_modified;
+                if (r.table_changes) totalTables += r.table_changes;
+              });
+              redlineRowsAdded.textContent = totalAdded;
+              redlineRowsDeleted.textContent = totalDeleted;
+              redlineRowsModified.textContent = totalModified;
+              redlineTableChanges.textContent = totalTables;
+            }
           } else {
-            redlineResultText.textContent = 'Comparison document generated';
-            // For single file, get folder containing the output
+            // Single pair results
             const sep = result.output_path.includes('\\') ? '\\' : '/';
             redlineOutputFolder = result.output_path.substring(0, result.output_path.lastIndexOf(sep));
-            redlineParagraphChanges.textContent = result.paragraph_changes || 0;
-            redlineTableChanges.textContent = result.table_changes || 0;
+
+            if (usedLitera) {
+              const ext = result.output_path.split('.').pop().toUpperCase();
+              redlineResultText.textContent = `Litera redline document generated (${ext})`;
+              redlineLiteraType.textContent = (result.litera_type || 'Document').charAt(0).toUpperCase() + (result.litera_type || 'document').slice(1);
+              redlineLiteraFormat.textContent = ext;
+              if (result.warning) {
+                redlineResultText.textContent += ` — ${result.warning}`;
+              }
+            } else {
+              redlineResultText.textContent = 'Table comparison spreadsheet generated';
+              redlineRowsAdded.textContent = result.rows_added || 0;
+              redlineRowsDeleted.textContent = result.rows_deleted || 0;
+              redlineRowsModified.textContent = result.rows_modified || 0;
+              redlineTableChanges.textContent = result.table_changes || 0;
+            }
           }
 
-          // Create ZIP for download - use create-zip-files for single output, create-zip for folder
+          // Create ZIP for download
           redlineProgressText.textContent = 'Creating ZIP file...';
           if (result.mode !== 'batch' && result.output_path) {
-            // Single file: zip just the output file
             redlineZipPath = await ipcRenderer.invoke('create-zip-files', [result.output_path]);
           } else {
             redlineZipPath = await ipcRenderer.invoke('create-zip', redlineOutputFolder);
@@ -6925,6 +7074,7 @@
           ipcRenderer.invoke('log-usage', {
             feature: 'redline',
             action: 'compare',
+            engine: result.engine || 'unknown',
             input_count: redlinePairs.length,
             output_count: result.mode === 'batch' ? result.successful : 1,
             duration_ms: duration
@@ -6977,6 +7127,15 @@
 
       redlineOriginalInput.classList.remove('selected');
       redlineModifiedInput.classList.remove('selected');
+
+      // Reset engine result display
+      redlineEngineResult.style.display = 'none';
+      redlineStatsEmmaNeigh.style.display = '';
+      redlineStatsLitera.style.display = 'none';
+      redlineRowsAdded.textContent = '0';
+      redlineRowsDeleted.textContent = '0';
+      redlineRowsModified.textContent = '0';
+      redlineTableChanges.textContent = '0';
 
       updateRedlineButton();
       showRedlineState('idle');
@@ -7640,7 +7799,7 @@
       detectedTasksPanel.style.display = 'none';
 
       try {
-        const apiKey = localStorage.getItem('claude_api_key') || '';
+        const apiKey = await ipcRenderer.invoke('get-api-key-value') || '';
         const result = await ipcRenderer.invoke('detect-tasks', {
           emails: emailData,
           api_key: apiKey
@@ -7865,7 +8024,16 @@
     }
 
     function updateTimetrackButton() {
-      timetrackGenerateBtn.disabled = ttEmailData.length === 0;
+      const ready = ttEmailData.length > 0;
+      timetrackGenerateBtn.disabled = !ready;
+      const readyMsg = document.getElementById('timetrackReadyMsg');
+      const readyText = document.getElementById('timetrackReadyText');
+      if (ready) {
+        readyText.textContent = `${ttEmailData.length} emails loaded. Click "Generate Summary" to analyze your activity.`;
+        readyMsg.style.display = 'block';
+      } else {
+        readyMsg.style.display = 'none';
+      }
     }
 
     // Email drop for time tracking
@@ -7909,6 +8077,7 @@
     timetrackGenerateBtn.addEventListener('click', async () => {
       if (ttEmailData.length === 0) return;
 
+      document.getElementById('timetrackReadyMsg').style.display = 'none';
       showTimetrackState('processing');
       const startTime = Date.now();
 
