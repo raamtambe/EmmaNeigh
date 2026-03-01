@@ -1,6 +1,6 @@
 {
   "name": "emmaneigh",
-  "version": "5.3.3",
+  "version": "5.3.4",
   "description": "Transaction Management & Document Automation",
   "main": "main.js",
   "scripts": {
@@ -20,6 +20,7 @@
     "archiver": "^6.0.1",
     "archiver-utils": "^4.0.1",
     "electron-updater": "^6.1.7",
+    "firebase": "^11.4.0",
     "nodemailer": "^6.9.8",
     "sql.js": "^1.10.0"
   },

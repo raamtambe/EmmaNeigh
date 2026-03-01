@@ -5,6 +5,8 @@ const { spawn } = require('child_process');
 const archiver = require('archiver');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const os = require('os');
+const { initFirebase, logToFirestore, batchLogToFirestore } = require('./firebase-config');
 
 // Password hashing functions
 function hashPassword(password) {
@@ -23,19 +25,123 @@ function verifyPassword(password, storedHash) {
 let db = null;
 let SQL = null;
 const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db');
-const userActivityLogPath = path.join(app.getPath('userData'), 'user_activity.csv');
+const pendingLogsPath = path.join(app.getPath('userData'), 'pending_logs.json');
+const APP_VERSION = require('./package.json').version;
+const MACHINE_ID = crypto.createHash('sha256').update(os.hostname()).digest('hex').substring(0, 12);
 
-// Log user activity to a private CSV file (only accessible on the machine's filesystem)
+// ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
+
+/**
+ * Log user activity to Firebase Firestore.
+ * Falls back to offline queue if Firestore is unavailable.
+ */
 function logUserActivity(username, action) {
-  const timestamp = new Date().toISOString();
-  const line = `"${timestamp}","${(username || '').replace(/"/g, '""')}","${action}"\n`;
-  try {
-    if (!fs.existsSync(userActivityLogPath)) {
-      fs.writeFileSync(userActivityLogPath, '"Timestamp","Username","Action"\n');
+  const entry = {
+    timestamp: new Date().toISOString(),
+    username: username || 'unknown',
+    action: action,
+    app_version: APP_VERSION,
+    machine_id: MACHINE_ID
+  };
+
+  logToFirestore('activity_logs', entry).then(success => {
+    if (!success) {
+      queuePendingLog('activity_logs', entry);
     }
-    fs.appendFileSync(userActivityLogPath, line);
+  }).catch(() => {
+    queuePendingLog('activity_logs', entry);
+  });
+}
+
+/**
+ * Log feature usage to Firebase Firestore.
+ * Falls back to offline queue if Firestore is unavailable.
+ */
+function logUsageToFirestore(data) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    username: data.user_name || 'Guest',
+    feature: data.feature || 'unknown',
+    action: data.action || 'process',
+    engine: data.engine || null,
+    input_count: data.input_count || 0,
+    output_count: data.output_count || 0,
+    duration_ms: data.duration_ms || 0,
+    app_version: APP_VERSION,
+    machine_id: MACHINE_ID
+  };
+
+  logToFirestore('usage_logs', entry).then(success => {
+    if (!success) {
+      queuePendingLog('usage_logs', entry);
+    }
+  }).catch(() => {
+    queuePendingLog('usage_logs', entry);
+  });
+}
+
+// ========== OFFLINE QUEUE ==========
+
+/**
+ * Queue a log entry for later sync when offline.
+ */
+function queuePendingLog(collectionName, entry) {
+  try {
+    let pending = [];
+    if (fs.existsSync(pendingLogsPath)) {
+      pending = JSON.parse(fs.readFileSync(pendingLogsPath, 'utf8'));
+    }
+    pending.push({ collection: collectionName, data: entry });
+    fs.writeFileSync(pendingLogsPath, JSON.stringify(pending, null, 2));
   } catch (e) {
-    console.error('Failed to log user activity:', e.message);
+    console.error('Failed to queue pending log:', e.message);
+  }
+}
+
+/**
+ * Flush all pending logs to Firestore on startup.
+ */
+async function syncPendingLogs() {
+  if (!fs.existsSync(pendingLogsPath)) return;
+
+  try {
+    const pending = JSON.parse(fs.readFileSync(pendingLogsPath, 'utf8'));
+    if (!pending || pending.length === 0) return;
+
+    console.log(`Syncing ${pending.length} pending log(s) to Firestore...`);
+
+    // Group by collection
+    const grouped = {};
+    for (const item of pending) {
+      if (!grouped[item.collection]) grouped[item.collection] = [];
+      grouped[item.collection].push(item.data);
+    }
+
+    let totalSynced = 0;
+    const remaining = [];
+
+    for (const [collName, docs] of Object.entries(grouped)) {
+      const written = await batchLogToFirestore(collName, docs);
+      totalSynced += written;
+      // Keep any that failed to write
+      if (written < docs.length) {
+        const failed = docs.slice(written);
+        for (const doc of failed) {
+          remaining.push({ collection: collName, data: doc });
+        }
+      }
+    }
+
+    // Update pending file with any remaining entries
+    if (remaining.length > 0) {
+      fs.writeFileSync(pendingLogsPath, JSON.stringify(remaining, null, 2));
+    } else {
+      fs.unlinkSync(pendingLogsPath);
+    }
+
+    console.log(`Synced ${totalSynced} log(s). ${remaining.length} remaining.`);
+  } catch (e) {
+    console.error('Failed to sync pending logs:', e.message);
   }
 }
 
@@ -361,6 +467,13 @@ function createWindow() {
 app.whenReady().then(async () => {
   // Initialize database first
   await initDatabase();
+
+  // Initialize Firebase for centralized logging
+  const firebaseOk = initFirebase();
+  if (firebaseOk) {
+    // Flush any logs that were queued while offline
+    syncPendingLogs().catch(e => console.error('Pending log sync error:', e.message));
+  }
 
   createWindow();
 
@@ -2538,9 +2651,9 @@ ipcMain.handle('get-user-stats', async () => {
   }
 });
 
-// Get path to user activity log file
+// Get path to pending logs (for debugging)
 ipcMain.handle('get-activity-log-path', async () => {
-  return { success: true, path: userActivityLogPath };
+  return { success: true, path: pendingLogsPath, note: 'Activity logs are centralized via Firebase Firestore' };
 });
 
 // Save API key for logged-in user
@@ -3097,8 +3210,12 @@ ipcMain.handle('test-smtp', async (event, { host, port, user, pass, from }) => {
 
 // ========== USAGE HISTORY HANDLERS ==========
 
-// Log usage event
+// Log usage event — writes to both local SQLite and Firebase Firestore
 ipcMain.handle('log-usage', async (event, data) => {
+  // Write to Firebase Firestore (centralized)
+  logUsageToFirestore(data);
+
+  // Also write to local SQLite (offline backup)
   if (!db) return { success: false, error: 'Database not initialized' };
 
   try {
