@@ -38,7 +38,10 @@ const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db')
 const pendingLogsPath = path.join(app.getPath('userData'), 'pending_logs.json');
 const APP_VERSION = require('./package.json').version;
 const MACHINE_ID = crypto.createHash('sha256').update(os.hostname()).digest('hex').substring(0, 12);
+const DEFAULT_AI_PROVIDER = 'anthropic';
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const DEFAULT_HARVEY_BASE_URL = 'https://api.harvey.ai';
 
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
@@ -245,6 +248,7 @@ async function initDatabase() {
 
     // Set Claude model env var for Python processors
     initClaudeModel();
+    initAIProvider();
   } catch (e) {
     console.error('Failed to initialize database:', e);
   }
@@ -387,6 +391,297 @@ function normalizeClaudeModel(model) {
   }
 
   return value;
+}
+
+function normalizeAIProvider(provider) {
+  const value = (provider || '').trim().toLowerCase();
+  if (!value) return DEFAULT_AI_PROVIDER;
+  if (value === 'chatgpt') return 'openai';
+  if (value === 'claude') return 'anthropic';
+  if (value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
+  return DEFAULT_AI_PROVIDER;
+}
+
+function getAIProviderDisplayName(provider) {
+  switch (normalizeAIProvider(provider)) {
+    case 'openai':
+      return 'OpenAI';
+    case 'harvey':
+      return 'Harvey';
+    default:
+      return 'Anthropic';
+  }
+}
+
+function parseJsonSafe(text) {
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return null;
+  }
+}
+
+function extractJsonResponse(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  let candidate = raw;
+  if (candidate.startsWith('```')) {
+    const lines = candidate.split('\n');
+    const jsonLines = [];
+    let inJson = false;
+    for (const line of lines) {
+      if (line.startsWith('```json')) { inJson = true; continue; }
+      if (line.startsWith('```')) {
+        if (inJson) break;
+        continue;
+      }
+      if (inJson) jsonLines.push(line);
+    }
+    if (jsonLines.length) {
+      candidate = jsonLines.join('\n');
+    }
+  }
+
+  return parseJsonSafe(candidate);
+}
+
+function extractOpenAIText(messageContent) {
+  if (typeof messageContent === 'string') return messageContent;
+  if (Array.isArray(messageContent)) {
+    return messageContent
+      .map(part => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part.text === 'string') return part.text;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+function buildMultipartFormData(fields) {
+  const boundary = `----EmmaNeigh${Date.now()}${Math.floor(Math.random() * 100000)}`;
+  const parts = [];
+
+  for (const [name, value] of Object.entries(fields || {})) {
+    parts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+      `${value == null ? '' : String(value)}\r\n`
+    );
+  }
+  parts.push(`--${boundary}--\r\n`);
+
+  return {
+    boundary,
+    body: Buffer.from(parts.join(''), 'utf8')
+  };
+}
+
+function requestHttps({ baseUrl, path: requestPath, method = 'GET', headers = {}, body = null, timeoutMs = 60000 }) {
+  const https = require('https');
+  const url = new URL(requestPath, baseUrl);
+  const payload = body == null ? null : (Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8'));
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: `${url.pathname}${url.search}`,
+      method,
+      rejectUnauthorized: false, // Required for corporate SSL inspection proxies
+      headers: payload
+        ? { ...headers, 'Content-Length': Buffer.byteLength(payload) }
+        : headers
+    }, (res) => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode || 0,
+          rawBody: raw,
+          jsonBody: parseJsonSafe(raw)
+        });
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve({ statusCode: 0, rawBody: '', jsonBody: null, networkError: err.message });
+    });
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve({ statusCode: 0, rawBody: '', jsonBody: null, networkError: 'Request timed out' });
+    });
+
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function getErrorDetail(response) {
+  if (!response) return 'Unknown error';
+  if (response.networkError) return `Network error: ${response.networkError}`;
+  const msg = response.jsonBody?.error?.message || response.jsonBody?.message;
+  if (msg) return String(msg);
+  return (response.rawBody || '').substring(0, 300) || `API error: ${response.statusCode}`;
+}
+
+function isLikelyModelError(response) {
+  const statusCode = response?.statusCode || 0;
+  const detail = getErrorDetail(response).toLowerCase();
+  if (statusCode === 404) return true;
+  if (statusCode === 400 && detail.includes('model')) return true;
+  return detail.includes('model') && (
+    detail.includes('not found') ||
+    detail.includes('invalid') ||
+    detail.includes('unsupported') ||
+    detail.includes('available') ||
+    detail.includes('access')
+  );
+}
+
+async function callAnthropicPrompt({ apiKey, prompt, maxTokens }) {
+  const modelCandidates = Array.from(new Set([
+    getClaudeModel(),
+    DEFAULT_CLAUDE_MODEL,
+    'claude-3-5-sonnet-20241022',
+    'claude-3-5-haiku-20241022'
+  ]));
+
+  let lastResponse = null;
+  for (const modelName of modelCandidates) {
+    const payload = JSON.stringify({
+      model: modelName,
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const response = await requestHttps({
+      baseUrl: 'https://api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: payload,
+      timeoutMs: 90000
+    });
+
+    lastResponse = response;
+    if (response.statusCode !== 200) {
+      if (isLikelyModelError(response)) continue;
+      return { success: false, error: `Anthropic error (${response.statusCode}): ${getErrorDetail(response)}` };
+    }
+
+    const text = response.jsonBody?.content?.[0]?.text;
+    if (!text) {
+      return { success: false, error: 'Anthropic response was missing message content.' };
+    }
+    return { success: true, text, modelUsed: modelName };
+  }
+
+  return {
+    success: false,
+    error: `No supported Claude model is available for this API key. Last error: ${getErrorDetail(lastResponse)}`
+  };
+}
+
+async function callOpenAIPrompt({ apiKey, prompt, maxTokens }) {
+  const modelCandidates = Array.from(new Set([
+    getOpenAIModel(),
+    DEFAULT_OPENAI_MODEL,
+    'gpt-4.1-mini',
+    'gpt-4o-mini',
+    'gpt-4.1',
+    'gpt-4o'
+  ]));
+
+  let lastResponse = null;
+  for (const modelName of modelCandidates) {
+    const payload = JSON.stringify({
+      model: modelName,
+      max_tokens: maxTokens,
+      temperature: 0,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const response = await requestHttps({
+      baseUrl: 'https://api.openai.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: payload,
+      timeoutMs: 90000
+    });
+
+    lastResponse = response;
+    if (response.statusCode !== 200) {
+      if (isLikelyModelError(response)) continue;
+      return { success: false, error: `OpenAI error (${response.statusCode}): ${getErrorDetail(response)}` };
+    }
+
+    const content = extractOpenAIText(response.jsonBody?.choices?.[0]?.message?.content);
+    if (!content) {
+      return { success: false, error: 'OpenAI response was missing message content.' };
+    }
+    return { success: true, text: content, modelUsed: modelName };
+  }
+
+  return {
+    success: false,
+    error: `No supported OpenAI model is available for this API key. Last error: ${getErrorDetail(lastResponse)}`
+  };
+}
+
+async function callHarveyPrompt({ apiKey, prompt, maxTokens }) {
+  const baseUrl = getHarveyBaseUrl();
+  const { boundary, body } = buildMultipartFormData({
+    prompt,
+    mode: 'assist',
+    stream: 'false',
+    max_tokens: String(maxTokens)
+  });
+
+  const response = await requestHttps({
+    baseUrl,
+    path: '/api/v2/completion?include_citations=false',
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`
+    },
+    body,
+    timeoutMs: 90000
+  });
+
+  if (response.statusCode !== 200) {
+    return { success: false, error: `Harvey error (${response.statusCode}): ${getErrorDetail(response)}` };
+  }
+
+  const text = response.jsonBody?.response || response.jsonBody?.text;
+  if (!text) {
+    return { success: false, error: 'Harvey response was missing message content.' };
+  }
+  return { success: true, text: String(text), modelUsed: 'harvey-assist' };
+}
+
+async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
+  const normalized = normalizeAIProvider(provider);
+  if (normalized === 'openai') {
+    return callOpenAIPrompt({ apiKey, prompt, maxTokens });
+  }
+  if (normalized === 'harvey') {
+    return callHarveyPrompt({ apiKey, prompt, maxTokens });
+  }
+  return callAnthropicPrompt({ apiKey, prompt, maxTokens });
 }
 
 async function checkVersionEnforcement() {
@@ -2028,19 +2323,19 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
 ipcMain.handle('nl-search-emails', async (event, config) => {
   const nlModuleName = 'email_nl_search';
   const processorPath = getProcessorPath(nlModuleName);
+  const provider = normalizeAIProvider(config.provider || getAIProvider());
+  const providerName = getAIProviderDisplayName(provider);
 
   // Get the API key
   const apiKey = config.api_key || getApiKey();
 
   if (!apiKey) {
-    return { success: false, error: 'No API key configured. Please add your Claude API key in Settings.' };
+    return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
   }
 
-  // In development without processor, make direct API call
-  if (!processorPath) {
+  // Use direct API for non-Anthropic providers, or when Python processor isn't available.
+  if (provider !== 'anthropic' || !processorPath) {
     try {
-      const https = require('https');
-
       const emails = config.emails || [];
       const query = config.query || '';
 
@@ -2079,92 +2374,35 @@ Respond with a JSON object containing:
 
 Respond ONLY with the JSON object, no other text.`;
 
-      const requestData = JSON.stringify({
-        model: getClaudeModel(),
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }]
+      const aiResult = await callProviderPrompt({
+        provider,
+        apiKey,
+        prompt,
+        maxTokens: 1024
       });
 
-      return new Promise((resolve) => {
-        const options = {
-          hostname: 'api.anthropic.com',
-          path: '/v1/messages',
-          method: 'POST',
-          rejectUnauthorized: false, // Required for corporate SSL inspection proxies
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'Content-Length': Buffer.byteLength(requestData)
-          }
-        };
+      if (!aiResult.success) {
+        return { success: false, error: aiResult.error };
+      }
 
-        const req = https.request(options, (res) => {
-          let body = '';
-          res.on('data', chunk => body += chunk);
-          res.on('end', () => {
-            try {
-              if (res.statusCode !== 200) {
-                let errorDetail = '';
-                try {
-                  errorDetail = JSON.parse(body).error?.message || body.substring(0, 300);
-                } catch (e) {
-                  errorDetail = body.substring(0, 300);
-                }
-                resolve({ success: false, error: `API error (${res.statusCode}): ${errorDetail}` });
-                return;
-              }
+      const responseText = String(aiResult.text || '').trim();
+      const parsed = extractJsonResponse(responseText) || {
+        answer: responseText,
+        relevant_email_indices: [],
+        confidence: 0.5,
+        summary: ''
+      };
 
-              const response = JSON.parse(body);
-              const responseText = response.content[0].text.trim();
-
-              // Try to parse JSON from response
-              let result;
-              try {
-                // Handle markdown code blocks
-                let jsonText = responseText;
-                if (jsonText.startsWith('```')) {
-                  const lines = jsonText.split('\n');
-                  const jsonLines = [];
-                  let inJson = false;
-                  for (const line of lines) {
-                    if (line.startsWith('```json')) { inJson = true; continue; }
-                    if (line.startsWith('```')) { inJson = false; continue; }
-                    if (inJson) jsonLines.push(line);
-                  }
-                  jsonText = jsonLines.join('\n');
-                }
-                result = JSON.parse(jsonText);
-              } catch (e) {
-                result = { answer: responseText, relevant_email_indices: [], confidence: 0.5 };
-              }
-
-              resolve({
-                success: true,
-                answer: result.answer || 'No answer provided',
-                relevant_email_indices: result.relevant_email_indices || [],
-                confidence: result.confidence || 0.5,
-                summary: result.summary || '',
-                query: query
-              });
-            } catch (e) {
-              resolve({ success: false, error: `Parse error: ${e.message}` });
-            }
-          });
-        });
-
-        req.on('error', (e) => {
-          resolve({ success: false, error: `Network error: ${e.message}` });
-        });
-
-        req.setTimeout(60000, () => {
-          req.destroy();
-          resolve({ success: false, error: 'Request timed out' });
-        });
-
-        req.write(requestData);
-        req.end();
-      });
+      return {
+        success: true,
+        answer: parsed.answer || 'No answer provided',
+        relevant_email_indices: parsed.relevant_email_indices || [],
+        confidence: parsed.confidence || 0.5,
+        summary: parsed.summary || '',
+        model_used: aiResult.modelUsed || null,
+        provider,
+        query
+      };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -2183,7 +2421,8 @@ Respond ONLY with the JSON object, no other text.`;
   const configData = {
     emails: config.emails || [],
     query: config.query || '',
-    api_key: apiKey
+    api_key: apiKey,
+    provider
   };
   fs.writeFileSync(configPath, JSON.stringify(configData));
 
@@ -2236,12 +2475,21 @@ Respond ONLY with the JSON object, no other text.`;
 ipcMain.handle('detect-tasks', async (event, config) => {
   const taskModuleName = 'task_detector';
   const processorPath = getProcessorPath(taskModuleName);
+  const provider = normalizeAIProvider(config.provider || getAIProvider());
+  const providerName = getAIProviderDisplayName(provider);
 
   // Get the API key
   const apiKey = config.api_key || getApiKey();
 
   if (!apiKey) {
-    return { success: false, error: 'No API key configured. Please add your Claude API key in Settings.' };
+    return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
+  }
+
+  if (provider !== 'anthropic') {
+    return {
+      success: false,
+      error: 'Task detection currently requires Anthropic provider. For attachment lookup, use AI Search.'
+    };
   }
 
   const emails = config.emails || [];
@@ -2604,56 +2852,61 @@ ipcMain.handle('delete-api-key', async () => {
   return { success: result };
 });
 
-// Test API key using /v1/models so validation is not dependent on the selected model.
-ipcMain.handle('test-api-key', async (event, apiKey) => {
+// Test API key for the selected provider.
+ipcMain.handle('test-api-key', async (event, payload) => {
   try {
-    const https = require('https');
+    const parsedPayload = payload && typeof payload === 'object'
+      ? payload
+      : { apiKey: payload, provider: getAIProvider() };
+    const apiKey = String(parsedPayload.apiKey || '').trim();
+    const provider = normalizeAIProvider(parsedPayload.provider || getAIProvider());
+    const providerLabel = getAIProviderDisplayName(provider);
 
-    return new Promise((resolve) => {
-      const options = {
-        hostname: 'api.anthropic.com',
+    if (!apiKey) {
+      return { success: false, error: `No ${providerLabel} API key provided` };
+    }
+
+    let response;
+    if (provider === 'openai') {
+      response = await requestHttps({
+        baseUrl: 'https://api.openai.com',
         path: '/v1/models',
         method: 'GET',
-        rejectUnauthorized: false, // Required for corporate SSL inspection proxies
+        headers: {
+          Authorization: `Bearer ${apiKey}`
+        },
+        timeoutMs: 15000
+      });
+    } else if (provider === 'harvey') {
+      response = await requestHttps({
+        baseUrl: getHarveyBaseUrl(),
+        path: '/api/whoami',
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`
+        },
+        timeoutMs: 15000
+      });
+    } else {
+      response = await requestHttps({
+        baseUrl: 'https://api.anthropic.com',
+        path: '/v1/models',
+        method: 'GET',
         headers: {
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01'
-        }
-      };
-
-      const req = https.request(options, (res) => {
-        let body = '';
-        res.on('data', chunk => body += chunk);
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            resolve({ success: true, message: 'API key is valid' });
-          } else if (res.statusCode === 401) {
-            resolve({ success: false, error: 'Invalid API key' });
-          } else {
-            // Try to extract meaningful error from response
-            let errMsg = `API error: ${res.statusCode}`;
-            try {
-              const parsed = JSON.parse(body);
-              if (parsed.error && parsed.error.message) {
-                errMsg = `API error (${res.statusCode}): ${parsed.error.message}`;
-              }
-            } catch(e) {}
-            resolve({ success: false, error: errMsg });
-          }
-        });
+        },
+        timeoutMs: 15000
       });
+    }
 
-      req.on('error', (e) => {
-        resolve({ success: false, error: `Network error: ${e.message}` });
-      });
-
-      req.setTimeout(10000, () => {
-        req.destroy();
-        resolve({ success: false, error: 'Request timed out' });
-      });
-
-      req.end();
-    });
+    if (response.statusCode === 200) {
+      return { success: true, message: `${providerLabel} API key is valid` };
+    }
+    if (response.statusCode === 401 || response.statusCode === 403) {
+      return { success: false, error: `Invalid ${providerLabel} API key` };
+    }
+    return { success: false, error: `${providerLabel} API error (${response.statusCode}): ${getErrorDetail(response)}` };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -3327,11 +3580,17 @@ ipcMain.handle('update-user-email', async (event, { userId, email }) => {
 ipcMain.handle('save-setting', async (event, { key, value }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   try {
-    const rawValue = key === 'claude_model' ? normalizeClaudeModel(value) : (value ?? '');
+    const rawValue =
+      key === 'claude_model' ? normalizeClaudeModel(value)
+      : key === 'ai_provider' ? normalizeAIProvider(value)
+      : (value ?? '');
     const settingValue = String(rawValue);
     db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${settingValue.replace(/'/g, "''")}')`);
     if (key === 'claude_model') {
       process.env.CLAUDE_MODEL = settingValue;
+    }
+    if (key === 'ai_provider') {
+      process.env.AI_PROVIDER = settingValue;
     }
     saveDatabase();
     return { success: true };
@@ -3353,19 +3612,41 @@ ipcMain.handle('get-setting', async (event, key) => {
   }
 });
 
+function getSettingValue(key, fallbackValue = null) {
+  if (!db) return fallbackValue;
+  try {
+    const result = db.exec(`SELECT value FROM app_settings WHERE key = '${key}'`);
+    if (result.length > 0 && result[0].values.length > 0) {
+      return result[0].values[0][0];
+    }
+  } catch (_) {}
+  return fallbackValue;
+}
+
+function getAIProvider() {
+  return normalizeAIProvider(getSettingValue('ai_provider', DEFAULT_AI_PROVIDER));
+}
+
+function initAIProvider() {
+  process.env.AI_PROVIDER = getAIProvider();
+}
+
+function getOpenAIModel() {
+  const model = (getSettingValue('openai_model', DEFAULT_OPENAI_MODEL) || '').trim();
+  return model || DEFAULT_OPENAI_MODEL;
+}
+
+function getHarveyBaseUrl() {
+  const raw = (getSettingValue('harvey_base_url', DEFAULT_HARVEY_BASE_URL) || '').trim();
+  if (!raw) return DEFAULT_HARVEY_BASE_URL;
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
 // Get the configured Claude model (or default)
 function getClaudeModel() {
-  if (!db) return DEFAULT_CLAUDE_MODEL;
-  try {
-    const result = db.exec(`SELECT value FROM app_settings WHERE key = 'claude_model'`);
-    if (result.length > 0 && result[0].values.length > 0 && result[0].values[0][0]) {
-      const model = normalizeClaudeModel(result[0].values[0][0]);
-      // Also set env var for Python processors
-      process.env.CLAUDE_MODEL = model;
-      return model;
-    }
-  } catch (e) {}
-  return DEFAULT_CLAUDE_MODEL;
+  const model = normalizeClaudeModel(getSettingValue('claude_model', DEFAULT_CLAUDE_MODEL));
+  process.env.CLAUDE_MODEL = model;
+  return model;
 }
 
 // Initialize model env var on startup (called after DB init)

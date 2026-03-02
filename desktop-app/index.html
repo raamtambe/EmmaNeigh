@@ -3021,10 +3021,18 @@
       </div>
 
       <div class="settings-section">
-        <h3>Claude API Key</h3>
-        <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+        <h3 id="apiProviderTitle">AI Provider API Key</h3>
+        <p id="apiKeyHelpText" style="font-size: 12px; color: #666; margin-bottom: 12px;">
           Required for AI-powered features like natural language search, checklist updates, and punchlist generation.
         </p>
+        <div style="margin-bottom: 8px;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">AI Provider</label>
+          <select id="aiProviderSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI (ChatGPT)</option>
+            <option value="harvey">Harvey</option>
+          </select>
+        </div>
         <div class="api-key-input-group">
           <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-api...">
         </div>
@@ -3037,11 +3045,11 @@
           <button class="settings-btn settings-btn-danger" id="deleteApiKeyBtn" style="display: none;">Delete</button>
         </div>
         <p class="settings-info">
-          Get your API key from <a href="#" id="anthropicLink">console.anthropic.com</a>.
+          Get your API key from <a href="#" id="providerConsoleLink">console.anthropic.com</a>.
           Your key is encrypted and stored locally.
         </p>
 
-        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+        <div id="claudeModelRow" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Claude Model</label>
           <select id="claudeModelSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
             <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Recommended)</option>
@@ -4667,31 +4675,94 @@
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsModal = document.getElementById('settingsModal');
     const settingsClose = document.getElementById('settingsClose');
+    const apiProviderTitle = document.getElementById('apiProviderTitle');
+    const apiKeyHelpText = document.getElementById('apiKeyHelpText');
+    const aiProviderSelect = document.getElementById('aiProviderSelect');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const apiKeyStatus = document.getElementById('apiKeyStatus');
     const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
     const testApiKeyBtn = document.getElementById('testApiKeyBtn');
     const deleteApiKeyBtn = document.getElementById('deleteApiKeyBtn');
-    const anthropicLink = document.getElementById('anthropicLink');
+    const providerConsoleLink = document.getElementById('providerConsoleLink');
+    const claudeModelRow = document.getElementById('claudeModelRow');
+
+    const PROVIDER_META = {
+      anthropic: {
+        label: 'Anthropic',
+        title: 'Anthropic API Key',
+        placeholder: 'sk-ant-api...',
+        consoleUrl: 'https://console.anthropic.com/',
+        consoleText: 'console.anthropic.com'
+      },
+      openai: {
+        label: 'OpenAI',
+        title: 'OpenAI API Key',
+        placeholder: 'sk-...',
+        consoleUrl: 'https://platform.openai.com/api-keys',
+        consoleText: 'platform.openai.com/api-keys'
+      },
+      harvey: {
+        label: 'Harvey',
+        title: 'Harvey API Key',
+        placeholder: 'Paste Harvey bearer token...',
+        consoleUrl: 'https://portal.harvey.ai/',
+        consoleText: 'portal.harvey.ai'
+      }
+    };
+
+    function normalizeProvider(provider) {
+      const value = (provider || '').trim().toLowerCase();
+      if (value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'chatgpt') return 'openai';
+      return 'anthropic';
+    }
+
+    function getSelectedProvider() {
+      return normalizeProvider(aiProviderSelect.value);
+    }
+
+    function applyProviderUi() {
+      const provider = getSelectedProvider();
+      const meta = PROVIDER_META[provider] || PROVIDER_META.anthropic;
+
+      apiProviderTitle.textContent = `${meta.title}`;
+      apiKeyHelpText.textContent = `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
+      apiKeyInput.placeholder = apiKeyInput.value ? '••••••••••••••••' : meta.placeholder;
+      providerConsoleLink.textContent = meta.consoleText;
+      claudeModelRow.style.display = provider === 'anthropic' ? '' : 'none';
+    }
+
+    async function loadProviderSetting() {
+      try {
+        const result = await ipcRenderer.invoke('get-setting', 'ai_provider');
+        aiProviderSelect.value = normalizeProvider(result && result.success ? result.value : null);
+      } catch (_) {
+        aiProviderSelect.value = 'anthropic';
+      }
+      applyProviderUi();
+    }
 
     // Check if API key exists on startup
     async function checkApiKeyStatus() {
+      const provider = getSelectedProvider();
+      const meta = PROVIDER_META[provider] || PROVIDER_META.anthropic;
       const result = await ipcRenderer.invoke('get-api-key');
       if (result.hasKey) {
-        apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ API key configured</span>';
+        apiKeyStatus.innerHTML = `<span style="color: #22c55e;">✓ ${meta.label} API key configured</span>`;
         apiKeyStatus.className = 'api-key-status connected';
         deleteApiKeyBtn.style.display = 'inline-block';
         apiKeyInput.placeholder = '••••••••••••••••';
       } else {
-        apiKeyStatus.innerHTML = '<span>No API key configured</span>';
+        apiKeyStatus.innerHTML = `<span>No ${meta.label} API key configured</span>`;
         apiKeyStatus.className = 'api-key-status';
         deleteApiKeyBtn.style.display = 'none';
-        apiKeyInput.placeholder = 'sk-ant-api...';
+        apiKeyInput.placeholder = meta.placeholder;
       }
     }
 
     settingsBtn.addEventListener('click', async () => {
       settingsModal.classList.add('visible');
+      await loadProviderSetting();
       await checkApiKeyStatus();
     });
 
@@ -4746,7 +4817,10 @@
       testApiKeyBtn.textContent = 'Testing...';
       apiKeyStatus.innerHTML = '<span>Testing connection...</span>';
 
-      const result = await ipcRenderer.invoke('test-api-key', keyToTest);
+      const result = await ipcRenderer.invoke('test-api-key', {
+        apiKey: keyToTest,
+        provider: getSelectedProvider()
+      });
 
       if (result.success) {
         apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ ' + result.message + '</span>';
@@ -4768,9 +4842,17 @@
       }
     });
 
-    anthropicLink.addEventListener('click', (e) => {
+    providerConsoleLink.addEventListener('click', (e) => {
       e.preventDefault();
-      require('electron').shell.openExternal('https://console.anthropic.com/');
+      const meta = PROVIDER_META[getSelectedProvider()] || PROVIDER_META.anthropic;
+      require('electron').shell.openExternal(meta.consoleUrl);
+    });
+
+    aiProviderSelect.addEventListener('change', async () => {
+      const provider = getSelectedProvider();
+      await ipcRenderer.invoke('save-setting', { key: 'ai_provider', value: provider });
+      applyProviderUi();
+      await checkApiKeyStatus();
     });
 
     // ========== MODEL SELECTOR ==========
@@ -7762,12 +7844,19 @@
     aiSearchBtn.addEventListener('click', async () => {
       const query = aiSearchInput.value.trim();
       if (!query || emailData.length === 0) return;
+      let provider = 'anthropic';
+      try {
+        const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
+        provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'anthropic');
+      } catch (_) {}
+      const providerLabel = (PROVIDER_META[provider] || PROVIDER_META.anthropic).label;
 
       // Check if API key is configured
       const apiKeyResult = await ipcRenderer.invoke('get-api-key');
       if (!apiKeyResult.hasKey) {
-        alert('Please configure your Claude API key in Settings first.');
+        alert(`Please configure your ${providerLabel} API key in Settings first.`);
         settingsModal.classList.add('visible');
+        await loadProviderSetting();
         await checkApiKeyStatus();
         return;
       }
@@ -7783,7 +7872,8 @@
       try {
         const result = await ipcRenderer.invoke('nl-search-emails', {
           emails: emailData,
-          query: query
+          query: query,
+          provider
         });
 
         aiSearchLoading.style.display = 'none';
