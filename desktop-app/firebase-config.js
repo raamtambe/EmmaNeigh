@@ -17,12 +17,13 @@ const { getFirestore, collection, addDoc, writeBatch, doc } = require('firebase/
 // PASTE YOUR FIREBASE CONFIG HERE
 // ============================================================
 const firebaseConfig = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  apiKey: "AIzaSyAXl5s1asHqXpuVi3K_JKGsMxRuU7frJFE",
+  authDomain: "emmaneigh-7f845.firebaseapp.com",
+  projectId: "emmaneigh-7f845",
+  storageBucket: "emmaneigh-7f845.firebasestorage.app",
+  messagingSenderId: "383420892084",
+  appId: "1:383420892084:web:cd78a7a242c2c514b9a8e1",
+  measurementId: "G-DZLTQM7B23"
 };
 
 // ============================================================

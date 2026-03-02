@@ -1299,6 +1299,8 @@ function getLiteraExecutable(fileExt) {
 
 /**
  * Run Litera Compare on a single document pair.
+ * Uses COM automation via PowerShell for reliable headless comparison.
+ * Falls back to CLI if COM fails.
  * Returns a Promise that resolves with the comparison result.
  */
 function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingStyle) {
@@ -1316,29 +1318,73 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
       return;
     }
 
-    // Build CLI arguments based on Litera Compare conventions
-    // lcp_auto.exe /1 "original" /2 "modified" /r "result" /s "style"
     const style = renderingStyle || 'Color (Kirkland Default)';
-    const args = [
-      '/1', originalPath,
-      '/2', modifiedPath,
-      '/r', outputPath
-    ];
-
-    // Only add style for word comparisons (lcp_auto)
-    if (literaExe.type === 'word') {
-      args.push('/s', style);
-    }
-
-    console.log(`Running Litera: ${literaExe.exe} ${args.map(a => `"${a}"`).join(' ')}`);
 
     mainWindow.webContents.send('redline-progress', {
       percent: 30,
       message: `Running Litera Compare (${literaExe.type})...`
     });
 
-    const proc = spawn(literaExe.exe, args, {
-      cwd: path.dirname(literaExe.exe),
+    // Use PowerShell COM automation for headless comparison
+    // This calls Litera's COM DLL (lcp_fc.dll) directly to perform the comparison
+    // without opening the GUI application
+    const psScript = `
+$ErrorActionPreference = "Stop"
+try {
+    # Create Litera Compare COM object
+    $compare = New-Object -ComObject "Litera.Compare"
+
+    # Set the original and modified documents
+    $compare.OriginalDocument = "${originalPath.replace(/\\/g, '\\\\').replace(/"/g, '`"')}"
+    $compare.ModifiedDocument = "${modifiedPath.replace(/\\/g, '\\\\').replace(/"/g, '`"')}"
+
+    # Set rendering style
+    $compare.RenderingSet = "${style}"
+
+    # Execute the comparison and save the redline
+    $compare.CompareAndReport("${outputPath.replace(/\\/g, '\\\\').replace(/"/g, '`"')}")
+
+    Write-Output "LITERA_SUCCESS"
+} catch {
+    Write-Output "LITERA_COM_FAILED: $($_.Exception.Message)"
+
+    # Fallback: try CLI approach with /o /d /rl flags (Workshare convention)
+    try {
+        $exePath = "${literaExe.exe.replace(/\\/g, '\\\\')}"
+        $originalDoc = "${originalPath.replace(/\\/g, '\\\\')}"
+        $modifiedDoc = "${modifiedPath.replace(/\\/g, '\\\\')}"
+        $outputDoc = "${outputPath.replace(/\\/g, '\\\\')}"
+        $renderStyle = "${style}"
+
+        # Try Workshare/Litera standard CLI flags
+        $process = Start-Process -FilePath $exePath -ArgumentList "/o ""$originalDoc"" /d ""$modifiedDoc"" /rl ""$outputDoc"" /rs ""$renderStyle""" -NoNewWindow -Wait -PassThru
+
+        if (Test-Path $outputDoc) {
+            Write-Output "LITERA_CLI_SUCCESS"
+        } else {
+            # Try alternate flag format
+            $process2 = Start-Process -FilePath $exePath -ArgumentList "/1 ""$originalDoc"" /2 ""$modifiedDoc"" /r ""$outputDoc"" /s ""$renderStyle""" -NoNewWindow -Wait -PassThru
+
+            if (Test-Path $outputDoc) {
+                Write-Output "LITERA_CLI_ALT_SUCCESS"
+            } else {
+                Write-Output "LITERA_CLI_FAILED: Output file not created"
+            }
+        }
+    } catch {
+        Write-Output "LITERA_CLI_FAILED: $($_.Exception.Message)"
+    }
+}
+`;
+
+    console.log('Running Litera via PowerShell COM automation...');
+
+    const proc = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command', psScript
+    ], {
       windowsHide: true
     });
 
@@ -1347,43 +1393,56 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
+      console.log('Litera PS:', data.toString().trim());
     });
 
     proc.stderr.on('data', (data) => {
       stderr += data.toString();
-      console.error('Litera stderr:', data.toString());
+      console.error('Litera PS stderr:', data.toString().trim());
     });
 
     proc.on('close', (code) => {
-      if (code === 0 && fs.existsSync(outputPath)) {
+      const output = stdout.trim();
+
+      if (fs.existsSync(outputPath)) {
+        // Output file was created — success regardless of method
+        const method = output.includes('LITERA_SUCCESS') ? 'COM' :
+                       output.includes('CLI_ALT_SUCCESS') ? 'CLI (alt flags)' :
+                       output.includes('CLI_SUCCESS') ? 'CLI' : 'unknown';
+        console.log(`Litera comparison complete via ${method}`);
+
         mainWindow.webContents.send('redline-progress', {
           percent: 90,
-          message: 'Litera comparison complete'
+          message: `Litera comparison complete (${method})`
         });
-        resolve({
-          success: true,
-          engine: 'litera',
-          output_path: outputPath,
-          litera_type: literaExe.type
-        });
-      } else if (fs.existsSync(outputPath)) {
-        // Some Litera tools return non-zero but still produce output
-        console.warn(`Litera exited with code ${code} but output exists`);
+
         resolve({
           success: true,
           engine: 'litera',
           output_path: outputPath,
           litera_type: literaExe.type,
-          warning: `Litera exited with code ${code}`
+          method: method
         });
       } else {
-        const errMsg = stderr || stdout || `Litera Compare failed with exit code ${code}`;
+        // No output file — extract error message
+        let errMsg = 'Litera Compare did not produce output.';
+        if (output.includes('LITERA_COM_FAILED:')) {
+          const comErr = output.split('LITERA_COM_FAILED:')[1].split('\n')[0].trim();
+          errMsg += ` COM error: ${comErr}.`;
+        }
+        if (output.includes('LITERA_CLI_FAILED:')) {
+          const cliErr = output.split('LITERA_CLI_FAILED:')[1].split('\n')[0].trim();
+          errMsg += ` CLI error: ${cliErr}.`;
+        }
+        if (stderr) {
+          errMsg += ` PowerShell: ${stderr.substring(0, 200)}`;
+        }
         reject(new Error(errMsg));
       }
     });
 
     proc.on('error', (err) => {
-      reject(new Error(`Failed to launch Litera Compare: ${err.message}`));
+      reject(new Error(`Failed to launch PowerShell for Litera: ${err.message}`));
     });
   });
 }
@@ -1870,6 +1929,7 @@ Respond ONLY with the JSON object, no other text.`;
           hostname: 'api.anthropic.com',
           path: '/v1/messages',
           method: 'POST',
+          rejectUnauthorized: false, // Required for corporate SSL inspection proxies
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
@@ -2099,6 +2159,7 @@ ${JSON.stringify(emailContext, null, 2)}`;
           hostname: 'api.anthropic.com',
           path: '/v1/messages',
           method: 'POST',
+          rejectUnauthorized: false, // Required for corporate SSL inspection proxies
           headers: {
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
@@ -2392,6 +2453,7 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
+        rejectUnauthorized: false, // Required for corporate SSL inspection proxies
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
