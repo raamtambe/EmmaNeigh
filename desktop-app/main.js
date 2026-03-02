@@ -6,7 +6,17 @@ const archiver = require('archiver');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const os = require('os');
-const { initFirebase, loadFirebaseConfig, saveFirebaseConfig, logToFirestore, batchLogToFirestore } = require('./firebase-config');
+let initFirebase = () => false;
+let loadFirebaseConfig = () => null;
+let saveFirebaseConfig = () => false;
+let logToFirestore = async () => false;
+let batchLogToFirestore = async () => 0;
+
+try {
+  ({ initFirebase, loadFirebaseConfig, saveFirebaseConfig, logToFirestore, batchLogToFirestore } = require('./firebase-config'));
+} catch (e) {
+  console.error('Firebase module unavailable. Centralized logging will be disabled:', e.message);
+}
 
 // Password hashing functions
 function hashPassword(password) {
@@ -1244,8 +1254,8 @@ function findLiteraInstallation() {
   }
 
   for (const installPath of LITERA_INSTALL_PATHS) {
-    const autoExe = path.join(installPath, 'lcp_auto.exe');
-    if (fs.existsSync(autoExe)) {
+    const mainExe = path.join(installPath, 'lcp_main.exe');
+    if (fs.existsSync(mainExe)) {
       literaInstallPath = installPath;
       console.log('Found Litera Compare at:', installPath);
       return installPath;
@@ -1272,7 +1282,7 @@ function getLiteraExecutable(fileExt) {
     case 'rtf':
     case 'txt':
       return {
-        exe: path.join(literaPath, 'lcp_auto.exe'),
+        exe: path.join(literaPath, 'lcp_main.exe'),
         type: 'word'
       };
     case 'pdf':
@@ -1319,71 +1329,209 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     }
 
     const style = renderingStyle || 'Color (Kirkland Default)';
+    const isWordType = ['word'].includes(literaExe.type);
 
     mainWindow.webContents.send('redline-progress', {
       percent: 30,
       message: `Running Litera Compare (${literaExe.type})...`
     });
 
-    // Use PowerShell COM automation for headless comparison
-    // This calls Litera's COM DLL (lcp_fc.dll) directly to perform the comparison
-    // without opening the GUI application
-    const psScript = `
-$ErrorActionPreference = "Stop"
-try {
-    # Create Litera Compare COM object
-    $compare = New-Object -ComObject "Litera.Compare"
+    // Write PowerShell script to temp file to avoid escaping issues.
+    // Uses real Litera COM ProgIDs discovered from the registry:
+    //   1. Litera.Comparison COM object (the actual comparison engine)
+    //   2. Litera.ChangeProFactory COM object (factory pattern)
+    //   3. Word Add-in LiteraMS.ChangePro.WordAddin (triggers Litera through Word)
+    // Each strategy discovers the COM interface at runtime and logs all available
+    // methods/properties, so even if it fails we know exactly what to call next time.
+    const psContent = [
+      'param([string]$Original, [string]$Modified, [string]$Output, [string]$Rendering)',
+      '',
+      'function Test-OutputCreated {',
+      '  if (Test-Path $Output) { return (Get-Item $Output).Length -gt 0 }',
+      '  return $false',
+      '}',
+      '',
+      'function Kill-LiteraGUI {',
+      '  Get-Process -Name "lcp_auto","lcp_main","lcp_pdfcmp","lcp_ppt","lcx_main" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue',
+      '  Start-Sleep -Milliseconds 500',
+      '}',
+      '',
+      '# ========== Strategy 1: Litera.Comparison COM Object ==========',
+      'Write-Output "S1_START: Creating Litera.Comparison COM object"',
+      'try {',
+      '  $comp = New-Object -ComObject "Litera.Comparison"',
+      '  Write-Output "S1_CREATED: OK"',
+      '',
+      '  # Discover and log the interface',
+      '  $props = ($comp | Get-Member -MemberType Property -ErrorAction SilentlyContinue).Name',
+      '  $methods = ($comp | Get-Member -MemberType Method -ErrorAction SilentlyContinue).Name',
+      '  Write-Output "S1_PROPS: $($props -join \', \')"',
+      '  Write-Output "S1_METHODS: $($methods -join \', \')"',
+      '',
+      '  # Try setting document properties (try common naming patterns)',
+      '  $setPairs = @{',
+      '    "OriginalDocument" = $Original; "Original" = $Original; "OldDocument" = $Original; "Document1" = $Original;',
+      '    "ModifiedDocument" = $Modified; "Modified" = $Modified; "NewDocument" = $Modified; "Document2" = $Modified; "RevisedDocument" = $Modified;',
+      '    "OutputDocument" = $Output; "RedlineDocument" = $Output; "Redline" = $Output; "ResultDocument" = $Output;',
+      '    "RenderingSet" = $Rendering; "RenderingStyle" = $Rendering; "Style" = $Rendering',
+      '  }',
+      '  foreach ($key in $setPairs.Keys) {',
+      '    if ($props -contains $key) {',
+      '      try { $comp.$key = $setPairs[$key]; Write-Output "S1_SET_OK: $key" } catch { Write-Output "S1_SET_FAIL: $key - $($_.Exception.Message)" }',
+      '    }',
+      '  }',
+      '',
+      '  # Try calling execution methods',
+      '  $execMethods = @("Execute", "Compare", "Run", "Process", "CompareDocuments", "DoComparison", "Start")',
+      '  foreach ($m in $execMethods) {',
+      '    if ($methods -contains $m) {',
+      '      Write-Output "S1_CALLING: $m()"',
+      '      try {',
+      '        $comp.$m()',
+      '        Start-Sleep -Seconds 10',
+      '        if (Test-OutputCreated) { Write-Output "LITERA_COM_SUCCESS: $m()"; exit 0 }',
+      '      } catch { Write-Output "S1_CALL_FAIL: $m() - $($_.Exception.Message)" }',
+      '      # Also try with file path arguments',
+      '      try {',
+      '        $comp.$m($Original, $Modified)',
+      '        Start-Sleep -Seconds 10',
+      '        if (Test-OutputCreated) { Write-Output "LITERA_COM_SUCCESS: $m(orig,mod)"; exit 0 }',
+      '      } catch {}',
+      '      try {',
+      '        $comp.$m($Original, $Modified, $Output)',
+      '        Start-Sleep -Seconds 10',
+      '        if (Test-OutputCreated) { Write-Output "LITERA_COM_SUCCESS: $m(orig,mod,out)"; exit 0 }',
+      '      } catch {}',
+      '    }',
+      '  }',
+      '  Write-Output "S1_NO_OUTPUT"',
+      '} catch {',
+      '  Write-Output "S1_ERROR: $($_.Exception.Message)"',
+      '}',
+      '',
+      '# ========== Strategy 2: Litera.ChangeProFactory COM Object ==========',
+      'Write-Output "S2_START: Creating Litera.ChangeProFactory COM object"',
+      'try {',
+      '  $factory = New-Object -ComObject "Litera.ChangeProFactory"',
+      '  Write-Output "S2_CREATED: OK"',
+      '',
+      '  $props = ($factory | Get-Member -MemberType Property -ErrorAction SilentlyContinue).Name',
+      '  $methods = ($factory | Get-Member -MemberType Method -ErrorAction SilentlyContinue).Name',
+      '  Write-Output "S2_PROPS: $($props -join \', \')"',
+      '  Write-Output "S2_METHODS: $($methods -join \', \')"',
+      '',
+      '  # Try to create a comparison through the factory',
+      '  $createMethods = @("CreateComparison", "Create", "NewComparison", "Compare", "CompareDocuments")',
+      '  foreach ($m in $createMethods) {',
+      '    if ($methods -contains $m) {',
+      '      Write-Output "S2_CALLING: $m()"',
+      '      try {',
+      '        $result = $factory.$m($Original, $Modified, $Output, $Rendering)',
+      '        Start-Sleep -Seconds 10',
+      '        if (Test-OutputCreated) { Write-Output "LITERA_FACTORY_SUCCESS: $m(all args)"; exit 0 }',
+      '      } catch { Write-Output "S2_CALL_FAIL_4ARGS: $m - $($_.Exception.Message)" }',
+      '      try {',
+      '        $result = $factory.$m($Original, $Modified, $Output)',
+      '        Start-Sleep -Seconds 10',
+      '        if (Test-OutputCreated) { Write-Output "LITERA_FACTORY_SUCCESS: $m(3 args)"; exit 0 }',
+      '      } catch {}',
+      '      try {',
+      '        $result = $factory.$m($Original, $Modified)',
+      '        Start-Sleep -Seconds 10',
+      '        if (Test-OutputCreated) { Write-Output "LITERA_FACTORY_SUCCESS: $m(2 args)"; exit 0 }',
+      '      } catch {}',
+      '      try {',
+      '        $result = $factory.$m()',
+      '        if ($result) {',
+      '          Write-Output "S2_OBJ_CREATED: Got object from $m()"',
+      '          $objProps = ($result | Get-Member -MemberType Property -ErrorAction SilentlyContinue).Name',
+      '          $objMethods = ($result | Get-Member -MemberType Method -ErrorAction SilentlyContinue).Name',
+      '          Write-Output "S2_OBJ_PROPS: $($objProps -join \', \')"',
+      '          Write-Output "S2_OBJ_METHODS: $($objMethods -join \', \')"',
+      '        }',
+      '      } catch {}',
+      '    }',
+      '  }',
+      '  Write-Output "S2_NO_OUTPUT"',
+      '} catch {',
+      '  Write-Output "S2_ERROR: $($_.Exception.Message)"',
+      '}',
+      '',
+      '# ========== Strategy 3: Word Add-in (LiteraMS.ChangePro.WordAddin) ==========',
+      'Write-Output "S3_START: Word COM + Litera Add-in"',
+      '$word = $null',
+      'try {',
+      '  $word = New-Object -ComObject Word.Application',
+      '  $word.Visible = $false',
+      '  $word.DisplayAlerts = 0',
+      '',
+      '  $addin = $word.COMAddIns.Item("LiteraMS.ChangePro.WordAddin")',
+      '  Write-Output "S3_ADDIN_FOUND: $($addin.Description), Connected: $($addin.Connect)"',
+      '',
+      '  # Ensure add-in is connected',
+      '  if (!$addin.Connect) { $addin.Connect = $true }',
+      '',
+      '  $addinObj = $addin.Object',
+      '  if ($addinObj) {',
+      '    $props = ($addinObj | Get-Member -MemberType Property -ErrorAction SilentlyContinue).Name',
+      '    $methods = ($addinObj | Get-Member -MemberType Method -ErrorAction SilentlyContinue).Name',
+      '    Write-Output "S3_ADDIN_PROPS: $($props -join \', \')"',
+      '    Write-Output "S3_ADDIN_METHODS: $($methods -join \', \')"',
+      '',
+      '    # Try calling comparison methods on the add-in',
+      '    $compareMethods = @("Compare", "CompareDocuments", "RunComparison", "DoCompare", "Execute")',
+      '    foreach ($m in $compareMethods) {',
+      '      if ($methods -contains $m) {',
+      '        Write-Output "S3_CALLING: $m()"',
+      '        try {',
+      '          $addinObj.$m($Original, $Modified, $Output, $Rendering)',
+      '          Start-Sleep -Seconds 15',
+      '          if (Test-OutputCreated) { Write-Output "LITERA_ADDIN_SUCCESS: $m()"; $word.Quit(); exit 0 }',
+      '        } catch { Write-Output "S3_CALL_FAIL: $m - $($_.Exception.Message)" }',
+      '        try {',
+      '          $addinObj.$m($Original, $Modified, $Output)',
+      '          Start-Sleep -Seconds 15',
+      '          if (Test-OutputCreated) { Write-Output "LITERA_ADDIN_SUCCESS: $m(3)"; $word.Quit(); exit 0 }',
+      '        } catch {}',
+      '        try {',
+      '          $addinObj.$m($Original, $Modified)',
+      '          Start-Sleep -Seconds 15',
+      '          if (Test-OutputCreated) { Write-Output "LITERA_ADDIN_SUCCESS: $m(2)"; $word.Quit(); exit 0 }',
+      '        } catch {}',
+      '      }',
+      '    }',
+      '  } else {',
+      '    Write-Output "S3_ADDIN_NULL: addin.Object returned null"',
+      '  }',
+      '',
+      '  $word.Quit()',
+      '  Write-Output "S3_NO_OUTPUT"',
+      '} catch {',
+      '  Write-Output "S3_ERROR: $($_.Exception.Message)"',
+      '  try { if ($word) { $word.Quit() } } catch {}',
+      '}',
+      '',
+      'Kill-LiteraGUI',
+      'Write-Output "ALL_STRATEGIES_FAILED"',
+    ].join('\n');
 
-    # Set the original and modified documents
-    $compare.OriginalDocument = "${originalPath.replace(/\\/g, '\\\\').replace(/"/g, '`"')}"
-    $compare.ModifiedDocument = "${modifiedPath.replace(/\\/g, '\\\\').replace(/"/g, '`"')}"
+    const tempScript = path.join(os.tmpdir(), `litera_compare_${Date.now()}.ps1`);
+    fs.writeFileSync(tempScript, psContent);
 
-    # Set rendering style
-    $compare.RenderingSet = "${style}"
-
-    # Execute the comparison and save the redline
-    $compare.CompareAndReport("${outputPath.replace(/\\/g, '\\\\').replace(/"/g, '`"')}")
-
-    Write-Output "LITERA_SUCCESS"
-} catch {
-    Write-Output "LITERA_COM_FAILED: $($_.Exception.Message)"
-
-    # Fallback: try CLI approach with /o /d /rl flags (Workshare convention)
-    try {
-        $exePath = "${literaExe.exe.replace(/\\/g, '\\\\')}"
-        $originalDoc = "${originalPath.replace(/\\/g, '\\\\')}"
-        $modifiedDoc = "${modifiedPath.replace(/\\/g, '\\\\')}"
-        $outputDoc = "${outputPath.replace(/\\/g, '\\\\')}"
-        $renderStyle = "${style}"
-
-        # Try Workshare/Litera standard CLI flags
-        $process = Start-Process -FilePath $exePath -ArgumentList "/o ""$originalDoc"" /d ""$modifiedDoc"" /rl ""$outputDoc"" /rs ""$renderStyle""" -NoNewWindow -Wait -PassThru
-
-        if (Test-Path $outputDoc) {
-            Write-Output "LITERA_CLI_SUCCESS"
-        } else {
-            # Try alternate flag format
-            $process2 = Start-Process -FilePath $exePath -ArgumentList "/1 ""$originalDoc"" /2 ""$modifiedDoc"" /r ""$outputDoc"" /s ""$renderStyle""" -NoNewWindow -Wait -PassThru
-
-            if (Test-Path $outputDoc) {
-                Write-Output "LITERA_CLI_ALT_SUCCESS"
-            } else {
-                Write-Output "LITERA_CLI_FAILED: Output file not created"
-            }
-        }
-    } catch {
-        Write-Output "LITERA_CLI_FAILED: $($_.Exception.Message)"
-    }
-}
-`;
-
-    console.log('Running Litera via PowerShell COM automation...');
+    console.log('Running Litera comparison via temp script:', tempScript);
+    console.log('  Original:', originalPath);
+    console.log('  Modified:', modifiedPath);
+    console.log('  Output:', outputPath);
 
     const proc = spawn('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-ExecutionPolicy', 'Bypass',
-      '-Command', psScript
+      '-File', tempScript,
+      '-Original', originalPath,
+      '-Modified', modifiedPath,
+      '-Output', outputPath,
+      '-Rendering', style
     ], {
       windowsHide: true
     });
@@ -1402,18 +1550,20 @@ try {
     });
 
     proc.on('close', (code) => {
+      // Clean up temp script
+      try { fs.unlinkSync(tempScript); } catch (_) {}
+
       const output = stdout.trim();
 
       if (fs.existsSync(outputPath)) {
-        // Output file was created — success regardless of method
-        const method = output.includes('LITERA_SUCCESS') ? 'COM' :
-                       output.includes('CLI_ALT_SUCCESS') ? 'CLI (alt flags)' :
-                       output.includes('CLI_SUCCESS') ? 'CLI' : 'unknown';
-        console.log(`Litera comparison complete via ${method}`);
+        const method = output.includes('LITERA_COM_SUCCESS') ? 'Litera COM' :
+                       output.includes('LITERA_FACTORY_SUCCESS') ? 'Litera Factory' :
+                       output.includes('LITERA_ADDIN_SUCCESS') ? 'Litera Word Add-in' : 'unknown';
+        console.log(`Comparison complete via ${method}`);
 
         mainWindow.webContents.send('redline-progress', {
           percent: 90,
-          message: `Litera comparison complete (${method})`
+          message: `Comparison complete (${method})`
         });
 
         resolve({
@@ -1424,25 +1574,20 @@ try {
           method: method
         });
       } else {
-        // No output file — extract error message
-        let errMsg = 'Litera Compare did not produce output.';
-        if (output.includes('LITERA_COM_FAILED:')) {
-          const comErr = output.split('LITERA_COM_FAILED:')[1].split('\n')[0].trim();
-          errMsg += ` COM error: ${comErr}.`;
-        }
-        if (output.includes('LITERA_CLI_FAILED:')) {
-          const cliErr = output.split('LITERA_CLI_FAILED:')[1].split('\n')[0].trim();
-          errMsg += ` CLI error: ${cliErr}.`;
-        }
-        if (stderr) {
-          errMsg += ` PowerShell: ${stderr.substring(0, 200)}`;
-        }
+        // Include full log in error — it contains the discovered interface
+        // (property names, method names) that we need to fix the integration
+        let errMsg = 'Litera comparison did not produce output.\n\n';
+        errMsg += 'COM Interface Discovery Log (use this to identify correct method calls):\n';
+        errMsg += '─'.repeat(60) + '\n';
+        errMsg += output + '\n';
+        if (stderr) errMsg += '\nPowerShell errors:\n' + stderr.substring(0, 500);
         reject(new Error(errMsg));
       }
     });
 
     proc.on('error', (err) => {
-      reject(new Error(`Failed to launch PowerShell for Litera: ${err.message}`));
+      try { fs.unlinkSync(tempScript); } catch (_) {}
+      reject(new Error(`Failed to launch PowerShell: ${err.message}`));
     });
   });
 }
@@ -1456,7 +1601,7 @@ ipcMain.handle('check-litera-installed', async () => {
 
   // Check which executables are available
   const executables = {
-    word: fs.existsSync(path.join(literaPath, 'lcp_auto.exe')),
+    word: fs.existsSync(path.join(literaPath, 'lcp_main.exe')),
     pdf: fs.existsSync(path.join(literaPath, 'lcp_pdfcmp.exe')),
     powerpoint: fs.existsSync(path.join(literaPath, 'lcp_ppt.exe')),
     excel: fs.existsSync(path.join(literaPath, 'lcx_main.exe'))
