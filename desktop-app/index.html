@@ -3044,8 +3044,8 @@
         <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Claude Model</label>
           <select id="claudeModelSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
-            <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Recommended)</option>
-            <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Legacy)</option>
+            <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (Recommended)</option>
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Alias)</option>
             <option value="claude-haiku-4-5">Claude Haiku 4.5 (Fast & affordable)</option>
             <option value="claude-opus-4-6">Claude Opus 4.6 (Most capable)</option>
           </select>
@@ -3802,6 +3802,21 @@
             <option value="emmaneigh">EmmaNeigh only</option>
           </select>
         </div>
+
+        <div class="output-format-row" style="margin-bottom: 8px;">
+          <label for="redlineOutputFormat">Litera output</label>
+          <select id="redlineOutputFormat" class="output-format-select">
+            <option value="native">Same as source</option>
+            <option value="pdf">PDF</option>
+          </select>
+          <label style="display: flex; align-items: center; gap: 6px; margin-left: auto; color: #ccc;">
+            <input type="checkbox" id="redlineChangePagesOnly">
+            Change pages only (PDF)
+          </label>
+        </div>
+        <p style="font-size: 11px; color: #666; margin-bottom: 12px;">
+          Litera-only options. "Change pages only" uses Litera's changed-pages PDF output.
+        </p>
 
         <!-- Document Pair Input -->
         <div class="sigblock-step">
@@ -6787,6 +6802,8 @@
     const redlineStatsLitera = document.getElementById('redlineStatsLitera');
     const redlineLiteraType = document.getElementById('redlineLiteraType');
     const redlineLiteraFormat = document.getElementById('redlineLiteraFormat');
+    const redlineOutputFormat = document.getElementById('redlineOutputFormat');
+    const redlineChangePagesOnly = document.getElementById('redlineChangePagesOnly');
 
     let redlineOriginalPath = null;
     let redlineModifiedPath = null;
@@ -6826,6 +6843,17 @@
     }
 
     checkLiteraStatus();
+
+    function syncRedlineOptions() {
+      if (redlineChangePagesOnly.checked) {
+        redlineOutputFormat.value = 'pdf';
+        redlineOutputFormat.disabled = true;
+      } else {
+        redlineOutputFormat.disabled = false;
+      }
+    }
+    redlineChangePagesOnly.addEventListener('change', syncRedlineOptions);
+    syncRedlineOptions();
 
     const REDLINE_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'];
 
@@ -6990,6 +7018,10 @@
 
       const startTime = Date.now();
       const selectedEngine = redlineEngineSelect.value; // 'auto', 'litera', 'emmaneigh'
+      const redlineCompareOptions = {
+        output_format: redlineOutputFormat.value,
+        change_pages_only: redlineChangePagesOnly.checked
+      };
 
       try {
         // Determine output folder (same as first original document)
@@ -6999,12 +7031,16 @@
           original: redlinePairs[0].original,
           modified: redlinePairs[0].modified,
           output: null, // Let backend generate output path
-          engine: selectedEngine
+          engine: selectedEngine,
+          output_format: redlineCompareOptions.output_format,
+          change_pages_only: redlineCompareOptions.change_pages_only
         } : {
           batch: true,
           pairs: redlinePairs,
           output_folder: redlineOutputFolder,
-          engine: selectedEngine
+          engine: selectedEngine,
+          output_format: redlineCompareOptions.output_format,
+          change_pages_only: redlineCompareOptions.change_pages_only
         };
 
         const result = await ipcRenderer.invoke('redline-documents', config);
@@ -7040,7 +7076,13 @@
               // Litera batch — show document type info
               const types = new Set(result.results.filter(r => r.litera_type).map(r => r.litera_type));
               redlineLiteraType.textContent = Array.from(types).join(', ') || '—';
-              redlineLiteraFormat.textContent = result.successful + ' file(s)';
+              if (result.change_pages_only) {
+                redlineLiteraFormat.textContent = `PDF (changed pages) • ${result.successful} file(s)`;
+              } else if (result.output_format === 'pdf') {
+                redlineLiteraFormat.textContent = `PDF • ${result.successful} file(s)`;
+              } else {
+                redlineLiteraFormat.textContent = result.successful + ' file(s)';
+              }
             } else {
               // EmmaNeigh batch — sum up table stats
               let totalAdded = 0, totalDeleted = 0, totalModified = 0, totalTables = 0;
@@ -7061,10 +7103,18 @@
             redlineOutputFolder = result.output_path.substring(0, result.output_path.lastIndexOf(sep));
 
             if (usedLitera) {
-              const ext = result.output_path.split('.').pop().toUpperCase();
-              redlineResultText.textContent = `Litera redline document generated (${ext})`;
+              const ext = (result.output_path.split('.').pop() || '').toUpperCase();
+              if (result.change_pages_only) {
+                redlineResultText.textContent = 'Litera changed-pages redline generated (PDF)';
+                redlineLiteraFormat.textContent = 'PDF (changed pages)';
+              } else if (result.output_format === 'pdf') {
+                redlineResultText.textContent = 'Litera redline document generated (PDF)';
+                redlineLiteraFormat.textContent = 'PDF';
+              } else {
+                redlineResultText.textContent = `Litera redline document generated (${ext})`;
+                redlineLiteraFormat.textContent = ext;
+              }
               redlineLiteraType.textContent = (result.litera_type || 'Document').charAt(0).toUpperCase() + (result.litera_type || 'document').slice(1);
-              redlineLiteraFormat.textContent = ext;
               if (result.warning) {
                 redlineResultText.textContent += ` — ${result.warning}`;
               }
@@ -7152,6 +7202,9 @@
       redlineRowsDeleted.textContent = '0';
       redlineRowsModified.textContent = '0';
       redlineTableChanges.textContent = '0';
+      redlineOutputFormat.value = 'native';
+      redlineChangePagesOnly.checked = false;
+      syncRedlineOptions();
 
       updateRedlineButton();
       showRedlineState('idle');

@@ -38,6 +38,7 @@ const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db')
 const pendingLogsPath = path.join(app.getPath('userData'), 'pending_logs.json');
 const APP_VERSION = require('./package.json').version;
 const MACHINE_ID = crypto.createHash('sha256').update(os.hostname()).digest('hex').substring(0, 12);
+const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
@@ -374,6 +375,18 @@ function compareVersions(v1, v2) {
     if (p1 > p2) return 1;
   }
   return 0;
+}
+
+function normalizeClaudeModel(model) {
+  const value = (model || '').trim();
+  if (!value) return DEFAULT_CLAUDE_MODEL;
+
+  // Backward compatibility with previous internal aliases.
+  if (value === 'claude-sonnet-4-6') {
+    return 'claude-sonnet-4-20250514';
+  }
+
+  return value;
 }
 
 async function checkVersionEnforcement() {
@@ -1279,12 +1292,8 @@ function findLiteraInstallation() {
  * Get the appropriate Litera executable for a given file extension.
  * Returns { exe, args_template } or null if unsupported.
  */
-function getLiteraExecutable(fileExt) {
-  const literaPath = findLiteraInstallation();
-  if (!literaPath) return null;
-
-  const ext = fileExt.toLowerCase();
-  let type = null;
+function getLiteraTypeForExtension(fileExt) {
+  const ext = (fileExt || '').toLowerCase();
 
   switch (ext) {
     case '.doc':
@@ -1294,42 +1303,46 @@ function getLiteraExecutable(fileExt) {
     case '.htm':
     case '.html':
     case '.wpd':
-      type = 'word';
-      break;
+      return 'word';
     case '.pdf':
-      type = 'pdf';
-      break;
+      return 'pdf';
     case '.ppt':
     case '.pps':
     case '.pptx':
     case '.pptm':
     case '.ppsx':
     case '.ppsm':
-      type = 'powerpoint';
-      break;
+      return 'powerpoint';
     case '.xls':
     case '.xlsx':
     case '.xlsm':
     case '.xlsb':
-      type = 'excel';
-      break;
+      return 'excel';
     case '.png':
     case '.bmp':
     case '.jpg':
     case '.jpeg':
-      type = 'image';
-      break;
+      return 'image';
     default:
-      type = null;
+      return null;
   }
+}
+
+function getLiteraExecutable(fileExt, options = {}) {
+  const literaPath = findLiteraInstallation();
+  if (!literaPath) return null;
+
+  const type = getLiteraTypeForExtension(fileExt);
 
   if (!type) {
     return null;
   }
 
+  const preferPerApp = !!options.preferPerApp;
+
   // Prefer Litera's unified CLI documented in the Litera command-line guide.
   const autoExe = path.join(literaPath, LITERA_EXECUTABLES.auto);
-  if (fs.existsSync(autoExe)) {
+  if (!preferPerApp && fs.existsSync(autoExe)) {
     return {
       exe: autoExe,
       type,
@@ -1339,11 +1352,25 @@ function getLiteraExecutable(fileExt) {
 
   // Fallback to per-app executables when lcp_auto is unavailable.
   if (type === 'pdf' || type === 'image') {
+    if (fs.existsSync(autoExe)) {
+      return {
+        exe: autoExe,
+        type,
+        mode: 'auto'
+      };
+    }
     return null;
   }
 
   const perTypeExe = path.join(literaPath, LITERA_EXECUTABLES[type]);
   if (!fs.existsSync(perTypeExe)) {
+    if (fs.existsSync(autoExe)) {
+      return {
+        exe: autoExe,
+        type,
+        mode: 'auto'
+      };
+    }
     return null;
   }
 
@@ -1352,6 +1379,20 @@ function getLiteraExecutable(fileExt) {
     type,
     mode: type
   };
+}
+
+function getLiteraOutputExtension(originalPath, compareOptions = {}) {
+  if (compareOptions && compareOptions.change_pages_only) {
+    return '.pdf';
+  }
+
+  const outputFormat = String((compareOptions && compareOptions.output_format) || 'native').toLowerCase();
+  if (outputFormat === 'pdf') {
+    return '.pdf';
+  }
+
+  const originalExt = path.extname(originalPath || '');
+  return originalExt || '.docx';
 }
 
 function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
@@ -1399,10 +1440,15 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
  * Uses Litera's documented command-line interface.
  * Returns a Promise that resolves with the comparison result.
  */
-function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingStyle) {
+function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingStyle, compareOptions = {}) {
   return new Promise((resolve, reject) => {
     const origExt = path.extname(originalPath);
-    const literaExe = getLiteraExecutable(origExt);
+    const normalizedOptions = {
+      output_format: String(compareOptions.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
+      change_pages_only: !!compareOptions.change_pages_only
+    };
+    const literaType = getLiteraTypeForExtension(origExt);
+    const literaExe = getLiteraExecutable(origExt, { preferPerApp: normalizedOptions.change_pages_only });
 
     if (!literaExe) {
       reject(new Error(`Litera Compare does not support ${origExt} files`));
@@ -1417,24 +1463,50 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     const literaInstallPath = path.dirname(literaExe.exe);
     const stylePath = resolveLiteraStylePath(renderingStyle, literaExe.type, literaInstallPath);
     let args = [];
+    let primaryOutputPath = outputPath;
+    let tempAutoOutputPath = null;
+
+    if (normalizedOptions.output_format === 'pdf' && !normalizedOptions.change_pages_only && literaType && !['word', 'pdf'].includes(literaType)) {
+      reject(new Error('PDF output is currently supported only for Word/PDF comparisons.'));
+      return;
+    }
 
     if (literaExe.mode === 'auto') {
+      if (normalizedOptions.change_pages_only) {
+        reject(new Error('Change pages only redline requires lcp_main.exe or lcp_ppt.exe.'));
+        return;
+      }
       // Litera CLI: lcp_auto.exe -o <original> -m <modified> -r <redline> [-s <style>]
-      args = ['-o', originalPath, '-m', modifiedPath, '-r', outputPath];
+      args = ['-o', originalPath, '-m', modifiedPath, '-r', primaryOutputPath];
       if (stylePath) {
         args.push('-s', stylePath);
       }
     } else if (literaExe.mode === 'word' || literaExe.mode === 'powerpoint') {
       // Per-app CLI fallback:
       // lcp_main.exe/lcp_ppt.exe -org <original> -mod <modified> -auto <redline> -silent
-      args = ['-org', originalPath, '-mod', modifiedPath, '-auto', outputPath, '-silent'];
+      let autoOutputPath = primaryOutputPath;
+      if (normalizedOptions.change_pages_only) {
+        tempAutoOutputPath = path.join(
+          app.getPath('temp'),
+          `litera_full_${Date.now()}_${Math.floor(Math.random() * 100000)}${origExt || '.docx'}`
+        );
+        autoOutputPath = tempAutoOutputPath;
+      }
+      args = ['-org', originalPath, '-mod', modifiedPath, '-auto', autoOutputPath, '-silent'];
       if (stylePath) {
         args.push('-style', stylePath);
       }
+      if (normalizedOptions.change_pages_only) {
+        args.push('-autoredp', primaryOutputPath);
+      }
     } else if (literaExe.mode === 'excel') {
+      if (normalizedOptions.change_pages_only) {
+        reject(new Error('Change pages only redline is not supported for Excel comparisons.'));
+        return;
+      }
       // Excel silent CLI:
       // lcx_main.exe -s -lorg <original> -lmod <modified> -lres <redline> [-style <style.tpz>]
-      args = ['-s', '-lorg', originalPath, '-lmod', modifiedPath, '-lres', outputPath];
+      args = ['-s', '-lorg', originalPath, '-lmod', modifiedPath, '-lres', primaryOutputPath];
       if (stylePath) {
         args.push('-style', stylePath);
       }
@@ -1451,7 +1523,7 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     console.log('Running Litera CLI:', literaExe.exe, args);
     console.log('  Original:', originalPath);
     console.log('  Modified:', modifiedPath);
-    console.log('  Output:', outputPath);
+    console.log('  Output:', primaryOutputPath);
 
     const proc = spawn(literaExe.exe, args, {
       cwd: literaInstallPath,
@@ -1472,9 +1544,13 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     });
 
     proc.on('close', (code) => {
-      const hasOutput = fs.existsSync(outputPath) && (() => {
+      if (tempAutoOutputPath && fs.existsSync(tempAutoOutputPath)) {
+        try { fs.unlinkSync(tempAutoOutputPath); } catch (_) {}
+      }
+
+      const hasOutput = fs.existsSync(primaryOutputPath) && (() => {
         try {
-          return fs.statSync(outputPath).size > 0;
+          return fs.statSync(primaryOutputPath).size > 0;
         } catch (_) {
           return true;
         }
@@ -1492,8 +1568,10 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
         resolve({
           success: true,
           engine: 'litera',
-          output_path: outputPath,
+          output_path: primaryOutputPath,
           litera_type: literaExe.type,
+          output_format: normalizedOptions.output_format,
+          change_pages_only: normalizedOptions.change_pages_only,
           method
         });
       } else {
@@ -1539,6 +1617,12 @@ ipcMain.handle('check-litera-installed', async () => {
 // Redline documents — routes through Litera Compare when available, falls back to EmmaNeigh table comparison
 ipcMain.handle('redline-documents', async (event, config) => {
   const engine = config.engine || 'auto'; // 'auto', 'litera', 'emmaneigh'
+  const literaOptions = {
+    output_format: String(config.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
+    change_pages_only: !!config.change_pages_only
+  };
+  const requiresStrictLitera =
+    literaOptions.change_pages_only || literaOptions.output_format === 'pdf';
 
   // Determine if we should use Litera
   let useLitera = false;
@@ -1547,7 +1631,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
     if (literaPath) {
       // Check if file types are supported by Litera
       const origExt = path.extname(config.original || (config.pairs && config.pairs[0] ? config.pairs[0].original : ''));
-      const literaExe = origExt ? getLiteraExecutable(origExt) : null;
+      const literaExe = origExt ? getLiteraExecutable(origExt, { preferPerApp: literaOptions.change_pages_only }) : null;
       if (literaExe) {
         useLitera = true;
       } else if (engine === 'litera') {
@@ -1556,6 +1640,10 @@ ipcMain.handle('redline-documents', async (event, config) => {
     } else if (engine === 'litera') {
       throw new Error('Litera Compare is not installed on this machine');
     }
+  }
+
+  if (!useLitera && engine === 'auto' && requiresStrictLitera) {
+    throw new Error('Selected redline output options require Litera Compare for this file type.');
   }
 
   // ---- LITERA COMPARE PATH ----
@@ -1581,12 +1669,17 @@ ipcMain.handle('redline-documents', async (event, config) => {
 
           const origName = path.parse(pair.original).name;
           const modName = path.parse(pair.modified).name;
-          const origExt = path.extname(pair.original);
-          const outputExt = origExt || '.docx';
+          const outputExt = getLiteraOutputExtension(pair.original, literaOptions);
           const outputPath = path.join(outputFolder, `Redline_${origName}_vs_${modName}${outputExt}`);
 
           try {
-            const result = await runLiteraComparison(pair.original, pair.modified, outputPath, config.rendering_style);
+            const result = await runLiteraComparison(
+              pair.original,
+              pair.modified,
+              outputPath,
+              config.rendering_style,
+              literaOptions
+            );
             results.push({ ...result, pair_index: i });
           } catch (err) {
             results.push({ success: false, error: err.message, pair_index: i });
@@ -1601,12 +1694,13 @@ ipcMain.handle('redline-documents', async (event, config) => {
           engine: 'litera',
           total: config.pairs.length,
           successful,
+          output_format: literaOptions.output_format,
+          change_pages_only: literaOptions.change_pages_only,
           results
         };
       } else {
         // Single pair with Litera
-        const origExt = path.extname(config.original);
-        const outputExt = origExt || '.docx';
+        const outputExt = getLiteraOutputExtension(config.original, literaOptions);
         const origName = path.parse(config.original).name;
         const modName = path.parse(config.modified).name;
         const outputPath = config.output || path.join(
@@ -1623,7 +1717,8 @@ ipcMain.handle('redline-documents', async (event, config) => {
           config.original,
           config.modified,
           outputPath,
-          config.rendering_style
+          config.rendering_style,
+          literaOptions
         );
 
         mainWindow.webContents.send('redline-progress', {
@@ -1638,12 +1733,14 @@ ipcMain.handle('redline-documents', async (event, config) => {
           engine: 'litera',
           output_path: result.output_path,
           litera_type: result.litera_type,
+          output_format: result.output_format,
+          change_pages_only: result.change_pages_only,
           warning: result.warning || null
         };
       }
     } catch (err) {
       // If Litera fails and engine was 'auto', fall back to EmmaNeigh
-      if (engine === 'auto') {
+      if (engine === 'auto' && !requiresStrictLitera) {
         console.warn('Litera Compare failed, falling back to EmmaNeigh:', err.message);
         mainWindow.webContents.send('redline-progress', {
           percent: 15,
@@ -2008,7 +2105,13 @@ Respond ONLY with the JSON object, no other text.`;
           res.on('end', () => {
             try {
               if (res.statusCode !== 200) {
-                resolve({ success: false, error: `API error: ${res.statusCode}` });
+                let errorDetail = '';
+                try {
+                  errorDetail = JSON.parse(body).error?.message || body.substring(0, 300);
+                } catch (e) {
+                  errorDetail = body.substring(0, 300);
+                }
+                resolve({ success: false, error: `API error (${res.statusCode}): ${errorDetail}` });
                 return;
               }
 
@@ -2501,28 +2604,20 @@ ipcMain.handle('delete-api-key', async () => {
   return { success: result };
 });
 
-// Test API key by making a minimal API call
+// Test API key using /v1/models so validation is not dependent on the selected model.
 ipcMain.handle('test-api-key', async (event, apiKey) => {
   try {
     const https = require('https');
 
     return new Promise((resolve) => {
-      const data = JSON.stringify({
-        model: getClaudeModel(),
-        max_tokens: 10,
-        messages: [{ role: 'user', content: 'Hi' }]
-      });
-
       const options = {
         hostname: 'api.anthropic.com',
-        path: '/v1/messages',
-        method: 'POST',
+        path: '/v1/models',
+        method: 'GET',
         rejectUnauthorized: false, // Required for corporate SSL inspection proxies
         headers: {
-          'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'Content-Length': Buffer.byteLength(data)
+          'anthropic-version': '2023-06-01'
         }
       };
 
@@ -2557,7 +2652,6 @@ ipcMain.handle('test-api-key', async (event, apiKey) => {
         resolve({ success: false, error: 'Request timed out' });
       });
 
-      req.write(data);
       req.end();
     });
   } catch (e) {
@@ -3233,7 +3327,12 @@ ipcMain.handle('update-user-email', async (event, { userId, email }) => {
 ipcMain.handle('save-setting', async (event, { key, value }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   try {
-    db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${(value || '').replace(/'/g, "''")}')`);
+    const rawValue = key === 'claude_model' ? normalizeClaudeModel(value) : (value ?? '');
+    const settingValue = String(rawValue);
+    db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${settingValue.replace(/'/g, "''")}')`);
+    if (key === 'claude_model') {
+      process.env.CLAUDE_MODEL = settingValue;
+    }
     saveDatabase();
     return { success: true };
   } catch (e) {
@@ -3256,17 +3355,17 @@ ipcMain.handle('get-setting', async (event, key) => {
 
 // Get the configured Claude model (or default)
 function getClaudeModel() {
-  if (!db) return 'claude-sonnet-4-6';
+  if (!db) return DEFAULT_CLAUDE_MODEL;
   try {
     const result = db.exec(`SELECT value FROM app_settings WHERE key = 'claude_model'`);
     if (result.length > 0 && result[0].values.length > 0 && result[0].values[0][0]) {
-      const model = result[0].values[0][0];
+      const model = normalizeClaudeModel(result[0].values[0][0]);
       // Also set env var for Python processors
       process.env.CLAUDE_MODEL = model;
       return model;
     }
   } catch (e) {}
-  return 'claude-sonnet-4-6';
+  return DEFAULT_CLAUDE_MODEL;
 }
 
 // Initialize model env var on startup (called after DB init)

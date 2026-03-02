@@ -15,6 +15,43 @@ try:
 except ImportError:
     HAS_ANTHROPIC = False
 
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+MODEL_ALIASES = {
+    "claude-sonnet-4-6": "claude-sonnet-4-20250514",
+}
+FALLBACK_MODELS = [
+    "claude-sonnet-4-20250514",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+]
+
+
+def normalize_model_name(model):
+    """Normalize model aliases and empty values."""
+    value = (model or "").strip()
+    if not value:
+        return DEFAULT_CLAUDE_MODEL
+    return MODEL_ALIASES.get(value, value)
+
+
+def get_model_candidates():
+    """Return model candidates in priority order, de-duplicated."""
+    preferred = normalize_model_name(os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL))
+    candidates = [preferred] + FALLBACK_MODELS
+    seen = set()
+    ordered = []
+    for model in candidates:
+        if model not in seen:
+            seen.add(model)
+            ordered.append(model)
+    return ordered
+
+
+def is_model_error(exc):
+    """Heuristic for API errors caused by invalid/unavailable model IDs."""
+    msg = str(exc).lower()
+    return "model" in msg and ("not found" in msg or "invalid" in msg or "available" in msg or "access" in msg)
+
 
 def emit(msg_type, **kwargs):
     """Output JSON message to stdout for the Electron app."""
@@ -113,13 +150,33 @@ Respond ONLY with the JSON object, no other text."""
 
         emit("progress", percent=50, message="Waiting for AI response...")
 
-        message = client.messages.create(
-            model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+        message = None
+        used_model = None
+        model_errors = []
+        for model_name in get_model_candidates():
+            try:
+                message = client.messages.create(
+                    model=model_name,
+                    max_tokens=1024,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                used_model = model_name
+                break
+            except anthropic.APIError as e:
+                if is_model_error(e):
+                    model_errors.append(f"{model_name}: {str(e)}")
+                    continue
+                raise
+
+        if message is None:
+            return {
+                "success": False,
+                "error": "No supported Claude model is available for this API key. "
+                         f"Tried: {', '.join(get_model_candidates())}. "
+                         f"Last model error: {model_errors[-1] if model_errors else 'unknown'}"
+            }
 
         emit("progress", percent=80, message="Processing response...")
 
@@ -154,6 +211,7 @@ Respond ONLY with the JSON object, no other text."""
                 "relevant_email_indices": result.get("relevant_email_indices", []),
                 "confidence": result.get("confidence", 0.5),
                 "summary": result.get("summary", ""),
+                "model_used": used_model,
                 "query": query
             }
 
@@ -165,6 +223,7 @@ Respond ONLY with the JSON object, no other text."""
                 "relevant_email_indices": [],
                 "confidence": 0.5,
                 "summary": "",
+                "model_used": used_model,
                 "query": query
             }
 
