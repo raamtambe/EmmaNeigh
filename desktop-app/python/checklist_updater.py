@@ -6,25 +6,48 @@ This module parses a transaction checklist (Word document) and an email CSV expo
 then updates the checklist status column based on detected email activity.
 
 Usage:
-    python checklist_updater.py <checklist_path> <email_csv_path> <output_folder>
+    python checklist_updater.py <checklist_path> <email_csv_path> <output_folder> <api_key> [provider] [model] [harvey_base_url]
 """
 
 import sys
 import os
 import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
 from datetime import datetime
 import pandas as pd
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# Try to import anthropic for LLM matching
-try:
-    import anthropic
-    HAS_ANTHROPIC = True
-except ImportError:
-    HAS_ANTHROPIC = False
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_HARVEY_BASE_URL = "https://api.harvey.ai"
+
+LLM_STATUS_VALUES = {
+    "Pending Draft",
+    "Draft Circulated",
+    "With Opposing Counsel",
+    "Agreed Form",
+    "Execution Version",
+    "Executed",
+}
+
+STATUS_ALIASES = {
+    "pending": "Pending Draft",
+    "pending draft": "Pending Draft",
+    "to be drafted": "Pending Draft",
+    "draft circulated": "Draft Circulated",
+    "with opposing counsel": "With Opposing Counsel",
+    "under review": "With Opposing Counsel",
+    "agreed form": "Agreed Form",
+    "execution version": "Execution Version",
+    "executed": "Executed",
+    "fully executed": "Executed",
+}
 
 # Status detection patterns - order matters (more specific first)
 STATUS_PATTERNS = [
@@ -168,6 +191,307 @@ def find_column_index(headers, patterns):
     return -1
 
 
+def parse_json_response_text(response_text):
+    """
+    Parse JSON from plain text or markdown fenced code block output.
+    """
+    text = (response_text or "").strip()
+    if not text:
+        raise ValueError("LLM returned empty response")
+
+    if text.startswith("```"):
+        lines = text.split("\n")
+        json_lines = []
+        in_block = False
+        for line in lines:
+            marker = line.strip()
+            if marker.startswith("```"):
+                if not in_block:
+                    in_block = True
+                    continue
+                break
+            if in_block:
+                json_lines.append(line)
+        if json_lines:
+            text = "\n".join(json_lines).strip()
+
+    return json.loads(text)
+
+
+def normalize_llm_status(raw_status):
+    """
+    Normalize model status text to one of the supported checklist statuses.
+    """
+    if not raw_status:
+        return None
+
+    status_text = str(raw_status).strip()
+    if status_text in LLM_STATUS_VALUES:
+        return status_text
+
+    alias_key = status_text.lower()
+    normalized = STATUS_ALIASES.get(alias_key)
+    if normalized in LLM_STATUS_VALUES:
+        return normalized
+
+    return None
+
+
+def canonical_doc_key(value):
+    """Normalize document names for key matching."""
+    text = re.sub(r'\s+', ' ', str(value or '')).strip().lower()
+    return text
+
+
+def normalize_provider(provider):
+    value = str(provider or "").strip().lower()
+    if value == "claude":
+        return "anthropic"
+    if value in ("anthropic", "openai", "harvey"):
+        return value
+    return "anthropic"
+
+
+def extract_openai_text(content):
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if isinstance(item, dict):
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def parse_error_detail(raw_text):
+    try:
+        payload = json.loads(raw_text or "{}")
+    except Exception:
+        payload = {}
+
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err.get("message"))
+        if payload.get("message"):
+            return str(payload.get("message"))
+
+    return (raw_text or "").strip()[:300] or "Unknown error"
+
+
+def is_likely_model_error(status_code, detail):
+    detail_text = str(detail or "").lower()
+    if status_code == 404:
+        return True
+    if status_code == 400 and "model" in detail_text:
+        return True
+    return "model" in detail_text and any(
+        part in detail_text
+        for part in ("not found", "invalid", "unsupported", "available", "access")
+    )
+
+
+def perform_http_request(url, headers, body_bytes, timeout=90):
+    req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status_code = resp.getcode()
+            raw_text = resp.read().decode("utf-8", errors="replace")
+            return status_code, raw_text
+    except urllib.error.HTTPError as e:
+        raw_text = e.read().decode("utf-8", errors="replace")
+        return e.code, raw_text
+
+
+def perform_json_request(url, headers, payload, timeout=90):
+    request_headers = dict(headers or {})
+    request_headers["Content-Type"] = "application/json"
+    body_bytes = json.dumps(payload).encode("utf-8")
+    status_code, raw_text = perform_http_request(url, request_headers, body_bytes, timeout=timeout)
+    try:
+        parsed = json.loads(raw_text) if raw_text else {}
+    except Exception:
+        parsed = {}
+    return status_code, parsed, raw_text
+
+
+def build_multipart_form_data(fields):
+    boundary = "----EmmaNeighBoundary" + uuid.uuid4().hex
+    chunks = []
+    for key, value in fields.items():
+        chunks.append(f"--{boundary}".encode("utf-8"))
+        chunks.append(
+            f'Content-Disposition: form-data; name="{key}"'.encode("utf-8")
+        )
+        chunks.append(b"")
+        chunks.append(str(value).encode("utf-8"))
+    chunks.append(f"--{boundary}--".encode("utf-8"))
+    body = b"\r\n".join(chunks) + b"\r\n"
+    return boundary, body
+
+
+def call_anthropic_prompt(prompt, api_key, model_name):
+    model_candidates = []
+    for candidate in (
+        model_name,
+        os.environ.get("CLAUDE_MODEL"),
+        DEFAULT_CLAUDE_MODEL,
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+    ):
+        candidate_value = str(candidate or "").strip()
+        if candidate_value and candidate_value not in model_candidates:
+            model_candidates.append(candidate_value)
+
+    last_detail = "Unknown error"
+    for candidate in model_candidates:
+        payload = {
+            "model": candidate,
+            "max_tokens": 2048,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        status_code, parsed, raw_text = perform_json_request(
+            "https://api.anthropic.com/v1/messages",
+            {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            payload,
+        )
+
+        if status_code != 200:
+            detail = parse_error_detail(raw_text)
+            last_detail = detail
+            if is_likely_model_error(status_code, detail):
+                continue
+            raise RuntimeError(f"Anthropic error ({status_code}): {detail}")
+
+        content = parsed.get("content") if isinstance(parsed, dict) else None
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict) and first.get("text"):
+                return str(first.get("text")).strip(), candidate
+        raise RuntimeError("Anthropic response was missing message content.")
+
+    raise RuntimeError(
+        f"No supported Claude model is available for this API key. Last error: {last_detail}"
+    )
+
+
+def call_openai_prompt(prompt, api_key, model_name):
+    model_candidates = []
+    for candidate in (
+        model_name,
+        os.environ.get("OPENAI_MODEL"),
+        DEFAULT_OPENAI_MODEL,
+        "gpt-4.1-mini",
+        "gpt-4o-mini",
+        "gpt-4.1",
+        "gpt-4o",
+    ):
+        candidate_value = str(candidate or "").strip()
+        if candidate_value and candidate_value not in model_candidates:
+            model_candidates.append(candidate_value)
+
+    last_detail = "Unknown error"
+    for candidate in model_candidates:
+        payload = {
+            "model": candidate,
+            "max_tokens": 2048,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        status_code, parsed, raw_text = perform_json_request(
+            "https://api.openai.com/v1/chat/completions",
+            {"Authorization": f"Bearer {api_key}"},
+            payload,
+        )
+
+        if status_code != 200:
+            detail = parse_error_detail(raw_text)
+            last_detail = detail
+            if is_likely_model_error(status_code, detail):
+                continue
+            raise RuntimeError(f"OpenAI error ({status_code}): {detail}")
+
+        choices = parsed.get("choices") if isinstance(parsed, dict) else None
+        message = choices[0].get("message") if isinstance(choices, list) and choices else {}
+        content = extract_openai_text(message.get("content") if isinstance(message, dict) else "")
+        if content:
+            return content, candidate
+        raise RuntimeError("OpenAI response was missing message content.")
+
+    raise RuntimeError(
+        f"No supported OpenAI model is available for this API key. Last error: {last_detail}"
+    )
+
+
+def call_harvey_prompt(prompt, api_key, max_tokens, harvey_base_url):
+    base_url = str(
+        harvey_base_url or os.environ.get("HARVEY_BASE_URL") or DEFAULT_HARVEY_BASE_URL
+    ).strip()
+    if not base_url:
+        base_url = DEFAULT_HARVEY_BASE_URL
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+
+    boundary, body = build_multipart_form_data(
+        {
+            "prompt": prompt,
+            "mode": "assist",
+            "stream": "false",
+            "max_tokens": str(max_tokens),
+        }
+    )
+
+    status_code, raw_text = perform_http_request(
+        f"{base_url}/api/v2/completion?include_citations=false",
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        body,
+    )
+    if status_code != 200:
+        detail = parse_error_detail(raw_text)
+        raise RuntimeError(f"Harvey error ({status_code}): {detail}")
+
+    try:
+        parsed = json.loads(raw_text) if raw_text else {}
+    except Exception:
+        parsed = {}
+
+    text = ""
+    if isinstance(parsed, dict):
+        text = parsed.get("response") or parsed.get("text") or ""
+    if not text:
+        raise RuntimeError("Harvey response was missing message content.")
+
+    return str(text).strip(), "harvey-assist"
+
+
+def call_provider_prompt_json(prompt, api_key, provider, model_name=None, harvey_base_url=None):
+    provider_name = normalize_provider(provider)
+    if provider_name == "openai":
+        response_text, _ = call_openai_prompt(prompt, api_key, model_name)
+    elif provider_name == "harvey":
+        response_text, _ = call_harvey_prompt(prompt, api_key, 2048, harvey_base_url)
+    else:
+        response_text, _ = call_anthropic_prompt(prompt, api_key, model_name)
+
+    parsed = parse_json_response_text(response_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM response was not a JSON object.")
+    return parsed
+
+
 def parse_checklist_table(doc):
     """
     Parse the first table in a Word document as a checklist.
@@ -253,36 +577,43 @@ def detect_document_status(doc_name, emails):
     return best_status, best_priority, matching_emails
 
 
-def match_documents_with_llm(checklist_items, emails, api_key):
+def match_documents_with_llm(
+    checklist_items,
+    emails,
+    api_key,
+    provider="anthropic",
+    model_name=None,
+    harvey_base_url=None,
+):
     """
-    Use Claude API to match emails to documents and infer status.
+    Use the selected LLM provider to match emails to documents and infer status.
 
     Args:
         checklist_items: List of document names from checklist
         emails: List of email dicts with subject, body, from, date
-        api_key: Claude API key
+        api_key: Provider API key
+        provider: LLM provider (anthropic/openai/harvey)
+        model_name: Optional model override
+        harvey_base_url: Optional Harvey API base URL
 
     Returns:
         Dict mapping document_name to {status, matching_emails, confidence}
     """
-    if not HAS_ANTHROPIC or not api_key:
-        return None
+    if not api_key:
+        raise ValueError("API key is required for checklist LLM analysis.")
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
+    # Prepare email context (limit and truncate for token efficiency)
+    email_context = []
+    for i, email in enumerate(emails[:100]):
+        email_context.append({
+            "index": i,
+            "from": email.get("from", "")[:100],
+            "subject": email.get("subject", "")[:200],
+            "body_preview": email.get("body", "")[:200],
+            "date": email.get("date_received") or email.get("date_sent") or email.get("date") or ""
+        })
 
-        # Prepare email context (limit and truncate for token efficiency)
-        email_context = []
-        for i, email in enumerate(emails[:100]):
-            email_context.append({
-                "index": i,
-                "from": email.get("from", "")[:100],
-                "subject": email.get("subject", "")[:200],
-                "body_preview": email.get("body", "")[:200],
-                "date": email.get("date_received") or email.get("date_sent") or ""
-            })
-
-        prompt = f"""You are analyzing emails to update a transaction document checklist.
+    prompt = f"""You are analyzing emails to update a transaction document checklist.
 
 For each document in the checklist, find relevant emails and determine the current status.
 
@@ -310,37 +641,26 @@ Return a JSON object mapping each document name (only those with email activity)
     }}
 }}
 
-Only include documents that have clear email activity. ONLY return the JSON object, no other text."""
+ONLY return the JSON object, no other text."""
 
-        response = client.messages.create(
-            model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.content[0].text.strip()
-
-        # Handle markdown code blocks
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            json_lines = []
-            in_json = False
-            for line in lines:
-                if line.startswith("```json") or line.startswith("```"):
-                    in_json = not in_json if not line.startswith("```json") else True
-                    continue
-                if in_json:
-                    json_lines.append(line)
-            response_text = "\n".join(json_lines)
-
-        return json.loads(response_text)
-
-    except Exception as e:
-        print(f"LLM matching failed: {e}", file=sys.stderr)
-        return None
+    return call_provider_prompt_json(
+        prompt,
+        api_key,
+        provider,
+        model_name=model_name,
+        harvey_base_url=harvey_base_url,
+    )
 
 
-def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None):
+def update_checklist(
+    checklist_path,
+    email_csv_path,
+    output_folder,
+    api_key=None,
+    provider="anthropic",
+    model_name=None,
+    harvey_base_url=None,
+):
     """
     Main function to update checklist based on email activity.
 
@@ -348,6 +668,10 @@ def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None
         checklist_path: Path to Word document with checklist table
         email_csv_path: Path to Outlook email CSV export
         output_folder: Folder to save updated checklist
+        api_key: Provider API key
+        provider: LLM provider (anthropic/openai/harvey)
+        model_name: Optional provider model override
+        harvey_base_url: Optional Harvey API base URL
 
     Returns:
         dict with: success, output_path, items_updated, details
@@ -361,6 +685,10 @@ def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None
     }
 
     try:
+        if not api_key:
+            result['error'] = 'LLM API key is required to update checklist from email activity.'
+            return result
+
         # Parse email CSV
         emails = parse_email_csv(email_csv_path)
         if not emails:
@@ -409,10 +737,27 @@ def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None
             if doc_name.strip():
                 doc_names.append(doc_name)
 
-        # Try LLM matching if API key is available
-        llm_matches = None
-        if api_key and doc_names:
-            llm_matches = match_documents_with_llm(doc_names, emails, api_key)
+        if not doc_names:
+            result['error'] = 'No checklist document names found to analyze.'
+            return result
+
+        # LLM matching is mandatory for checklist updates in this workflow.
+        try:
+            llm_matches = match_documents_with_llm(
+                doc_names,
+                emails,
+                api_key,
+                provider=provider,
+                model_name=model_name,
+                harvey_base_url=harvey_base_url,
+            )
+        except Exception as e:
+            result['error'] = f'LLM checklist analysis failed: {e}'
+            return result
+        llm_matches_by_key = {
+            canonical_doc_key(doc_name): match_data
+            for doc_name, match_data in (llm_matches or {}).items()
+        }
 
         # Process each row
         items_updated = 0
@@ -431,22 +776,21 @@ def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None
             if status_col_idx < len(row_data):
                 current_status = row_data[status_col_idx]
 
-            # Try LLM match first, then fall back to regex matching
+            # LLM-driven match only; no regex/rules fallback in this workflow.
             new_status = None
             matching_emails = []
 
-            if llm_matches and doc_name in llm_matches:
-                llm_result = llm_matches[doc_name]
-                new_status = llm_result.get('status')
+            llm_result = llm_matches.get(doc_name) if llm_matches else None
+            if not llm_result:
+                llm_result = llm_matches_by_key.get(canonical_doc_key(doc_name))
+
+            if llm_result:
+                new_status = normalize_llm_status(llm_result.get('status'))
                 # Get matching email subjects from indices
                 email_indices = llm_result.get('matching_email_indices', [])
                 for idx in email_indices[:3]:
                     if idx < len(emails):
                         matching_emails.append(emails[idx].get('subject', 'No subject'))
-
-            # Fall back to regex if no LLM match
-            if not new_status:
-                new_status, priority, matching_emails = detect_document_status(doc_name, emails)
 
             if new_status and new_status != current_status:
                 # Update the cell in the table
@@ -483,6 +827,7 @@ def update_checklist(checklist_path, email_csv_path, output_folder, api_key=None
         result['items_updated'] = items_updated
         result['details'] = details
         result['emails_processed'] = len(emails)
+        result['llm_documents_with_activity'] = len(llm_matches or {})
 
         return result
 
@@ -495,7 +840,7 @@ def main():
     if len(sys.argv) < 4:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: checklist_updater.py <checklist_path> <email_csv_path> <output_folder> [api_key]'
+            'error': 'Usage: checklist_updater.py <checklist_path> <email_csv_path> <output_folder> <api_key> [provider] [model] [harvey_base_url]'
         }))
         sys.exit(1)
 
@@ -503,16 +848,27 @@ def main():
     email_csv_path = sys.argv[2]
     output_folder = sys.argv[3]
 
-    # Get API key if provided
-    api_key = None
-    if len(sys.argv) > 4:
-        api_key = sys.argv[4]
+    # API key is required for LLM-driven checklist updates.
+    api_key = sys.argv[4] if len(sys.argv) > 4 else (
+        os.environ.get('ANTHROPIC_API_KEY')
+        or os.environ.get('OPENAI_API_KEY')
+        or os.environ.get('HARVEY_API_KEY')
+    )
+    provider = normalize_provider(sys.argv[5] if len(sys.argv) > 5 else os.environ.get('AI_PROVIDER', 'anthropic'))
+    model_name = sys.argv[6] if len(sys.argv) > 6 else (
+        os.environ.get('OPENAI_MODEL') if provider == 'openai' else os.environ.get('CLAUDE_MODEL')
+    )
+    harvey_base_url = sys.argv[7] if len(sys.argv) > 7 else os.environ.get('HARVEY_BASE_URL', DEFAULT_HARVEY_BASE_URL)
 
-    # Also check environment variable
-    if not api_key:
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
-
-    result = update_checklist(checklist_path, email_csv_path, output_folder, api_key)
+    result = update_checklist(
+        checklist_path,
+        email_csv_path,
+        output_folder,
+        api_key,
+        provider=provider,
+        model_name=model_name,
+        harvey_base_url=harvey_base_url,
+    )
     print(json.dumps(result))
 
 

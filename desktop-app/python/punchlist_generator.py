@@ -11,25 +11,308 @@ A punchlist is a daily working document that shows:
 - Grouped by status (pending draft, with counsel, awaiting signature, etc.)
 
 Usage:
-    python punchlist_generator.py <checklist_path> <output_folder> [status_filters_json]
+    python punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] <api_key> [provider] [model] [harvey_base_url]
 """
 
 import sys
 import os
 import json
 import re
+import urllib.error
+import urllib.request
+import uuid
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
 
-# Try to import anthropic for LLM categorization
-try:
-    import anthropic
-    HAS_ANTHROPIC = True
-except ImportError:
-    HAS_ANTHROPIC = False
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_HARVEY_BASE_URL = "https://api.harvey.ai"
+
+
+def parse_json_response_text(response_text):
+    """
+    Parse JSON from plain text or markdown fenced code block output.
+    """
+    text = (response_text or "").strip()
+    if not text:
+        raise ValueError("LLM returned empty response")
+
+    if text.startswith("```"):
+        lines = text.split("\n")
+        json_lines = []
+        in_block = False
+        for line in lines:
+            marker = line.strip()
+            if marker.startswith("```"):
+                if not in_block:
+                    in_block = True
+                    continue
+                break
+            if in_block:
+                json_lines.append(line)
+        if json_lines:
+            text = "\n".join(json_lines).strip()
+
+    return json.loads(text)
+
+
+def canonical_doc_key(value):
+    """Normalize document names for key matching."""
+    text = re.sub(r'\s+', ' ', str(value or '')).strip().lower()
+    return text
+
+
+def normalize_provider(provider):
+    value = str(provider or "").strip().lower()
+    if value == "claude":
+        return "anthropic"
+    if value in ("anthropic", "openai", "harvey"):
+        return value
+    return "anthropic"
+
+
+def extract_openai_text(content):
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if isinstance(item, dict):
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def parse_error_detail(raw_text):
+    try:
+        payload = json.loads(raw_text or "{}")
+    except Exception:
+        payload = {}
+
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err.get("message"))
+        if payload.get("message"):
+            return str(payload.get("message"))
+
+    return (raw_text or "").strip()[:300] or "Unknown error"
+
+
+def is_likely_model_error(status_code, detail):
+    detail_text = str(detail or "").lower()
+    if status_code == 404:
+        return True
+    if status_code == 400 and "model" in detail_text:
+        return True
+    return "model" in detail_text and any(
+        part in detail_text
+        for part in ("not found", "invalid", "unsupported", "available", "access")
+    )
+
+
+def perform_http_request(url, headers, body_bytes, timeout=90):
+    req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status_code = resp.getcode()
+            raw_text = resp.read().decode("utf-8", errors="replace")
+            return status_code, raw_text
+    except urllib.error.HTTPError as e:
+        raw_text = e.read().decode("utf-8", errors="replace")
+        return e.code, raw_text
+
+
+def perform_json_request(url, headers, payload, timeout=90):
+    request_headers = dict(headers or {})
+    request_headers["Content-Type"] = "application/json"
+    body_bytes = json.dumps(payload).encode("utf-8")
+    status_code, raw_text = perform_http_request(url, request_headers, body_bytes, timeout=timeout)
+    try:
+        parsed = json.loads(raw_text) if raw_text else {}
+    except Exception:
+        parsed = {}
+    return status_code, parsed, raw_text
+
+
+def build_multipart_form_data(fields):
+    boundary = "----EmmaNeighBoundary" + uuid.uuid4().hex
+    chunks = []
+    for key, value in fields.items():
+        chunks.append(f"--{boundary}".encode("utf-8"))
+        chunks.append(
+            f'Content-Disposition: form-data; name="{key}"'.encode("utf-8")
+        )
+        chunks.append(b"")
+        chunks.append(str(value).encode("utf-8"))
+    chunks.append(f"--{boundary}--".encode("utf-8"))
+    body = b"\r\n".join(chunks) + b"\r\n"
+    return boundary, body
+
+
+def call_anthropic_prompt(prompt, api_key, model_name):
+    model_candidates = []
+    for candidate in (
+        model_name,
+        os.environ.get("CLAUDE_MODEL"),
+        DEFAULT_CLAUDE_MODEL,
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+    ):
+        candidate_value = str(candidate or "").strip()
+        if candidate_value and candidate_value not in model_candidates:
+            model_candidates.append(candidate_value)
+
+    last_detail = "Unknown error"
+    for candidate in model_candidates:
+        payload = {
+            "model": candidate,
+            "max_tokens": 2048,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        status_code, parsed, raw_text = perform_json_request(
+            "https://api.anthropic.com/v1/messages",
+            {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            payload,
+        )
+
+        if status_code != 200:
+            detail = parse_error_detail(raw_text)
+            last_detail = detail
+            if is_likely_model_error(status_code, detail):
+                continue
+            raise RuntimeError(f"Anthropic error ({status_code}): {detail}")
+
+        content = parsed.get("content") if isinstance(parsed, dict) else None
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict) and first.get("text"):
+                return str(first.get("text")).strip(), candidate
+        raise RuntimeError("Anthropic response was missing message content.")
+
+    raise RuntimeError(
+        f"No supported Claude model is available for this API key. Last error: {last_detail}"
+    )
+
+
+def call_openai_prompt(prompt, api_key, model_name):
+    model_candidates = []
+    for candidate in (
+        model_name,
+        os.environ.get("OPENAI_MODEL"),
+        DEFAULT_OPENAI_MODEL,
+        "gpt-4.1-mini",
+        "gpt-4o-mini",
+        "gpt-4.1",
+        "gpt-4o",
+    ):
+        candidate_value = str(candidate or "").strip()
+        if candidate_value and candidate_value not in model_candidates:
+            model_candidates.append(candidate_value)
+
+    last_detail = "Unknown error"
+    for candidate in model_candidates:
+        payload = {
+            "model": candidate,
+            "max_tokens": 2048,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        status_code, parsed, raw_text = perform_json_request(
+            "https://api.openai.com/v1/chat/completions",
+            {"Authorization": f"Bearer {api_key}"},
+            payload,
+        )
+
+        if status_code != 200:
+            detail = parse_error_detail(raw_text)
+            last_detail = detail
+            if is_likely_model_error(status_code, detail):
+                continue
+            raise RuntimeError(f"OpenAI error ({status_code}): {detail}")
+
+        choices = parsed.get("choices") if isinstance(parsed, dict) else None
+        message = choices[0].get("message") if isinstance(choices, list) and choices else {}
+        content = extract_openai_text(message.get("content") if isinstance(message, dict) else "")
+        if content:
+            return content, candidate
+        raise RuntimeError("OpenAI response was missing message content.")
+
+    raise RuntimeError(
+        f"No supported OpenAI model is available for this API key. Last error: {last_detail}"
+    )
+
+
+def call_harvey_prompt(prompt, api_key, max_tokens, harvey_base_url):
+    base_url = str(
+        harvey_base_url or os.environ.get("HARVEY_BASE_URL") or DEFAULT_HARVEY_BASE_URL
+    ).strip()
+    if not base_url:
+        base_url = DEFAULT_HARVEY_BASE_URL
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+
+    boundary, body = build_multipart_form_data(
+        {
+            "prompt": prompt,
+            "mode": "assist",
+            "stream": "false",
+            "max_tokens": str(max_tokens),
+        }
+    )
+
+    status_code, raw_text = perform_http_request(
+        f"{base_url}/api/v2/completion?include_citations=false",
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        body,
+    )
+    if status_code != 200:
+        detail = parse_error_detail(raw_text)
+        raise RuntimeError(f"Harvey error ({status_code}): {detail}")
+
+    try:
+        parsed = json.loads(raw_text) if raw_text else {}
+    except Exception:
+        parsed = {}
+
+    text = ""
+    if isinstance(parsed, dict):
+        text = parsed.get("response") or parsed.get("text") or ""
+    if not text:
+        raise RuntimeError("Harvey response was missing message content.")
+
+    return str(text).strip(), "harvey-assist"
+
+
+def call_provider_prompt_json(prompt, api_key, provider, model_name=None, harvey_base_url=None):
+    provider_name = normalize_provider(provider)
+    if provider_name == "openai":
+        response_text, _ = call_openai_prompt(prompt, api_key, model_name)
+    elif provider_name == "harvey":
+        response_text, _ = call_harvey_prompt(prompt, api_key, 2048, harvey_base_url)
+    else:
+        response_text, _ = call_anthropic_prompt(prompt, api_key, model_name)
+
+    parsed = parse_json_response_text(response_text)
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM response was not a JSON object.")
+    return parsed
+
 
 # Status categories for grouping (order determines display order)
 STATUS_CATEGORIES = {
@@ -146,30 +429,36 @@ def categorize_status(status_text):
     return 'pending'
 
 
-def categorize_items_with_llm(items, api_key):
+def categorize_items_with_llm(
+    items,
+    api_key,
+    provider="anthropic",
+    model_name=None,
+    harvey_base_url=None,
+):
     """
-    Use Claude API to categorize all items at once.
+    Use the selected LLM provider to categorize all items at once.
 
     Args:
         items: List of dicts with 'document_name' and 'status' keys
-        api_key: Claude API key
+        api_key: Provider API key
+        provider: LLM provider (anthropic/openai/harvey)
+        model_name: Optional model override
+        harvey_base_url: Optional Harvey API base URL
 
     Returns:
         Dict mapping document_name to category
     """
-    if not HAS_ANTHROPIC or not api_key:
-        return None
+    if not api_key:
+        raise ValueError("API key is required for punchlist LLM categorization.")
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
+    # Prepare items for the prompt
+    items_for_prompt = [
+        {"doc": item.get('document_name', ''), "status": item.get('status', '')}
+        for item in items[:100]  # Limit to 100 items
+    ]
 
-        # Prepare items for the prompt
-        items_for_prompt = [
-            {"doc": item.get('document_name', ''), "status": item.get('status', '')}
-            for item in items[:100]  # Limit to 100 items
-        ]
-
-        prompt = f"""You are categorizing legal transaction documents by their current status.
+    prompt = f"""You are categorizing legal transaction documents by their current status.
 
 For each document, classify its status into one of these categories:
 - "pending": Needs drafting, not started, to be drafted, TBD
@@ -180,7 +469,8 @@ For each document, classify its status into one of these categories:
 Documents to categorize:
 {json.dumps(items_for_prompt, indent=2)}
 
-Return a JSON object mapping each document name to its category:
+Return a JSON object mapping each document name to its category.
+Include EVERY document from the input exactly once:
 {{
     "Document Name 1": "pending",
     "Document Name 2": "signature",
@@ -189,32 +479,19 @@ Return a JSON object mapping each document name to its category:
 
 ONLY return the JSON object, no other text."""
 
-        response = client.messages.create(
-            model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}]
-        )
+    parsed = call_provider_prompt_json(
+        prompt,
+        api_key,
+        provider,
+        model_name=model_name,
+        harvey_base_url=harvey_base_url,
+    )
 
-        response_text = response.content[0].text.strip()
-
-        # Handle markdown code blocks
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            json_lines = []
-            in_json = False
-            for line in lines:
-                if line.startswith("```json") or line.startswith("```"):
-                    in_json = not in_json if not line.startswith("```json") else True
-                    continue
-                if in_json:
-                    json_lines.append(line)
-            response_text = "\n".join(json_lines)
-
-        return json.loads(response_text)
-
-    except Exception as e:
-        print(f"LLM categorization failed: {e}", file=sys.stderr)
-        return None
+    normalized = {}
+    for doc_name, category in parsed.items():
+        if isinstance(category, str):
+            normalized[canonical_doc_key(doc_name)] = category.strip().lower()
+    return normalized
 
 
 def parse_checklist_for_punchlist(doc):
@@ -288,7 +565,15 @@ def extract_transaction_name(checklist_path, doc):
     return base_name.replace('_', ' ').replace('-', ' ').strip()
 
 
-def generate_punchlist(checklist_path, output_folder, status_filters=None, api_key=None):
+def generate_punchlist(
+    checklist_path,
+    output_folder,
+    status_filters=None,
+    api_key=None,
+    provider="anthropic",
+    model_name=None,
+    harvey_base_url=None,
+):
     """
     Generate punchlist document from checklist.
 
@@ -297,7 +582,10 @@ def generate_punchlist(checklist_path, output_folder, status_filters=None, api_k
         output_folder: Folder to save punchlist
         status_filters: List of status categories to include ['pending', 'review', 'signature']
                        If None, includes all except 'executed'
-        api_key: Optional Claude API key for LLM-based categorization
+        api_key: Provider API key for LLM-based categorization
+        provider: LLM provider (anthropic/openai/harvey)
+        model_name: Optional provider model override
+        harvey_base_url: Optional Harvey API base URL
 
     Returns:
         dict with: success, output_path, item_count, categories
@@ -315,6 +603,10 @@ def generate_punchlist(checklist_path, output_folder, status_filters=None, api_k
         status_filters = ['pending', 'review', 'signature']
 
     try:
+        if not api_key:
+            result['error'] = 'LLM API key is required to generate punchlist.'
+            return result
+
         # Open checklist
         doc = Document(checklist_path)
 
@@ -360,33 +652,57 @@ def generate_punchlist(checklist_path, output_folder, status_filters=None, api_k
                 'notes': notes
             })
 
-        # Try LLM categorization if API key is available
-        llm_categories = None
-        if api_key and all_items:
-            llm_categories = categorize_items_with_llm(all_items, api_key)
+        if not all_items:
+            result['error'] = 'No checklist items found to categorize.'
+            return result
+
+        # LLM categorization is mandatory for this workflow.
+        try:
+            llm_categories = categorize_items_with_llm(
+                all_items,
+                api_key,
+                provider=provider,
+                model_name=model_name,
+                harvey_base_url=harvey_base_url,
+            )
+        except Exception as e:
+            result['error'] = f'LLM punchlist categorization failed: {e}'
+            return result
 
         # Categorize all items
         categorized_items = {cat: [] for cat in STATUS_CATEGORIES.keys()}
+        missing_docs = []
+        invalid_docs = []
 
         for item in all_items:
             doc_name = item['document_name']
-            status = item['status']
-
-            # Use LLM category if available, otherwise fall back to regex
-            if llm_categories and doc_name in llm_categories:
-                category = llm_categories[doc_name]
-                # Validate category
-                if category not in STATUS_CATEGORIES:
-                    category = categorize_status(status)
-            else:
-                category = categorize_status(status)
+            category = llm_categories.get(canonical_doc_key(doc_name))
+            if not category:
+                missing_docs.append(doc_name)
+                continue
+            if category not in STATUS_CATEGORIES:
+                invalid_docs.append({'document': doc_name, 'category': category})
+                continue
 
             categorized_items[category].append({
                 'document': doc_name,
-                'status': status,
+                'status': item['status'],
                 'party': item['party'],
                 'notes': item['notes']
             })
+
+        if missing_docs:
+            preview = ', '.join(missing_docs[:10])
+            result['error'] = (
+                f'LLM did not categorize all checklist items ({len(missing_docs)} missing). '
+                f'Examples: {preview}'
+            )
+            return result
+
+        if invalid_docs:
+            preview = ', '.join([f"{x['document']}={x['category']}" for x in invalid_docs[:10]])
+            result['error'] = f'LLM returned invalid category labels: {preview}'
+            return result
 
         # Create punchlist document
         punchlist_doc = Document()
@@ -513,7 +829,7 @@ def main():
     if len(sys.argv) < 3:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] [api_key]'
+            'error': 'Usage: punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] <api_key> [provider] [model] [harvey_base_url]'
         }))
         sys.exit(1)
 
@@ -528,16 +844,27 @@ def main():
         except json.JSONDecodeError:
             pass
 
-    # Get API key if provided
-    api_key = None
-    if len(sys.argv) > 4:
-        api_key = sys.argv[4]
+    # API key is required for LLM-driven punchlist categorization.
+    api_key = sys.argv[4] if len(sys.argv) > 4 else (
+        os.environ.get('ANTHROPIC_API_KEY')
+        or os.environ.get('OPENAI_API_KEY')
+        or os.environ.get('HARVEY_API_KEY')
+    )
+    provider = normalize_provider(sys.argv[5] if len(sys.argv) > 5 else os.environ.get('AI_PROVIDER', 'anthropic'))
+    model_name = sys.argv[6] if len(sys.argv) > 6 else (
+        os.environ.get('OPENAI_MODEL') if provider == 'openai' else os.environ.get('CLAUDE_MODEL')
+    )
+    harvey_base_url = sys.argv[7] if len(sys.argv) > 7 else os.environ.get('HARVEY_BASE_URL', DEFAULT_HARVEY_BASE_URL)
 
-    # Also check environment variable
-    if not api_key:
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
-
-    result = generate_punchlist(checklist_path, output_folder, status_filters, api_key)
+    result = generate_punchlist(
+        checklist_path,
+        output_folder,
+        status_filters,
+        api_key,
+        provider=provider,
+        model_name=model_name,
+        harvey_base_url=harvey_base_url,
+    )
     print(json.dumps(result))
 
 

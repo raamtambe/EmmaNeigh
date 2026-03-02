@@ -2485,23 +2485,14 @@ ipcMain.handle('detect-tasks', async (event, config) => {
     return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
   }
 
-  if (provider !== 'anthropic') {
-    return {
-      success: false,
-      error: 'Task detection currently requires Anthropic provider. For attachment lookup, use AI Search.'
-    };
-  }
-
   const emails = config.emails || [];
   if (!emails.length) {
     return { success: false, error: 'No emails to analyze for tasks.' };
   }
 
-  // In development without processor, make direct API call
-  if (!processorPath) {
+  // Use direct provider API for non-Anthropic providers, or when Python processor is unavailable.
+  if (provider !== 'anthropic' || !processorPath) {
     try {
-      const https = require('https');
-
       // Prepare email context (limit to 50 emails, 500 char bodies)
       const emailContext = emails.slice(0, 50).map((email, i) => ({
         index: i,
@@ -2562,90 +2553,39 @@ Respond ONLY with the JSON object, no other text.
 
 EMAILS TO ANALYZE (${emailContext.length} emails):
 ${JSON.stringify(emailContext, null, 2)}`;
-
-      const requestData = JSON.stringify({
-        model: getClaudeModel(),
-        max_tokens: 4096,
-        messages: [{ role: 'user', content: taskPrompt }]
+      const aiResult = await callProviderPrompt({
+        provider,
+        apiKey,
+        prompt: taskPrompt,
+        maxTokens: 4096
       });
+      if (!aiResult.success) {
+        return { success: false, error: aiResult.error };
+      }
 
-      return new Promise((resolve) => {
-        const options = {
-          hostname: 'api.anthropic.com',
-          path: '/v1/messages',
-          method: 'POST',
-          rejectUnauthorized: false, // Required for corporate SSL inspection proxies
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'Content-Length': Buffer.byteLength(requestData)
-          }
-        };
+      // Parse JSON from response
+      let result;
+      try {
+        const rawText = aiResult.text || '';
+        let jsonText = extractJsonObjectText(rawText);
+        if (!jsonText) jsonText = rawText.trim();
+        result = JSON.parse(jsonText);
+      } catch (e) {
+        result = { tasks: [], total_emails_analyzed: emailContext.length, emails_with_tasks: 0 };
+      }
 
-        const req = https.request(options, (res) => {
-          let body = '';
-          res.on('data', chunk => body += chunk);
-          res.on('end', () => {
-            try {
-              if (res.statusCode !== 200) {
-                let errorDetail = '';
-                try { errorDetail = JSON.parse(body).error?.message || body.substring(0, 200); } catch(e) { errorDetail = body.substring(0, 200); }
-                resolve({ success: false, error: `API error (${res.statusCode}): ${errorDetail}` });
-                return;
-              }
+      const tasks = result.tasks || [];
+      const actionableTasks = tasks.filter(t => t.task_type !== 'NONE');
 
-              const response = JSON.parse(body);
-              const responseText = response.content[0].text.trim();
-
-              // Parse JSON from response
-              let result;
-              try {
-                let jsonText = responseText;
-                if (jsonText.startsWith('```')) {
-                  const lines = jsonText.split('\n');
-                  const jsonLines = [];
-                  let inJson = false;
-                  for (const line of lines) {
-                    if (line.startsWith('```json') || (line.startsWith('```') && !inJson)) { inJson = true; continue; }
-                    if (line.startsWith('```') && inJson) { inJson = false; continue; }
-                    if (inJson) jsonLines.push(line);
-                  }
-                  jsonText = jsonLines.join('\n');
-                }
-                result = JSON.parse(jsonText);
-              } catch (e) {
-                result = { tasks: [], total_emails_analyzed: emailContext.length, emails_with_tasks: 0 };
-              }
-
-              const tasks = result.tasks || [];
-              const actionableTasks = tasks.filter(t => t.task_type !== 'NONE');
-
-              resolve({
-                success: true,
-                tasks: tasks,
-                actionable_tasks: actionableTasks,
-                total_emails_analyzed: result.total_emails_analyzed || emailContext.length,
-                emails_with_tasks: result.emails_with_tasks || actionableTasks.length
-              });
-            } catch (e) {
-              resolve({ success: false, error: `Parse error: ${e.message}` });
-            }
-          });
-        });
-
-        req.on('error', (e) => {
-          resolve({ success: false, error: `Network error: ${e.message}` });
-        });
-
-        req.setTimeout(90000, () => {
-          req.destroy();
-          resolve({ success: false, error: 'Request timed out (90s). Try with fewer emails.' });
-        });
-
-        req.write(requestData);
-        req.end();
-      });
+      return {
+        success: true,
+        tasks,
+        actionable_tasks: actionableTasks,
+        total_emails_analyzed: result.total_emails_analyzed || emailContext.length,
+        emails_with_tasks: result.emails_with_tasks || actionableTasks.length,
+        provider,
+        model_used: aiResult.modelUsed || null
+      };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -3926,6 +3866,18 @@ ipcMain.handle('open-file', async (event, filePath) => {
 // Update Checklist - parse emails and update checklist status
 ipcMain.handle('update-checklist', async (event, config) => {
   const { checklistPath, emailPath } = config;
+  const provider = normalizeAIProvider(getAIProvider());
+  const providerName = getAIProviderDisplayName(provider);
+  const apiKey = getApiKey();
+  const providerModel = provider === 'openai' ? getOpenAIModel() : getClaudeModel();
+  const harveyBaseUrl = getHarveyBaseUrl();
+
+  if (!apiKey) {
+    return {
+      success: false,
+      error: `No API key configured. Please add your ${providerName} API key in Settings.`
+    };
+  }
 
   // Create temp output folder
   const outputFolder = path.join(app.getPath('temp'), 'emmaneigh_checklist_' + Date.now());
@@ -3950,17 +3902,14 @@ ipcMain.handle('update-checklist', async (event, config) => {
 
   return new Promise((resolve) => {
     let args;
-    const apiKey = getApiKey();  // Get API key for LLM-powered matching
 
     if (app.isPackaged) {
-      args = [clModuleName, checklistPath, emailPath, outputFolder];
-      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
+      args = [clModuleName, checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, harveyBaseUrl];
     } else {
-      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder];
-      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
+      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, harveyBaseUrl];
     }
 
-    mainWindow.webContents.send('checklist-progress', { message: 'Analyzing emails...', percent: 20 });
+    mainWindow.webContents.send('checklist-progress', { message: `Analyzing checklist and emails with ${providerName}...`, percent: 20 });
 
     const proc = spawn(processorPath, args);
     let stdout = '';
@@ -4005,6 +3954,18 @@ ipcMain.handle('update-checklist', async (event, config) => {
 // Generate Punchlist - extract open items from checklist
 ipcMain.handle('generate-punchlist', async (event, config) => {
   const { checklistPath, statusFilters } = config;
+  const provider = normalizeAIProvider(getAIProvider());
+  const providerName = getAIProviderDisplayName(provider);
+  const apiKey = getApiKey();
+  const providerModel = provider === 'openai' ? getOpenAIModel() : getClaudeModel();
+  const harveyBaseUrl = getHarveyBaseUrl();
+
+  if (!apiKey) {
+    return {
+      success: false,
+      error: `No API key configured. Please add your ${providerName} API key in Settings.`
+    };
+  }
 
   // Create temp output folder
   const outputFolder = path.join(app.getPath('temp'), 'emmaneigh_punchlist_' + Date.now());
@@ -4030,17 +3991,14 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   return new Promise((resolve) => {
     let args;
     const filtersJson = JSON.stringify(statusFilters || ['pending', 'review', 'signature']);
-    const apiKey = getApiKey();  // Get API key for LLM-powered categorization
 
     if (app.isPackaged) {
-      args = [plModuleName, checklistPath, outputFolder, filtersJson];
-      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
+      args = [plModuleName, checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, harveyBaseUrl];
     } else {
-      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson];
-      if (apiKey) args.push(apiKey);  // Pass API key as 4th argument
+      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, harveyBaseUrl];
     }
 
-    mainWindow.webContents.send('punchlist-progress', { message: 'Analyzing checklist...', percent: 30 });
+    mainWindow.webContents.send('punchlist-progress', { message: `Analyzing checklist with ${providerName}...`, percent: 30 });
 
     const proc = spawn(processorPath, args);
     let stdout = '';
