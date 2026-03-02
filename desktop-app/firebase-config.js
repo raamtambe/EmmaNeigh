@@ -1,36 +1,59 @@
 /**
  * Firebase Firestore Configuration for EmmaNeigh
  *
- * Centralizes user activity and usage logging to Firebase Firestore.
- * To set up:
- *   1. Go to https://console.firebase.google.com/
- *   2. Create a new project (e.g., "emmaneigh-analytics")
- *   3. Enable Firestore Database (start in test mode or configure rules)
- *   4. Go to Project Settings → General → Your apps → Add web app
- *   5. Copy the firebaseConfig object and paste it below
+ * The Firebase config is loaded from a local file on each machine:
+ *   [userData]/firebase_config.json
+ *
+ * This keeps credentials out of source control. To set up:
+ *   1. Go to Settings → Firebase in EmmaNeigh
+ *   2. Paste your Firebase config JSON
+ *   3. Click Save — the config is stored locally and never committed to git
  */
 
+const { app } = require('electron');
+const path = require('path');
+const fs = require('fs');
 const { initializeApp } = require('firebase/app');
 const { getFirestore, collection, addDoc, writeBatch, doc } = require('firebase/firestore');
 
-// ============================================================
-// PASTE YOUR FIREBASE CONFIG HERE
-// ============================================================
-const firebaseConfig = {
-  apiKey: "AIzaSyAXl5s1asHqXpuVi3K_JKGsMxRuU7frJFE",
-  authDomain: "emmaneigh-7f845.firebaseapp.com",
-  projectId: "emmaneigh-7f845",
-  storageBucket: "emmaneigh-7f845.firebasestorage.app",
-  messagingSenderId: "383420892084",
-  appId: "1:383420892084:web:cd78a7a242c2c514b9a8e1",
-  measurementId: "G-DZLTQM7B23"
-};
-
-// ============================================================
+// Firebase config is stored in a local JSON file, NOT in source code
+const firebaseConfigPath = path.join(app.getPath('userData'), 'firebase_config.json');
 
 let firebaseApp = null;
 let firestoreDb = null;
 let firebaseReady = false;
+
+/**
+ * Read Firebase config from the local file.
+ * Returns the config object or null if not found.
+ */
+function loadFirebaseConfig() {
+  try {
+    if (fs.existsSync(firebaseConfigPath)) {
+      const raw = fs.readFileSync(firebaseConfigPath, 'utf8');
+      const config = JSON.parse(raw);
+      if (config.apiKey && config.projectId) {
+        return config;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read Firebase config:', e.message);
+  }
+  return null;
+}
+
+/**
+ * Save Firebase config to the local file.
+ */
+function saveFirebaseConfig(config) {
+  try {
+    fs.writeFileSync(firebaseConfigPath, JSON.stringify(config, null, 2));
+    return true;
+  } catch (e) {
+    console.error('Failed to save Firebase config:', e.message);
+    return false;
+  }
+}
 
 /**
  * Initialize Firebase. Returns true if successful, false if config is missing.
@@ -38,10 +61,10 @@ let firebaseReady = false;
 function initFirebase() {
   if (firebaseReady) return true;
 
-  // Check if config has been filled in
-  if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-    console.warn('Firebase config not set — activity logging will be local-only.');
-    console.warn('Edit desktop-app/firebase-config.js to enable centralized logging.');
+  const firebaseConfig = loadFirebaseConfig();
+  if (!firebaseConfig) {
+    console.warn('Firebase config not found — activity logging will be local-only.');
+    console.warn('Go to Settings → Firebase in EmmaNeigh to configure centralized logging.');
     return false;
   }
 
@@ -108,6 +131,8 @@ async function batchLogToFirestore(collectionName, docs) {
 
 module.exports = {
   initFirebase,
+  loadFirebaseConfig,
+  saveFirebaseConfig,
   logToFirestore,
   batchLogToFirestore
 };

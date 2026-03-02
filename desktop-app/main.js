@@ -6,7 +6,7 @@ const archiver = require('archiver');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const os = require('os');
-const { initFirebase, logToFirestore, batchLogToFirestore } = require('./firebase-config');
+const { initFirebase, loadFirebaseConfig, saveFirebaseConfig, logToFirestore, batchLogToFirestore } = require('./firebase-config');
 
 // Password hashing functions
 function hashPassword(password) {
@@ -3268,6 +3268,33 @@ ipcMain.handle('test-smtp', async (event, { host, port, user, pass, from }) => {
   } catch (e) {
     return { success: false, error: `SMTP test failed: ${e.message}` };
   }
+});
+
+// ========== FIREBASE CONFIG HANDLERS ==========
+
+// Save Firebase config to local file (not in source control)
+ipcMain.handle('save-firebase-config', async (event, config) => {
+  try {
+    const saved = saveFirebaseConfig(config);
+    if (saved) {
+      // Re-initialize Firebase with the new config
+      const ok = initFirebase();
+      if (ok) {
+        // Sync any pending logs with the new config
+        syncPendingLogs().catch(e => console.error('Pending log sync error:', e.message));
+      }
+      return { success: true, initialized: ok };
+    }
+    return { success: false, error: 'Failed to save config file' };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Get current Firebase config (for settings UI)
+ipcMain.handle('get-firebase-config', async () => {
+  const config = loadFirebaseConfig();
+  return { success: true, config: config, configured: !!config };
 });
 
 // ========== USAGE HISTORY HANDLERS ==========
