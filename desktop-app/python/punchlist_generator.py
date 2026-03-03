@@ -661,6 +661,82 @@ def find_column_index(headers, patterns):
     return -1
 
 
+def normalize_cell_text(value):
+    return re.sub(r'\s+', ' ', str(value or '')).strip()
+
+
+def infer_document_column(headers, rows):
+    if not headers:
+        return -1
+
+    max_cols = max(len(headers), max((len(r) for r in rows), default=0))
+    best_col = -1
+    best_score = -1
+
+    for col_idx in range(max_cols):
+        header_value = normalize_cell_text(headers[col_idx] if col_idx < len(headers) else '')
+        header_lower = header_value.lower()
+        if any(term in header_lower for term in ('status', 'state', 'progress', 'date')):
+            continue
+
+        non_empty = 0
+        rich_text = 0
+        for row in rows[:150]:
+            cell = normalize_cell_text(row[col_idx] if col_idx < len(row) else '')
+            if not cell:
+                continue
+            non_empty += 1
+            if re.search(r'[a-zA-Z]', cell):
+                rich_text += 1
+
+        score = (non_empty * 2) + (rich_text * 3)
+        if score > best_score:
+            best_score = score
+            best_col = col_idx
+
+    return best_col
+
+
+def score_header_candidate(all_rows, header_idx):
+    headers = all_rows[header_idx]
+    non_empty_headers = [normalize_cell_text(h) for h in headers if normalize_cell_text(h)]
+    if len(non_empty_headers) < 2:
+        return None
+
+    doc_col = find_column_index(headers, DOCUMENT_COLUMN_PATTERNS)
+    status_col = find_column_index(headers, STATUS_COLUMN_PATTERNS)
+    party_col = find_column_index(headers, PARTY_COLUMN_PATTERNS)
+    notes_col = find_column_index(headers, NOTES_COLUMN_PATTERNS)
+
+    avg_header_len = (
+        sum(len(h) for h in non_empty_headers) / len(non_empty_headers)
+        if non_empty_headers else 0
+    )
+    looks_like_header = 1 if avg_header_len <= 45 else -5
+
+    data_rows = all_rows[header_idx + 1: header_idx + 11]
+    non_empty_data_rows = sum(1 for row in data_rows if any(normalize_cell_text(c) for c in row))
+
+    score = len(non_empty_headers) + (non_empty_data_rows * 3) + looks_like_header
+    if doc_col != -1:
+        score += 35
+    if status_col != -1:
+        score += 15
+    if party_col != -1:
+        score += 6
+    if notes_col != -1:
+        score += 4
+
+    return {
+        'score': score,
+        'header_idx': header_idx,
+        'doc_col': doc_col,
+        'status_col': status_col,
+        'party_col': party_col,
+        'notes_col': notes_col,
+    }
+
+
 def categorize_status(status_text):
     """
     Determine which category a status belongs to.
@@ -688,48 +764,103 @@ def categorize_items_with_llm(
     model_name=None,
     provider_base_url=None,
 ):
-    """
-    Use the selected LLM provider to categorize all items at once.
-
-    Args:
-        items: List of dicts with 'document_name' and 'status' keys
-        api_key: Provider API key
-        provider: LLM provider (anthropic/openai/harvey)
-        model_name: Optional model override
-        provider_base_url: Optional provider API base URL
-
-    Returns:
-        Dict mapping document_name to category
-    """
+    """Use the selected LLM provider to categorize all checklist rows."""
     if provider_requires_api_key(provider) and not api_key:
         raise ValueError("API key is required for punchlist LLM categorization.")
 
-    # Prepare items for the prompt
+    def normalize_response(payload):
+        normalized = {"by_row": {}, "by_doc": {}}
+        if not isinstance(payload, dict):
+            return normalized
+
+        # New format: {"categories":[...]}
+        categories = payload.get("categories")
+        if isinstance(categories, list):
+            for item in categories:
+                if not isinstance(item, dict):
+                    continue
+                category = str(item.get("category", "")).strip().lower()
+                if category not in STATUS_CATEGORIES:
+                    continue
+                doc_name = str(item.get("document_name", "")).strip()
+                row_id = item.get("row_id")
+                try:
+                    row_id = int(str(row_id).strip())
+                except Exception:
+                    row_id = None
+                payload_item = {
+                    "row_id": row_id,
+                    "document_name": doc_name,
+                    "category": category,
+                    "confidence": item.get("confidence"),
+                    "reasoning": str(item.get("reasoning", "")).strip(),
+                }
+                if row_id is not None:
+                    normalized["by_row"][row_id] = payload_item
+                if doc_name:
+                    normalized["by_doc"][canonical_doc_key(doc_name)] = payload_item
+
+        # Legacy format: {"Document Name":"pending"}
+        for key, value in payload.items():
+            if key == "categories":
+                continue
+            category = str(value).strip().lower() if isinstance(value, str) else ''
+            if category not in STATUS_CATEGORIES:
+                continue
+            normalized["by_doc"][canonical_doc_key(key)] = {
+                "row_id": None,
+                "document_name": str(key),
+                "category": category,
+                "confidence": None,
+                "reasoning": "",
+            }
+
+        return normalized
+
+    # Prepare items for the prompt.
     items_for_prompt = [
-        {"doc": item.get('document_name', ''), "status": item.get('status', '')}
+        {
+            "row_id": item.get('row_id'),
+            "document_name": item.get('document_name', ''),
+            "status": item.get('status', ''),
+            "party": item.get('party', ''),
+            "notes": item.get('notes', ''),
+            "row_context": item.get('row_context', ''),
+        }
         for item in items[:100]  # Limit to 100 items
     ]
 
-    prompt = f"""You are categorizing legal transaction documents by their current status.
+    prompt = f"""You are categorizing legal transaction checklist rows for a daily punchlist.
 
-For each document, classify its status into one of these categories:
+For each row, classify into one of these categories:
 - "pending": Needs drafting, not started, to be drafted, TBD
 - "review": Under review, with counsel, sent to counterparty, awaiting comments, circulated
 - "signature": Execution version, agreed form, ready for signature, final form
 - "executed": Fully executed, signed, complete, done
 
-Documents to categorize:
+Rows to categorize:
 {json.dumps(items_for_prompt, indent=2)}
 
-Return a JSON object mapping each document name to its category.
-Include EVERY document from the input exactly once:
+Guidance:
+- Use document name + status + party + notes together; do not rely on exact header names.
+- If information is ambiguous but appears open, prefer "pending" over "executed".
+- If it is clearly signed/complete, use "executed".
+
+Return JSON only in this exact shape:
 {{
-    "Document Name 1": "pending",
-    "Document Name 2": "signature",
-    ...
+  "categories": [
+    {{
+      "row_id": 1,
+      "document_name": "Credit Agreement",
+      "category": "review",
+      "confidence": 0.81,
+      "reasoning": "Notes indicate it is with opposing counsel."
+    }}
+  ]
 }}
 
-ONLY return the JSON object, no other text."""
+Include EVERY row_id from the input exactly once.
+ONLY return JSON, no extra text."""
 
     parsed = call_provider_prompt_json(
         prompt,
@@ -738,12 +869,7 @@ ONLY return the JSON object, no other text."""
         model_name=model_name,
         provider_base_url=provider_base_url,
     )
-
-    normalized = {}
-    for doc_name, category in parsed.items():
-        if isinstance(category, str):
-            normalized[canonical_doc_key(doc_name)] = category.strip().lower()
-    return normalized
+    return normalize_response(parsed)
 
 
 def parse_checklist_for_punchlist(doc):
@@ -755,40 +881,50 @@ def parse_checklist_for_punchlist(doc):
     if not doc.tables:
         return None
 
-    table = doc.tables[0]
+    best_candidate = None
 
-    # Extract all rows
-    all_rows = []
-    for row in table.rows:
-        row_data = [cell.text.strip() for cell in row.cells]
-        all_rows.append(row_data)
+    for table in doc.tables:
+        all_rows = []
+        for row in table.rows:
+            all_rows.append([normalize_cell_text(cell.text) for cell in row.cells])
+        if not all_rows:
+            continue
 
-    if not all_rows:
+        max_probe = min(6, len(all_rows) - 1)
+        for header_idx in range(max_probe + 1):
+            candidate = score_header_candidate(all_rows, header_idx)
+            if not candidate:
+                continue
+            candidate['table'] = table
+            candidate['all_rows'] = all_rows
+            if best_candidate is None or candidate['score'] > best_candidate['score']:
+                best_candidate = candidate
+
+    if not best_candidate:
         return None
 
-    headers = all_rows[0]
-    rows = all_rows[1:]
+    table = best_candidate['table']
+    all_rows = best_candidate['all_rows']
+    header_idx = best_candidate['header_idx']
+    headers = all_rows[header_idx]
+    rows = [row for row in all_rows[header_idx + 1:] if any(normalize_cell_text(c) for c in row)]
 
-    # Find relevant columns
-    doc_col = find_column_index(headers, DOCUMENT_COLUMN_PATTERNS)
-    status_col = find_column_index(headers, STATUS_COLUMN_PATTERNS)
-    party_col = find_column_index(headers, PARTY_COLUMN_PATTERNS)
-    notes_col = find_column_index(headers, NOTES_COLUMN_PATTERNS)
-
+    doc_col = best_candidate['doc_col']
     if doc_col == -1:
-        # Try to use first non-empty column as document column
-        for i, h in enumerate(headers):
-            if h.strip():
-                doc_col = i
-                break
+        doc_col = infer_document_column(headers, rows)
+    status_col = best_candidate['status_col']
+    party_col = best_candidate['party_col']
+    notes_col = best_candidate['notes_col']
 
     return {
         'headers': headers,
         'rows': rows,
+        'table': table,
         'doc_col': doc_col,
         'status_col': status_col,
         'party_col': party_col,
-        'notes_col': notes_col
+        'notes_col': notes_col,
+        'data_row_start_idx': header_idx + 1
     }
 
 
@@ -876,35 +1012,51 @@ def generate_punchlist(
 
         # Collect all items first
         all_items = []
-        for row in parsed['rows']:
+        for row_idx, row in enumerate(parsed['rows']):
             # Get document name
             doc_name = ''
             if parsed['doc_col'] >= 0 and parsed['doc_col'] < len(row):
-                doc_name = row[parsed['doc_col']]
+                doc_name = normalize_cell_text(row[parsed['doc_col']])
 
-            if not doc_name.strip():
+            if not doc_name:
                 continue
 
             # Get status
             status = ''
             if parsed['status_col'] >= 0 and parsed['status_col'] < len(row):
-                status = row[parsed['status_col']]
+                status = normalize_cell_text(row[parsed['status_col']])
 
             # Get party/responsible
             party = ''
             if parsed['party_col'] >= 0 and parsed['party_col'] < len(row):
-                party = row[parsed['party_col']]
+                party = normalize_cell_text(row[parsed['party_col']])
 
             # Get notes
             notes = ''
             if parsed['notes_col'] >= 0 and parsed['notes_col'] < len(row):
-                notes = row[parsed['notes_col']]
+                notes = normalize_cell_text(row[parsed['notes_col']])
+
+            # Additional context from non-primary columns.
+            context_parts = []
+            for col_idx, cell_value in enumerate(row):
+                if col_idx in (parsed['doc_col'], parsed['status_col'], parsed['party_col'], parsed['notes_col']):
+                    continue
+                cleaned = normalize_cell_text(cell_value)
+                if not cleaned:
+                    continue
+                header_label = normalize_cell_text(parsed['headers'][col_idx] if col_idx < len(parsed['headers']) else f"Column {col_idx + 1}")
+                if header_label:
+                    context_parts.append(f"{header_label}: {cleaned}")
+                else:
+                    context_parts.append(cleaned)
 
             all_items.append({
+                'row_id': parsed.get('data_row_start_idx', 1) + row_idx,
                 'document_name': doc_name,
                 'status': status,
                 'party': party,
-                'notes': notes
+                'notes': notes,
+                'row_context': ' | '.join(context_parts[:8]),
             })
 
         if not all_items:
@@ -926,18 +1078,34 @@ def generate_punchlist(
 
         # Categorize all items
         categorized_items = {cat: [] for cat in STATUS_CATEGORIES.keys()}
-        missing_docs = []
-        invalid_docs = []
+        llm_row_matches = llm_categories.get('by_row', {}) if isinstance(llm_categories, dict) else {}
+        llm_doc_matches = llm_categories.get('by_doc', {}) if isinstance(llm_categories, dict) else {}
+        llm_assigned_count = 0
+        fallback_assigned_count = 0
 
         for item in all_items:
             doc_name = item['document_name']
-            category = llm_categories.get(canonical_doc_key(doc_name))
-            if not category:
-                missing_docs.append(doc_name)
-                continue
-            if category not in STATUS_CATEGORIES:
-                invalid_docs.append({'document': doc_name, 'category': category})
-                continue
+            row_id = item.get('row_id')
+            llm_match = llm_row_matches.get(row_id) if isinstance(llm_row_matches, dict) else None
+            if not llm_match and isinstance(llm_doc_matches, dict):
+                llm_match = llm_doc_matches.get(canonical_doc_key(doc_name))
+
+            category = ''
+            if isinstance(llm_match, dict):
+                category = str(llm_match.get('category', '')).strip().lower()
+            elif isinstance(llm_match, str):
+                category = llm_match.strip().lower()
+
+            if category in STATUS_CATEGORIES:
+                llm_assigned_count += 1
+            else:
+                # If the LLM misses a row, preserve continuity with a deterministic fallback.
+                category = categorize_status(" ".join([
+                    item.get('status', ''),
+                    item.get('notes', ''),
+                    item.get('row_context', ''),
+                ]))
+                fallback_assigned_count += 1
 
             categorized_items[category].append({
                 'document': doc_name,
@@ -945,19 +1113,6 @@ def generate_punchlist(
                 'party': item['party'],
                 'notes': item['notes']
             })
-
-        if missing_docs:
-            preview = ', '.join(missing_docs[:10])
-            result['error'] = (
-                f'LLM did not categorize all checklist items ({len(missing_docs)} missing). '
-                f'Examples: {preview}'
-            )
-            return result
-
-        if invalid_docs:
-            preview = ', '.join([f"{x['document']}={x['category']}" for x in invalid_docs[:10]])
-            result['error'] = f'LLM returned invalid category labels: {preview}'
-            return result
 
         # Create punchlist document
         punchlist_doc = Document()
@@ -1072,6 +1227,8 @@ def generate_punchlist(
         result['output_path'] = output_path
         result['item_count'] = total_open
         result['categories'] = category_counts
+        result['llm_assigned_count'] = llm_assigned_count
+        result['fallback_assigned_count'] = fallback_assigned_count
 
         return result
 

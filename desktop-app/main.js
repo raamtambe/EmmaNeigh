@@ -36,6 +36,7 @@ let db = null;
 let SQL = null;
 const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db');
 const pendingLogsPath = path.join(app.getPath('userData'), 'pending_logs.json');
+const feedbackLogPath = path.join(app.getPath('userData'), 'feedback_log.json');
 const APP_VERSION = require('./package.json').version;
 const MACHINE_ID = crypto.createHash('sha256').update(os.hostname()).digest('hex').substring(0, 12);
 const DEFAULT_AI_PROVIDER = 'ollama';
@@ -46,6 +47,21 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
 const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b';
 const DEFAULT_LMSTUDIO_MODEL = 'local-model';
+const FEEDBACK_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
+const FEEDBACK_ADMIN_USERNAMES = new Set(
+  String(process.env.EMMANEIGH_FEEDBACK_ADMINS || FEEDBACK_ADMIN_DEFAULTS.join(','))
+    .split(',')
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+);
+
+function normalizeUsername(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function canAccessFeedbackLog(username) {
+  return FEEDBACK_ADMIN_USERNAMES.has(normalizeUsername(username));
+}
 
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
@@ -114,6 +130,33 @@ function logFeedbackToFirestore(data) {
   }).catch(() => {
     queuePendingLog('user_feedback', entry);
   });
+}
+
+function readFeedbackLogEntries() {
+  try {
+    if (!fs.existsSync(feedbackLogPath)) return [];
+    const raw = fs.readFileSync(feedbackLogPath, 'utf8').trim();
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error('Failed to read feedback log:', e.message);
+    return [];
+  }
+}
+
+function appendFeedbackLogEntry(entry) {
+  try {
+    const existing = readFeedbackLogEntries();
+    existing.unshift(entry);
+    // Keep file bounded to avoid unbounded growth.
+    const bounded = existing.slice(0, 1000);
+    fs.writeFileSync(feedbackLogPath, JSON.stringify(bounded, null, 2), 'utf8');
+    return true;
+  } catch (e) {
+    console.error('Failed to append feedback log:', e.message);
+    return false;
+  }
 }
 
 // ========== OFFLINE QUEUE ==========
@@ -1032,7 +1075,22 @@ function buildAgentFallbackPlan(commandText, attachments) {
   const prompt = String(commandText || '').toLowerCase();
   const files = Array.isArray(attachments) ? attachments : [];
   const hasPdf = files.some(file => file.ext === 'pdf');
+  const hasCsv = files.some(file => file.ext === 'csv');
+  const docxFiles = files.filter(file => file.ext === 'docx');
+  const redlineExts = new Set(['pdf', 'docx', 'doc', 'rtf', 'txt', 'htm', 'html', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'xls', 'xlsx', 'xlsm', 'xlsb']);
+  const redlineCandidates = files.filter(file => redlineExts.has(file.ext));
   const hasDocLike = files.some(file => file.ext === 'pdf' || file.ext === 'docx' || file.ext === 'doc');
+
+  if (/(did|does|has|have|who|when|what|where|find|search|check|show|was|were|sent|review|approved|circulated).*(email|inbox|attachment|message)|email.*(did|has|who|when|what|find|search|check)/.test(prompt)) {
+    return {
+      action: 'run_email_ai_search',
+      target_tab: 'email',
+      run_now: true,
+      required_extensions: [],
+      missing_requirements: [],
+      user_message: 'Analyzing your emails with AI.'
+    };
+  }
 
   if (/(signature|sig)\s*(packet|packets|page|pages)|signing set|execution pages?/.test(prompt)) {
     if (hasPdf) {
@@ -1055,6 +1113,90 @@ function buildAgentFallbackPlan(commandText, attachments) {
     };
   }
 
+  if (/update\s+checklist|checklist\s+update|refresh\s+checklist/.test(prompt)) {
+    if (docxFiles.length > 0 && hasCsv) {
+      return {
+        action: 'run_update_checklist',
+        target_tab: 'updatechecklist',
+        run_now: true,
+        required_extensions: ['docx', 'csv'],
+        missing_requirements: [],
+        user_message: 'Running Update Checklist using the attached checklist and email CSV.'
+      };
+    }
+    return {
+      action: 'open_tab',
+      target_tab: 'updatechecklist',
+      run_now: false,
+      required_extensions: ['docx', 'csv'],
+      missing_requirements: ['Attach one checklist (.docx) and one email export (.csv).'],
+      user_message: 'Opened Update Checklist. Attach a checklist and email CSV to run.'
+    };
+  }
+
+  if (/generate\s+punchlist|create\s+punchlist|\bpunch\s*list\b/.test(prompt)) {
+    if (docxFiles.length > 0) {
+      return {
+        action: 'run_generate_punchlist',
+        target_tab: 'punchlist',
+        run_now: true,
+        required_extensions: ['docx'],
+        missing_requirements: [],
+        user_message: 'Generating punchlist from the attached checklist.'
+      };
+    }
+    return {
+      action: 'open_tab',
+      target_tab: 'punchlist',
+      run_now: false,
+      required_extensions: ['docx'],
+      missing_requirements: ['Attach one checklist (.docx) to generate a punchlist.'],
+      user_message: 'Opened Generate Punchlist. Attach a checklist document to run.'
+    };
+  }
+
+  if (/redline|blackline|compare|comparison|markup changes|mark up changes/.test(prompt)) {
+    if (redlineCandidates.length >= 2) {
+      return {
+        action: 'run_redline',
+        target_tab: 'redline',
+        run_now: true,
+        required_extensions: Array.from(redlineExts),
+        missing_requirements: [],
+        user_message: 'Running redline with the first two compatible attachments.'
+      };
+    }
+    return {
+      action: 'open_tab',
+      target_tab: 'redline',
+      run_now: false,
+      required_extensions: Array.from(redlineExts),
+      missing_requirements: ['Attach two compatible documents to run redline automatically.'],
+      user_message: 'Opened Redline Documents.'
+    };
+  }
+
+  if (/collat(e|ion)|merge comments|consolidate|combine markups/.test(prompt)) {
+    if (docxFiles.length >= 2) {
+      return {
+        action: 'run_collate',
+        target_tab: 'collate',
+        run_now: true,
+        required_extensions: ['docx'],
+        missing_requirements: [],
+        user_message: 'Running collate with the first DOCX as base and remaining DOCX files as commented versions.'
+      };
+    }
+    return {
+      action: 'open_tab',
+      target_tab: 'collate',
+      run_now: false,
+      required_extensions: ['docx'],
+      missing_requirements: ['Attach at least two DOCX files to run collate automatically.'],
+      user_message: 'Opened Collate Documents.'
+    };
+  }
+
   if (/packet\s*shell|signature\s*shell/.test(prompt)) {
     if (hasDocLike) {
       return {
@@ -1073,28 +1215,6 @@ function buildAgentFallbackPlan(commandText, attachments) {
       required_extensions: ['pdf', 'docx', 'doc'],
       missing_requirements: ['Attach one or more PDF or Word files to run packet shell.'],
       user_message: 'Opened Create Packet Shell. Attach files, then run again.'
-    };
-  }
-
-  if (/redline|blackline|compare|comparison/.test(prompt)) {
-    return {
-      action: 'open_tab',
-      target_tab: 'redline',
-      run_now: false,
-      required_extensions: ['docx', 'doc', 'pdf'],
-      missing_requirements: [],
-      user_message: 'Opened Redline Documents.'
-    };
-  }
-
-  if (/collat(e|ion)|merge comments|consolidate/.test(prompt)) {
-    return {
-      action: 'open_tab',
-      target_tab: 'collate',
-      run_now: false,
-      required_extensions: ['docx', 'doc'],
-      missing_requirements: [],
-      user_message: 'Opened Collate Documents.'
     };
   }
 
@@ -1164,13 +1284,24 @@ function buildAgentFallbackPlan(commandText, attachments) {
     };
   }
 
+  if (prompt.trim()) {
+    return {
+      action: 'run_general_llm_chat',
+      target_tab: null,
+      run_now: true,
+      required_extensions: [],
+      missing_requirements: [],
+      user_message: 'Answering with Agent Mode using your selected LLM provider.'
+    };
+  }
+
   return {
-    action: 'no_op',
+    action: 'run_general_llm_chat',
     target_tab: null,
-    run_now: false,
+    run_now: true,
     required_extensions: [],
     missing_requirements: [],
-    user_message: 'I can route commands for signature packets, packet shell, redline, collate, checklist, punchlist, email search, and time summary.'
+    user_message: 'Ask a question or give a workflow command and I will route it or answer via the configured LLM.'
   };
 }
 
@@ -1178,11 +1309,26 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
   const files = Array.isArray(attachments) ? attachments : [];
   const fallback = fallbackPlan || buildAgentFallbackPlan('', files);
   const candidate = rawPlan && typeof rawPlan === 'object' ? rawPlan : {};
-  const allowedActions = new Set(['run_signature_packets', 'run_packet_shell', 'open_tab', 'no_op']);
+  const allowedActions = new Set([
+    'run_signature_packets',
+    'run_packet_shell',
+    'run_redline',
+    'run_collate',
+    'run_update_checklist',
+    'run_generate_punchlist',
+    'run_email_ai_search',
+    'run_general_llm_chat',
+    'open_tab',
+    'no_op'
+  ]);
   const actionValue = String(candidate.action || '').trim().toLowerCase().replace(/-/g, '_');
   const action = allowedActions.has(actionValue) ? actionValue : fallback.action;
   let targetTab = normalizeAgentTabName(candidate.target_tab) || fallback.target_tab || null;
   let runNow = Boolean(candidate.run_now);
+  const docxFiles = files.filter(file => file.ext === 'docx');
+  const hasCsv = files.some(file => file.ext === 'csv');
+  const redlineExts = new Set(['pdf', 'docx', 'doc', 'rtf', 'txt', 'htm', 'html', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'xls', 'xlsx', 'xlsm', 'xlsb']);
+  const redlineCandidates = files.filter(file => redlineExts.has(file.ext));
 
   const requiredExtensions = Array.isArray(candidate.required_extensions)
     ? candidate.required_extensions.map(x => String(x || '').toLowerCase().replace(/^\./, '')).filter(Boolean).slice(0, 6)
@@ -1209,6 +1355,35 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
       runNow = false;
       missingRequirements = ['Attach one or more PDF or Word files to run packet shell.'];
     }
+  } else if (action === 'run_redline') {
+    targetTab = 'redline';
+    if (redlineCandidates.length < 2) {
+      runNow = false;
+      missingRequirements = ['Attach two compatible documents to run redline automatically.'];
+    }
+  } else if (action === 'run_collate') {
+    targetTab = 'collate';
+    if (docxFiles.length < 2) {
+      runNow = false;
+      missingRequirements = ['Attach at least two DOCX files to run collate automatically.'];
+    }
+  } else if (action === 'run_update_checklist') {
+    targetTab = 'updatechecklist';
+    if (!(docxFiles.length > 0 && hasCsv)) {
+      runNow = false;
+      missingRequirements = ['Attach one checklist (.docx) and one email export (.csv).'];
+    }
+  } else if (action === 'run_generate_punchlist') {
+    targetTab = 'punchlist';
+    if (docxFiles.length < 1) {
+      runNow = false;
+      missingRequirements = ['Attach one checklist (.docx) to generate a punchlist.'];
+    }
+  } else if (action === 'run_email_ai_search') {
+    targetTab = 'email';
+  } else if (action === 'run_general_llm_chat') {
+    targetTab = null;
+    runNow = true;
   } else if (action === 'open_tab') {
     runNow = false;
     if (!targetTab) targetTab = fallback.target_tab || 'packets';
@@ -2152,6 +2327,7 @@ const LITERA_STYLE_REGISTRY_PATHS = [
 ];
 
 let literaRegistryStyleHintsCache = null;
+let literaCustomizationHintsCache = {};
 
 function hasAnyLiteraExecutable(dirPath) {
   return Object.values(LITERA_EXECUTABLES)
@@ -2323,6 +2499,240 @@ function getLiteraRegistryStyleHints() {
 
   literaRegistryStyleHintsCache = hints;
   return [...hints];
+}
+
+function decodeBasicXmlEntities(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+function readTextWithEncodingFallback(filePath) {
+  const buffer = fs.readFileSync(filePath);
+  if (!buffer || !buffer.length) return '';
+
+  if (buffer.length >= 2) {
+    const bom0 = buffer[0];
+    const bom1 = buffer[1];
+
+    // UTF-16 LE BOM
+    if (bom0 === 0xFF && bom1 === 0xFE) {
+      return buffer.toString('utf16le');
+    }
+
+    // UTF-16 BE BOM
+    if (bom0 === 0xFE && bom1 === 0xFF) {
+      const swapped = Buffer.allocUnsafe(buffer.length);
+      for (let i = 0; i < buffer.length - 1; i += 2) {
+        swapped[i] = buffer[i + 1];
+        swapped[i + 1] = buffer[i];
+      }
+      if (buffer.length % 2 === 1) {
+        swapped[buffer.length - 1] = buffer[buffer.length - 1];
+      }
+      return swapped.toString('utf16le');
+    }
+  }
+
+  const utf8 = buffer.toString('utf8');
+  if (utf8.includes('\u0000')) {
+    return buffer.toString('utf16le');
+  }
+  return utf8;
+}
+
+function parseCustomizationStringValues(xmlContent) {
+  const values = [];
+  const pattern = /<([A-Za-z0-9_:-]+)\b[^>]*\bSTRING_VALUE=(?:"([^"]*)"|'([^']*)')[^>]*\/?>/g;
+  let match = null;
+
+  while ((match = pattern.exec(String(xmlContent || ''))) !== null) {
+    const key = String(match[1] || '').trim();
+    const rawValue = match[2] !== undefined ? match[2] : (match[3] || '');
+    const value = decodeBasicXmlEntities(rawValue);
+    if (!key || !value) continue;
+    values.push({ key, value });
+  }
+
+  return values;
+}
+
+function shouldUseCustomizationKeyForType(rawKey, literaType) {
+  const key = String(rawKey || '').toLowerCase();
+  const hasPdfScope = key.includes('pdf');
+  const hasPptScope = key.includes('ppt') || key.includes('powerpoint');
+  const hasExcelScope = key.includes('excel') || key.includes('xls');
+
+  if (literaType === 'word') {
+    return !hasPdfScope && !hasPptScope && !hasExcelScope;
+  }
+
+  if (literaType === 'powerpoint') {
+    if (hasPdfScope || hasExcelScope) return false;
+    return hasPptScope || (!hasPptScope && !hasPdfScope && !hasExcelScope);
+  }
+
+  if (literaType === 'excel') {
+    if (hasPdfScope || hasPptScope) return false;
+    return hasExcelScope || (!hasExcelScope && !hasPdfScope && !hasPptScope);
+  }
+
+  return true;
+}
+
+function collectLiteraCustomizationFiles() {
+  const files = [];
+  const seen = new Set();
+  const roots = [process.env.LOCALAPPDATA, process.env.APPDATA]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const suffixes = [
+    ['Litera', 'Customize', 'customize.xml'],
+    ['Litera', 'Customize', 'PPTCustomize.xml'],
+    ['Litera', 'Customize', 'XLCustomize.xml'],
+    ['Litera', 'Customize', 'PDFCustomize.xml'],
+    ['Litera', 'Roaming_Customize', 'customize.xml'],
+    ['Litera', 'Roaming_Customize', 'PPTCustomize.xml'],
+    ['Litera', 'Roaming_Customize', 'XLCustomize.xml'],
+    ['Litera', 'Roaming_Customize', 'PDFCustomize.xml'],
+    ['Litera', 'Roaming_Customize', 'UserCustomizations.xml']
+  ];
+
+  function addIfFile(filePath) {
+    const resolved = path.resolve(filePath);
+    if (seen.has(resolved)) return;
+    try {
+      if (!fs.existsSync(resolved)) return;
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) return;
+      seen.add(resolved);
+      files.push(resolved);
+    } catch (_) {}
+  }
+
+  for (const root of roots) {
+    for (const suffix of suffixes) {
+      addIfFile(path.join(root, ...suffix));
+    }
+  }
+
+  return files;
+}
+
+function getLiteraCustomizationHints(literaType) {
+  if (process.platform !== 'win32') {
+    return { styleNames: [], stylePaths: [], styleDirs: [] };
+  }
+
+  const cacheKey = String(literaType || 'default').toLowerCase();
+  if (literaCustomizationHintsCache && literaCustomizationHintsCache[cacheKey]) {
+    const cached = literaCustomizationHintsCache[cacheKey];
+    return {
+      styleNames: [...cached.styleNames],
+      stylePaths: [...cached.stylePaths],
+      styleDirs: [...cached.styleDirs]
+    };
+  }
+
+  const styleNames = [];
+  const stylePaths = [];
+  const styleDirs = [];
+  const seenNames = new Set();
+  const seenPaths = new Set();
+
+  function addStyleName(rawValue) {
+    const value = normalizeLiteraStyleHint(rawValue);
+    if (!value || hasMonochromeStyleTerm(value)) return;
+    if (/[\\/]/.test(value) || /%[^%]+%/.test(value)) return;
+    const key = value.toLowerCase();
+    if (seenNames.has(key)) return;
+    seenNames.add(key);
+    styleNames.push(value);
+  }
+
+  function addStylePath(rawValue) {
+    const value = normalizeLiteraStyleHint(rawValue);
+    if (!value || hasMonochromeStyleTerm(value)) return;
+    const key = value.toLowerCase();
+    if (seenPaths.has(key)) return;
+    seenPaths.add(key);
+    stylePaths.push(value);
+  }
+
+  function addStyleDir(rawValue) {
+    const value = normalizeLiteraStyleHint(rawValue);
+    if (!value) return;
+    if (!/[\\/]/.test(value) && !/%[^%]+%/.test(value)) return;
+    const key = value.toLowerCase();
+    if (seenPaths.has(key)) return;
+    seenPaths.add(key);
+    styleDirs.push(value);
+  }
+
+  for (const filePath of collectLiteraCustomizationFiles()) {
+    let content = '';
+    try {
+      content = readTextWithEncodingFallback(filePath);
+    } catch (_) {
+      continue;
+    }
+    if (!content) continue;
+
+    for (const { key, value } of parseCustomizationStringValues(content)) {
+      if (!shouldUseCustomizationKeyForType(key, literaType)) continue;
+
+      const keyLower = String(key || '').toLowerCase();
+      const normalizedValue = normalizeLiteraStyleHint(value);
+      if (!normalizedValue) continue;
+
+      const hasStyleTerm = keyLower.includes('style');
+      const hasRenderTerm = keyLower.includes('render');
+      const isStyleRelated = hasStyleTerm || hasRenderTerm;
+      if (!isStyleRelated && !/\.(tpx|tpp|tpz)\b/i.test(normalizedValue)) continue;
+
+      const looksLikeStyleFile = /\.(tpx|tpp|tpz)\b/i.test(normalizedValue);
+      const looksLikePath = /[\\/]/.test(normalizedValue) || /%[^%]+%/.test(normalizedValue);
+      const isStyleDirHint =
+        keyLower.includes('renderstylespath') ||
+        keyLower.includes('renderingstylespath') ||
+        keyLower.includes('corporaterenderstylespath') ||
+        keyLower.includes('personalrenderstylespath') ||
+        keyLower.includes('userrenderstylespath');
+
+      if (looksLikeStyleFile) {
+        addStylePath(normalizedValue);
+      } else if (isStyleDirHint || (isStyleRelated && looksLikePath)) {
+        addStyleDir(normalizedValue);
+      } else if (isStyleRelated) {
+        addStyleName(normalizedValue);
+      }
+    }
+  }
+
+  // Always probe the known Litera rendering-style roots as portable defaults.
+  const fallbackStyleDirs = [
+    '%PROGRAMDATA%\\Litera\\Change-ProRenderingStyles',
+    '%PROGRAMDATA%\\Litera\\Change-ProRenderingStyles\\Corporative_Styles',
+    '%PROGRAMDATA%\\Litera\\Change-ProRenderingStyles\\Corporate_Styles',
+    '%PROGRAMDATA%\\Litera\\Compare\\Styles',
+    '%OneDrive%\\Documents\\LiteraRenderingStyles',
+    '%OneDrive%\\Documents\\LiteraRenderingStyles\\Corporative_Styles',
+    '%USERPROFILE%\\Documents\\LiteraRenderingStyles'
+  ];
+  for (const dir of fallbackStyleDirs) {
+    addStyleDir(dir);
+  }
+
+  const result = { styleNames, stylePaths, styleDirs };
+  literaCustomizationHintsCache[cacheKey] = {
+    styleNames: [...styleNames],
+    stylePaths: [...stylePaths],
+    styleDirs: [...styleDirs]
+  };
+  return result;
 }
 
 /**
@@ -2533,7 +2943,73 @@ function getPreferredLiteraColorStyleNames(literaType, preferredStyleName = null
   ];
 }
 
-function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
+function isWindowsAbsolutePath(filePath) {
+  const normalized = String(filePath || '').trim();
+  return /^[a-zA-Z]:[\\/]/.test(normalized) || /^\\\\[^\\]/.test(normalized);
+}
+
+function getLiteraStyleSearchDirectories(literaPath, extraStyleDirs = []) {
+  const dirs = [];
+  const seen = new Set();
+
+  function addDir(rawPath) {
+    const expanded = normalizeLiteraStyleHint(rawPath);
+    if (!expanded) return;
+    const normalized = expanded.replace(/[\\/]+/g, path.sep);
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    dirs.push(normalized);
+  }
+
+  addDir(literaPath);
+  addDir(path.dirname(literaPath));
+
+  const directSubdirs = [
+    'Styles',
+    'Style',
+    'Templates',
+    'Rendering Styles',
+    'Comparison Styles',
+    'Change-ProRenderingStyles',
+    'Corporative_Styles',
+    'Corporate_Styles'
+  ];
+  for (const subdir of directSubdirs) {
+    addDir(path.join(literaPath, subdir));
+  }
+
+  const windowsRoots = [process.env.ProgramData, process.env.APPDATA, process.env.LOCALAPPDATA, process.env.USERPROFILE].filter(Boolean);
+  const windowsSuffixes = [
+    ['Litera', 'Compare'],
+    ['Litera', 'Compare', 'Styles'],
+    ['Litera', 'Compare', 'Rendering Styles'],
+    ['Litera', 'Workshare', 'Compare'],
+    ['Litera', 'Workshare', 'Compare', 'Styles'],
+    ['Litera', 'Change-ProRenderingStyles'],
+    ['Litera', 'Change-ProRenderingStyles', 'Corporative_Styles'],
+    ['Litera', 'Change-ProRenderingStyles', 'Corporate_Styles'],
+    ['Documents', 'LiteraRenderingStyles'],
+    ['Documents', 'LiteraRenderingStyles', 'Corporative_Styles'],
+    ['OneDrive', 'Documents', 'LiteraRenderingStyles']
+  ];
+  for (const root of windowsRoots) {
+    for (const suffixParts of windowsSuffixes) {
+      addDir(path.join(root, ...suffixParts));
+    }
+  }
+
+  for (const extraDir of extraStyleDirs) {
+    addDir(extraDir);
+    addDir(path.join(extraDir, 'Corporative_Styles'));
+    addDir(path.join(extraDir, 'Corporate_Styles'));
+    addDir(path.join(extraDir, 'Styles'));
+  }
+
+  return dirs;
+}
+
+function resolveLiteraStylePath(renderingStyle, literaType, literaPath, options = {}) {
   if (!renderingStyle || typeof renderingStyle !== 'string') {
     return null;
   }
@@ -2556,10 +3032,33 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
     styleToken = `${raw.slice(0, -rawExt.length)}${expectedExt}`;
   }
 
-  const isAbsolute = path.isAbsolute(styleToken);
-  const candidates = isAbsolute
-    ? [styleToken]
-    : [path.join(literaPath, styleToken), styleToken];
+  const searchDirs = Array.isArray(options.searchDirs) ? options.searchDirs : [];
+  const allSearchDirs = getLiteraStyleSearchDirectories(literaPath, searchDirs);
+  const candidates = [];
+  const candidateSeen = new Set();
+
+  function addCandidate(filePath) {
+    const normalized = String(filePath || '').trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (candidateSeen.has(key)) return;
+    candidateSeen.add(key);
+    candidates.push(normalized);
+  }
+
+  const isAbsolute = path.isAbsolute(styleToken) || isWindowsAbsolutePath(styleToken);
+  if (isAbsolute) {
+    addCandidate(styleToken);
+  } else {
+    const fileNameOnly = path.basename(styleToken);
+    for (const dir of allSearchDirs) {
+      addCandidate(path.join(dir, styleToken));
+      if (fileNameOnly !== styleToken) {
+        addCandidate(path.join(dir, fileNameOnly));
+      }
+    }
+    addCandidate(styleToken);
+  }
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -2571,44 +3070,39 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
   return null;
 }
 
-function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleName = null) {
+function findPreferredLiteraColorStyle(literaType, literaPath, options = {}) {
   const expectedExt = getLiteraStyleExtension(literaType);
   if (!expectedExt) {
     return null;
   }
 
+  const preferredStyleName = String(options.preferredStyleName || '').trim() || null;
+  const styleDirs = Array.isArray(options.styleDirs) ? options.styleDirs : [];
+  const stylePaths = Array.isArray(options.stylePaths) ? options.stylePaths : [];
   const preferredFilenames = getPreferredLiteraColorStyleNames(literaType, preferredStyleName);
   const preferredSet = new Set(preferredFilenames.map(name => name.toLowerCase()));
   const preferredStyleBase = normalizeLiteraStyleName(path.parse(String(preferredStyleName || '')).name || preferredStyleName);
-  const preferKirkland = !preferredStyleBase || preferredStyleBase.includes('kirkland');
   const blockedTerms = ['black', 'mono', 'monochrome', 'grayscale', 'grey scale', 'gray scale', 'b&w'];
-
-  const startDirs = [literaPath, path.dirname(literaPath)];
-  const directSubdirs = ['Styles', 'Style', 'Templates', 'Rendering Styles', 'Comparison Styles'];
-  for (const subdir of directSubdirs) {
-    const candidate = path.join(literaPath, subdir);
-    if (fs.existsSync(candidate)) startDirs.push(candidate);
-  }
-
-  // Also look in known Windows data locations where style files are often stored.
-  const windowsRoots = [process.env.ProgramData, process.env.APPDATA, process.env.LOCALAPPDATA].filter(Boolean);
-  const windowsSuffixes = [
-    ['Litera', 'Compare'],
-    ['Litera', 'Compare', 'Styles'],
-    ['Litera', 'Compare', 'Rendering Styles'],
-    ['Litera', 'Workshare', 'Compare'],
-    ['Litera', 'Workshare', 'Compare', 'Styles']
-  ];
-  for (const root of windowsRoots) {
-    for (const suffixParts of windowsSuffixes) {
-      const candidate = path.join(root, ...suffixParts);
-      if (fs.existsSync(candidate)) startDirs.push(candidate);
-    }
-  }
+  const startDirs = getLiteraStyleSearchDirectories(literaPath, styleDirs);
 
   const styleFiles = [];
+  const styleFileSeen = new Set();
   const visited = new Set();
   const maxDepth = 8;
+
+  function addStyleFile(filePath) {
+    const normalized = String(filePath || '').trim();
+    if (!normalized) return;
+    if (path.extname(normalized).toLowerCase() !== expectedExt) return;
+    const key = normalized.toLowerCase();
+    if (styleFileSeen.has(key)) return;
+    styleFileSeen.add(key);
+    styleFiles.push(normalized);
+  }
+
+  for (const hintedStylePath of stylePaths) {
+    addStyleFile(resolveLiteraStylePath(hintedStylePath, literaType, literaPath, { searchDirs: styleDirs }));
+  }
 
   function walk(currentDir, depth) {
     if (depth > maxDepth || visited.has(currentDir)) return;
@@ -2634,7 +3128,7 @@ function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleNam
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (ext === expectedExt) {
-        styleFiles.push(fullPath);
+        addStyleFile(fullPath);
       }
     }
   }
@@ -2658,8 +3152,8 @@ function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleNam
     if (baseName.includes('color') || baseName.includes('colour')) score += 50;
     if (baseName.includes('default')) score += 20;
     if (baseName.includes('redline')) score += 10;
-    if (preferKirkland && baseName.includes('kirkland')) score += 300;
-    if (preferKirkland && baseName.includes('kirkland default')) score += 200;
+    if (baseName.includes('corporate') || baseName.includes('corporative')) score += 25;
+    if (preferredStyleBase && baseName.includes('kirkland')) score += 100;
     if (isBlocked) {
       score -= 1000;
     } else {
@@ -2697,6 +3191,8 @@ function getLiteraColorStyleCandidates(literaType, literaPath, options = {}) {
   const candidates = [];
   const seen = new Set();
   const styleHints = Array.isArray(options.styleHints) ? options.styleHints : [];
+  const styleDirs = Array.isArray(options.styleDirs) ? options.styleDirs : [];
+  const stylePaths = Array.isArray(options.stylePaths) ? options.stylePaths : [];
   const preferredStyleName = String(options.preferredStyleName || '').trim() || null;
   const expectedExt = getLiteraStyleExtension(literaType);
 
@@ -2738,20 +3234,29 @@ function getLiteraColorStyleCandidates(literaType, literaPath, options = {}) {
     }
   }
 
-  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleName));
+  for (const hintedStylePath of stylePaths) {
+    addCandidate(resolveLiteraStylePath(hintedStylePath, literaType, literaPath, { searchDirs: styleDirs }));
+    addStyleTokenCandidates(hintedStylePath);
+  }
+
+  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, {
+    preferredStyleName,
+    styleDirs,
+    stylePaths
+  }));
   if (preferredStyleName) {
-    addCandidate(resolveLiteraStylePath(preferredStyleName, literaType, literaPath));
+    addCandidate(resolveLiteraStylePath(preferredStyleName, literaType, literaPath, { searchDirs: styleDirs }));
     addStyleTokenCandidates(preferredStyleName);
   }
 
   for (const styleName of getPreferredLiteraColorStyleNames(literaType, preferredStyleName)) {
-    const resolved = resolveLiteraStylePath(styleName, literaType, literaPath);
+    const resolved = resolveLiteraStylePath(styleName, literaType, literaPath, { searchDirs: styleDirs });
     addCandidate(resolved);
     addStyleTokenCandidates(styleName);
   }
 
   for (const styleHint of styleHints) {
-    addCandidate(resolveLiteraStylePath(styleHint, literaType, literaPath));
+    addCandidate(resolveLiteraStylePath(styleHint, literaType, literaPath, { searchDirs: styleDirs }));
     addStyleTokenCandidates(styleHint);
   }
 
@@ -2790,11 +3295,23 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOpti
 
     const literaInstallPath = path.dirname(literaExe.exe);
     const hasStyleSupport = !!getLiteraStyleExtension(literaExe.type);
+    const customizationHints = hasStyleSupport
+      ? getLiteraCustomizationHints(literaExe.type)
+      : { styleNames: [], stylePaths: [], styleDirs: [] };
     const registryStyleHints = hasStyleSupport ? getLiteraRegistryStyleHints() : [];
-    const preferredStyleName = getPreferredStyleNameFromHints(registryStyleHints);
+    const allStyleHints = hasStyleSupport
+      ? [
+          ...customizationHints.styleNames,
+          ...customizationHints.stylePaths,
+          ...registryStyleHints
+        ]
+      : [];
+    const preferredStyleName = getPreferredStyleNameFromHints(allStyleHints);
     const styleCandidates = hasStyleSupport
       ? getLiteraColorStyleCandidates(literaExe.type, literaInstallPath, {
-          styleHints: registryStyleHints,
+          styleHints: allStyleHints,
+          styleDirs: customizationHints.styleDirs,
+          stylePaths: customizationHints.stylePaths,
           preferredStyleName
         })
       : [];
@@ -2805,6 +3322,13 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOpti
       console.log('Litera style candidates:', styleCandidates.map(s => path.basename(String(s))));
     } else if (getLiteraStyleExtension(literaExe.type)) {
       console.warn('No explicit Litera color style found; using Litera default rendering style.');
+    }
+    if (customizationHints.styleNames.length || customizationHints.styleDirs.length || customizationHints.stylePaths.length) {
+      console.log('Litera customization style hints:', {
+        names: customizationHints.styleNames.slice(0, 5),
+        files: customizationHints.stylePaths.slice(0, 5).map(value => path.basename(String(value))),
+        dirs: customizationHints.styleDirs.slice(0, 5)
+      });
     }
 
     if (normalizedOptions.output_format === 'pdf' && !normalizedOptions.change_pages_only && literaType && !['word', 'pdf'].includes(literaType)) {
@@ -3766,11 +4290,17 @@ ipcMain.handle('agent-plan', async (event, payload) => {
       : 'None';
 
     const plannerPrompt = `You are EmmaNeigh Agent Mode.
-Decide how to route the user command into one app action.
+Decide how to route the user command into one app action that EmmaNeigh can execute.
 
 Allowed actions:
 - run_signature_packets (requires PDF attachments)
 - run_packet_shell (requires PDF/DOC/DOCX attachments)
+- run_redline (requires two compatible document attachments)
+- run_collate (requires at least two DOCX attachments)
+- run_update_checklist (requires checklist DOCX + email CSV)
+- run_generate_punchlist (requires checklist DOCX)
+- run_email_ai_search (answers question using loaded emails or attached CSV email export)
+- run_general_llm_chat (general Q&A / drafting with the selected provider)
 - open_tab
 - no_op
 
@@ -3788,7 +4318,7 @@ ${attachmentSummary}
 
 Return JSON only with this exact shape:
 {
-  "action": "run_signature_packets|run_packet_shell|open_tab|no_op",
+  "action": "run_signature_packets|run_packet_shell|run_redline|run_collate|run_update_checklist|run_generate_punchlist|run_email_ai_search|run_general_llm_chat|open_tab|no_op",
   "target_tab": "packets|packetshell|execution|sigblocks|collate|redline|email|timetrack|updatechecklist|punchlist|null",
   "run_now": true,
   "required_extensions": ["pdf"],
@@ -3799,7 +4329,13 @@ Return JSON only with this exact shape:
 Rules:
 - If request is clearly for signature packets and PDFs are attached, choose run_signature_packets and run_now true.
 - If request is clearly for packet shell and compatible docs are attached, choose run_packet_shell and run_now true.
-- If required files are missing, choose open_tab with run_now false and include missing_requirements.
+- If request is a direct question about emails, choose run_email_ai_search.
+- If request asks to update checklist and required files are attached, choose run_update_checklist.
+- If request asks to generate punchlist and checklist is attached, choose run_generate_punchlist.
+- If request asks to redline/compare and two docs are attached, choose run_redline.
+- If request asks to collate/consolidate markups and DOCX files are attached, choose run_collate.
+- If request is a general question or drafting request that does not map to a specific workflow, choose run_general_llm_chat.
+- If required files are missing, choose open_tab with run_now false and list missing_requirements.
 - Never invent files or claim a workflow ran if run_now is false.
 - Output valid JSON only.`;
 
@@ -3873,6 +4409,70 @@ Rules:
       warning: `LLM connection failed: ${e.message}. Using local routing logic.`,
       diagnostics: fallbackDiagnostics
     };
+  }
+});
+
+ipcMain.handle('agent-general-ask', async (event, payload) => {
+  try {
+    const prompt = String(payload?.prompt || '').trim();
+    if (!prompt) {
+      return { success: false, error: 'Please enter a question for Agent Mode.' };
+    }
+
+    const aiContext = resolveAiCallContext({
+      apiKey: payload?.apiKey || getApiKey(),
+      requestedProvider: payload?.provider || getAIProvider()
+    });
+    const { apiKey, provider, providerName } = aiContext;
+
+    if (providerRequiresApiKey(provider) && !apiKey) {
+      return {
+        success: false,
+        error: `No API key configured. Please add your ${providerName} API key in Settings.`
+      };
+    }
+
+    const attachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
+    const attachmentSummary = attachments
+      .map(item => String(item?.name || path.basename(String(item?.path || '')) || '').trim())
+      .filter(Boolean)
+      .slice(0, 20);
+
+    const assistantPrompt = `You are EmmaNeigh Agent Mode.
+You can answer user questions and help draft workflow steps.
+When relevant, recommend the correct EmmaNeigh workflow (redline, collate, update checklist, punchlist, sig packets, packet shell, execution version, email search).
+Keep answers concise and practical.
+
+Attached file names (if any): ${attachmentSummary.length ? attachmentSummary.join(', ') : 'None'}
+
+User request:
+${prompt}`;
+
+    const aiResult = await callProviderPrompt({
+      provider,
+      apiKey,
+      prompt: assistantPrompt,
+      maxTokens: 1400
+    });
+
+    if (!aiResult.success) {
+      return {
+        success: false,
+        provider,
+        providerName,
+        error: aiResult.error || `Failed to get a response from ${providerName}.`
+      };
+    }
+
+    return {
+      success: true,
+      provider,
+      providerName,
+      modelUsed: aiResult.modelUsed || null,
+      text: String(aiResult.text || '').trim()
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
   }
 });
 
@@ -5206,11 +5806,63 @@ ipcMain.handle('submit-feedback', async (event, data) => {
     if (!request) {
       return { success: false, error: 'Feedback cannot be empty.' };
     }
-    logFeedbackToFirestore({ username, request });
-    return { success: true };
+    const entry = {
+      timestamp: new Date().toISOString(),
+      username,
+      request,
+      app_version: APP_VERSION,
+      machine_id: MACHINE_ID
+    };
+    const localSaved = appendFeedbackLogEntry(entry);
+    if (!localSaved) {
+      return { success: false, error: 'Failed to save feedback log locally.' };
+    }
+    logFeedbackToFirestore(entry);
+    return { success: true, path: feedbackLogPath };
   } catch (e) {
     return { success: false, error: e.message };
   }
+});
+
+ipcMain.handle('get-feedback', async (event, options = {}) => {
+  try {
+    const username = String(options?.username || '').trim();
+    if (!canAccessFeedbackLog(username)) {
+      return { success: false, error: 'Not authorized to view feedback log.', entries: [], path: feedbackLogPath };
+    }
+    const requestedLimit = Number(options?.limit);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(200, Math.floor(requestedLimit)))
+      : 25;
+    const entries = readFeedbackLogEntries().slice(0, limit);
+    return { success: true, entries, path: feedbackLogPath };
+  } catch (e) {
+    return { success: false, error: e.message, entries: [], path: feedbackLogPath };
+  }
+});
+
+ipcMain.handle('open-feedback-log', async (event, data = {}) => {
+  try {
+    const username = String(data?.username || '').trim();
+    if (!canAccessFeedbackLog(username)) {
+      return { success: false, error: 'Not authorized to open feedback log.' };
+    }
+    if (!fs.existsSync(feedbackLogPath)) {
+      fs.writeFileSync(feedbackLogPath, JSON.stringify([], null, 2), 'utf8');
+    }
+    const openResult = await shell.openPath(feedbackLogPath);
+    if (openResult) {
+      return { success: false, error: openResult, path: feedbackLogPath };
+    }
+    return { success: true, path: feedbackLogPath };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('can-access-feedback-log', async (event, data = {}) => {
+  const username = String(data?.username || '').trim();
+  return { success: true, allowed: canAccessFeedbackLog(username) };
 });
 
 // Get recent usage history

@@ -146,12 +146,29 @@ STATUS_COLUMN_PATTERNS = [
     r'^current\s*status',
 ]
 
+PARTY_COLUMN_PATTERNS = [
+    r'^party',
+    r'^responsible',
+    r'^owner',
+    r'^assignee',
+    r'^who',
+    r'^counsel',
+]
+
+NOTES_COLUMN_PATTERNS = [
+    r'^notes?',
+    r'^comments?',
+    r'^remarks?',
+    r'^details?',
+]
+
 
 def parse_email_csv(csv_path):
     """
     Parse Outlook email CSV export.
 
-    Returns list of email dicts with: subject, body, from, to, date
+    Returns list of email dicts with normalized metadata for LLM analysis:
+    subject, body, from, to, cc, date, attachments, has_attachments, searchable
     """
     try:
         # Try different encodings
@@ -167,13 +184,16 @@ def parse_email_csv(csv_path):
         # Normalize column names
         df.columns = df.columns.str.lower().str.strip()
 
-        # Map common column names
+        # Map common Outlook/Graph export column names.
         column_mapping = {
             'subject': ['subject', 'email subject', 'title'],
             'body': ['body', 'content', 'message', 'email body', 'notes'],
             'from': ['from', 'sender', 'from email', 'from address'],
             'to': ['to', 'recipient', 'to email', 'to address', 'recipients'],
-            'date': ['date', 'sent', 'received', 'date sent', 'date received', 'sent date'],
+            'cc': ['cc', 'cc recipients', 'cc list'],
+            'attachments': ['attachments', 'attachment', 'files', 'file names', 'attachment names'],
+            'has_attachments': ['has attachments', 'has attachment', 'attachments?', 'hasattachments'],
+            'date': ['date', 'sent', 'received', 'date sent', 'date received', 'sent date', 'received time', 'sent time'],
         }
 
         emails = []
@@ -182,13 +202,29 @@ def parse_email_csv(csv_path):
             for field, possible_cols in column_mapping.items():
                 for col in possible_cols:
                     if col in df.columns and pd.notna(row.get(col)):
-                        email[field] = str(row[col])
+                        raw_value = str(row[col]).strip()
+                        if field == 'has_attachments':
+                            email[field] = raw_value.lower() not in ('', '0', 'false', 'no', 'none', 'nan')
+                        else:
+                            email[field] = raw_value
                         break
                 else:
-                    email[field] = ''
+                    email[field] = False if field == 'has_attachments' else ''
 
-            # Combine subject and body for searching
-            email['searchable'] = f"{email.get('subject', '')} {email.get('body', '')}".lower()
+            if not email.get('has_attachments'):
+                attachment_text = str(email.get('attachments', '') or '').strip().lower()
+                if attachment_text and attachment_text not in ('none', 'false', 'no', 'n/a'):
+                    email['has_attachments'] = True
+
+            # Combine key fields for fallback lexical checks and lightweight heuristics.
+            email['searchable'] = " ".join([
+                str(email.get('subject', '') or ''),
+                str(email.get('body', '') or ''),
+                str(email.get('from', '') or ''),
+                str(email.get('to', '') or ''),
+                str(email.get('cc', '') or ''),
+                str(email.get('attachments', '') or ''),
+            ]).lower()
             emails.append(email)
 
         return emails
@@ -744,44 +780,137 @@ def call_provider_prompt_json(prompt, api_key, provider, model_name=None, provid
     return parsed
 
 
+def normalize_cell_text(value):
+    return re.sub(r'\s+', ' ', str(value or '')).strip()
+
+
+def infer_document_column(headers, rows):
+    """
+    Infer the document/title column when header names differ across templates/firms.
+    """
+    if not headers:
+        return -1
+
+    max_cols = max(len(headers), max((len(r) for r in rows), default=0))
+    best_col = -1
+    best_score = -1
+    blocked_terms = ('status', 'state', 'progress', 'date', 'sent', 'received')
+
+    for col_idx in range(max_cols):
+        header_value = normalize_cell_text(headers[col_idx] if col_idx < len(headers) else '')
+        header_lower = header_value.lower()
+        if any(term in header_lower for term in blocked_terms):
+            continue
+
+        non_empty = 0
+        rich_text = 0
+        penalties = 0
+        for row in rows[:150]:
+            cell = normalize_cell_text(row[col_idx] if col_idx < len(row) else '')
+            if not cell:
+                continue
+            non_empty += 1
+            if re.search(r'[a-zA-Z]', cell):
+                rich_text += 1
+            if len(cell) > 220 or re.fullmatch(r'[\d\W_]+', cell):
+                penalties += 1
+
+        score = (non_empty * 2) + (rich_text * 3) - (penalties * 2)
+        if score > best_score:
+            best_score = score
+            best_col = col_idx
+
+    return best_col
+
+
+def score_header_candidate(all_rows, header_idx):
+    headers = all_rows[header_idx]
+    non_empty_headers = [normalize_cell_text(h) for h in headers if normalize_cell_text(h)]
+    if len(non_empty_headers) < 2:
+        return None
+
+    doc_col = find_column_index(headers, DOCUMENT_COLUMN_PATTERNS)
+    status_col = find_column_index(headers, STATUS_COLUMN_PATTERNS)
+    party_col = find_column_index(headers, PARTY_COLUMN_PATTERNS)
+    notes_col = find_column_index(headers, NOTES_COLUMN_PATTERNS)
+
+    avg_header_len = (
+        sum(len(x) for x in non_empty_headers) / len(non_empty_headers)
+        if non_empty_headers else 0
+    )
+    looks_like_header_text = 1 if avg_header_len <= 40 else -5
+
+    # Score based on quality of the first rows after this candidate header.
+    data_rows = all_rows[header_idx + 1: header_idx + 11]
+    non_empty_data_rows = sum(1 for row in data_rows if any(normalize_cell_text(c) for c in row))
+
+    score = len(non_empty_headers) + (non_empty_data_rows * 3) + looks_like_header_text
+    if doc_col != -1:
+        score += 40
+    if status_col != -1:
+        score += 20
+    if party_col != -1:
+        score += 6
+    if notes_col != -1:
+        score += 4
+
+    return {
+        'score': score,
+        'header_idx': header_idx,
+        'doc_col': doc_col,
+        'status_col': status_col,
+    }
+
+
 def parse_checklist_table(doc):
     """
-    Parse the first table in a Word document as a checklist.
+    Parse a checklist-like table from the document, allowing flexible header position
+    and non-standard column names.
 
     Returns:
-        - headers: list of column headers
-        - rows: list of row data (each row is a list of cell values)
-        - table: the docx table object for modification
-        - doc_col_idx: index of document name column
-        - status_col_idx: index of status column
+        headers, rows, table, doc_col_idx, status_col_idx, data_row_start_idx
     """
     if not doc.tables:
-        return None, None, None, -1, -1
+        return None, None, None, -1, -1, -1
 
-    table = doc.tables[0]  # Use first table
+    best_candidate = None
 
-    # Extract all rows
-    all_rows = []
-    for row in table.rows:
-        row_data = [cell.text.strip() for cell in row.cells]
-        all_rows.append(row_data)
+    for table in doc.tables:
+        all_rows = []
+        for row in table.rows:
+            all_rows.append([normalize_cell_text(cell.text) for cell in row.cells])
 
-    if not all_rows:
-        return None, None, None, -1, -1
+        if not all_rows:
+            continue
 
-    headers = all_rows[0]
-    rows = all_rows[1:]
+        max_probe = min(6, len(all_rows) - 1)
+        for header_idx in range(max_probe + 1):
+            candidate = score_header_candidate(all_rows, header_idx)
+            if not candidate:
+                continue
+            candidate['all_rows'] = all_rows
+            candidate['table'] = table
+            if best_candidate is None or candidate['score'] > best_candidate['score']:
+                best_candidate = candidate
 
-    # Find document and status columns
-    doc_col_idx = find_column_index(headers, DOCUMENT_COLUMN_PATTERNS)
-    status_col_idx = find_column_index(headers, STATUS_COLUMN_PATTERNS)
+    if not best_candidate:
+        return None, None, None, -1, -1, -1
 
-    # If no status column found, we'll add one
+    table = best_candidate['table']
+    all_rows = best_candidate['all_rows']
+    header_idx = best_candidate['header_idx']
+    headers = all_rows[header_idx]
+    rows = [row for row in all_rows[header_idx + 1:] if any(normalize_cell_text(c) for c in row)]
+
+    doc_col_idx = best_candidate['doc_col']
+    if doc_col_idx == -1:
+        doc_col_idx = infer_document_column(headers, rows)
+
+    status_col_idx = best_candidate['status_col']
     if status_col_idx == -1:
-        # Look for a column we can repurpose or note that we need to add one
-        status_col_idx = len(headers)  # Will add new column
+        status_col_idx = len(headers)  # Signals "no existing status column".
 
-    return headers, rows, table, doc_col_idx, status_col_idx
+    return headers, rows, table, doc_col_idx, status_col_idx, header_idx + 1
 
 
 def detect_document_status(doc_name, emails):
@@ -829,6 +958,90 @@ def detect_document_status(doc_name, emails):
     return best_status, best_priority, matching_emails
 
 
+def _parse_row_id(value):
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def normalize_checklist_llm_matches(raw_payload):
+    """
+    Normalize LLM outputs into a stable structure:
+      {
+        "by_row": { row_id: {...} },
+        "by_doc": { canonical_doc_key: {...} }
+      }
+    Supports both legacy doc-name keyed responses and new row-id keyed payloads.
+    """
+    normalized = {"by_row": {}, "by_doc": {}}
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+
+    def coerce_match(entry, default_doc_name=None):
+        if not isinstance(entry, dict):
+            return None
+        status = normalize_llm_status(entry.get("status"))
+        if not status:
+            return None
+        raw_indices = entry.get("matching_email_indices", [])
+        email_indices = []
+        if isinstance(raw_indices, list):
+            for idx in raw_indices[:15]:
+                try:
+                    parsed_idx = int(idx)
+                except Exception:
+                    continue
+                if parsed_idx >= 0:
+                    email_indices.append(parsed_idx)
+
+        confidence = entry.get("confidence", 0.5)
+        try:
+            confidence = float(confidence)
+        except Exception:
+            confidence = 0.5
+        confidence = max(0.0, min(confidence, 1.0))
+
+        doc_name = str(entry.get("document_name") or default_doc_name or "").strip()
+        row_id = _parse_row_id(entry.get("row_id"))
+
+        return {
+            "row_id": row_id,
+            "document_name": doc_name,
+            "status": status,
+            "matching_email_indices": email_indices,
+            "confidence": confidence,
+            "reasoning": str(entry.get("reasoning") or "").strip(),
+        }
+
+    # New format: { "matches": [ ... ] }
+    if isinstance(payload.get("matches"), list):
+        for item in payload.get("matches", []):
+            parsed = coerce_match(item)
+            if not parsed:
+                continue
+            row_id = parsed.get("row_id")
+            doc_name = parsed.get("document_name", "")
+            if row_id is not None:
+                normalized["by_row"][row_id] = parsed
+            if doc_name:
+                normalized["by_doc"][canonical_doc_key(doc_name)] = parsed
+
+    # Legacy format: { "Document Name": { ... } }
+    for key, value in payload.items():
+        if key == "matches":
+            continue
+        parsed = coerce_match(value, default_doc_name=key)
+        if not parsed:
+            continue
+        row_id = parsed.get("row_id")
+        doc_name = parsed.get("document_name", "") or str(key)
+        if row_id is not None:
+            normalized["by_row"][row_id] = parsed
+        normalized["by_doc"][canonical_doc_key(doc_name)] = parsed
+
+    return normalized
+
+
 def match_documents_with_llm(
     checklist_items,
     emails,
@@ -838,70 +1051,90 @@ def match_documents_with_llm(
     provider_base_url=None,
 ):
     """
-    Use the selected LLM provider to match emails to documents and infer status.
-
-    Args:
-        checklist_items: List of document names from checklist
-        emails: List of email dicts with subject, body, from, date
-        api_key: Provider API key
-        provider: LLM provider (anthropic/openai/harvey)
-        model_name: Optional model override
-        provider_base_url: Optional provider API base URL
-
-    Returns:
-        Dict mapping document_name to {status, matching_emails, confidence}
+    Use the selected LLM provider to match checklist rows to email activity and infer status.
     """
     if provider_requires_api_key(provider) and not api_key:
         raise ValueError("API key is required for checklist LLM analysis.")
 
-    # Prepare email context (limit and truncate for token efficiency)
+    # Prepare richer email context so the model can infer "sent", "under review", etc.
     email_context = []
-    for i, email in enumerate(emails[:100]):
+    for i, email in enumerate(emails[:180]):
         email_context.append({
             "index": i,
-            "from": email.get("from", "")[:100],
-            "subject": email.get("subject", "")[:200],
-            "body_preview": email.get("body", "")[:200],
-            "date": email.get("date_received") or email.get("date_sent") or email.get("date") or ""
+            "from": str(email.get("from", "") or "")[:160],
+            "to": str(email.get("to", "") or "")[:220],
+            "cc": str(email.get("cc", "") or "")[:220],
+            "subject": str(email.get("subject", "") or "")[:260],
+            "attachments": str(email.get("attachments", "") or "")[:260],
+            "has_attachments": bool(email.get("has_attachments", False)),
+            "date": email.get("date_received") or email.get("date_sent") or email.get("date") or "",
+            "body_preview": str(email.get("body", "") or "")[:700],
         })
 
-    prompt = f"""You are analyzing emails to update a transaction document checklist.
+    checklist_context = []
+    for item in checklist_items[:220]:
+        checklist_context.append({
+            "row_id": item.get("row_id"),
+            "document_name": item.get("document_name", ""),
+            "current_status": item.get("current_status", ""),
+            "row_context": item.get("row_context", ""),
+        })
 
-For each document in the checklist, find relevant emails and determine the current status.
+    prompt = f"""You are a legal transaction assistant updating a checklist from email evidence.
 
-CHECKLIST DOCUMENTS:
-{json.dumps(checklist_items, indent=2)}
+Your task is to determine whether each checklist row shows real document activity in email and, if so, infer the best current status.
 
-RECENT EMAILS:
+CHECKLIST ROWS:
+{json.dumps(checklist_context, indent=2)}
+
+EMAILS:
 {json.dumps(email_context, indent=2)}
 
-For each document that has relevant email activity, determine its status from these options:
-- "Pending Draft" (not started, needs drafting)
-- "Draft Circulated" (initial draft sent out)
-- "With Opposing Counsel" (sent to counterparty for review)
-- "Agreed Form" (parties have agreed on the form)
-- "Execution Version" (ready for signature)
-- "Executed" (fully signed)
+Status options (use exactly one):
+- "Pending Draft"
+- "Draft Circulated"
+- "With Opposing Counsel"
+- "Agreed Form"
+- "Execution Version"
+- "Executed"
 
-Return a JSON object mapping each document name (only those with email activity) to:
+Interpretation guidance:
+- If a draft or markup was sent but external review is not clear: "Draft Circulated".
+- If it was sent to counterparty/opposing counsel/client for comments/review: "With Opposing Counsel".
+- If form is settled/final with no material open comments: "Agreed Form".
+- If ready for signatures or signature pages circulated: "Execution Version".
+- If fully signed / executed copies circulated: "Executed".
+
+Matching guidance:
+- Match by semantic meaning, abbreviations, related phrasing, and attachment names.
+- Do NOT require exact column/header text matches.
+- Ignore unrelated admin emails.
+
+Return JSON only in this exact shape:
 {{
-    "Document Name": {{
-        "status": "Execution Version",
-        "matching_email_indices": [2, 15],
-        "confidence": 0.85,
-        "reasoning": "Email #2 mentions execution version is ready..."
+  "matches": [
+    {{
+      "row_id": 12,
+      "document_name": "Credit Agreement",
+      "status": "With Opposing Counsel",
+      "matching_email_indices": [3, 9],
+      "confidence": 0.82,
+      "reasoning": "Email 3 sends draft to counterparty counsel for review."
     }}
+  ]
 }}
 
-ONLY return the JSON object, no other text."""
+Include only rows with meaningful evidence from email. Do not include rows with no evidence.
+"""
 
-    return call_provider_prompt_json(
+    parsed = call_provider_prompt_json(
         prompt,
         api_key,
         provider,
         model_name=model_name,
         provider_base_url=provider_base_url,
     )
+    return normalize_checklist_llm_matches(parsed)
 
 
 def update_checklist(
@@ -954,7 +1187,7 @@ def update_checklist(
         doc = Document(checklist_path)
 
         # Parse the checklist table
-        headers, rows, table, doc_col_idx, status_col_idx = parse_checklist_table(doc)
+        headers, rows, table, doc_col_idx, status_col_idx, data_row_start_idx = parse_checklist_table(doc)
 
         if table is None:
             result['error'] = 'No table found in checklist document'
@@ -969,7 +1202,8 @@ def update_checklist(
 
         if needs_new_status_col:
             # Add "Status" header to first row
-            header_row = table.rows[0]
+            header_row_idx = data_row_start_idx - 1 if data_row_start_idx > 0 else 0
+            header_row = table.rows[header_row_idx]
             # Add new cell (this is complex in python-docx, so we'll update existing empty column if available)
             # For now, we'll look for an empty column or skip
             for i, header in enumerate(headers):
@@ -983,23 +1217,48 @@ def update_checklist(
                 result['error'] = 'No status column found and cannot add new column. Please add a Status column to your checklist.'
                 return result
 
-        # Collect all document names for LLM matching
-        doc_names = []
-        for row_data in rows:
-            if doc_col_idx >= len(row_data):
+        # Build checklist row payloads for semantic LLM matching.
+        checklist_items = []
+        for row_idx, row_data in enumerate(rows):
+            if doc_col_idx < 0 or doc_col_idx >= len(row_data):
                 continue
-            doc_name = row_data[doc_col_idx]
-            if doc_name.strip():
-                doc_names.append(doc_name)
+            doc_name = normalize_cell_text(row_data[doc_col_idx])
+            if not doc_name:
+                continue
 
-        if not doc_names:
+            current_status = ''
+            if status_col_idx < len(row_data):
+                current_status = normalize_cell_text(row_data[status_col_idx])
+
+            context_parts = []
+            for col_idx, cell_value in enumerate(row_data):
+                if col_idx in (doc_col_idx, status_col_idx):
+                    continue
+                cleaned = normalize_cell_text(cell_value)
+                if not cleaned:
+                    continue
+                header_label = normalize_cell_text(headers[col_idx] if col_idx < len(headers) else f"Column {col_idx + 1}")
+                if header_label:
+                    context_parts.append(f"{header_label}: {cleaned}")
+                else:
+                    context_parts.append(cleaned)
+
+            checklist_items.append({
+                'row_id': data_row_start_idx + row_idx,
+                'document_name': doc_name,
+                'current_status': current_status,
+                'row_context': ' | '.join(context_parts[:8]),
+                'row_data': row_data,
+            })
+
+        if not checklist_items:
             result['error'] = 'No checklist document names found to analyze.'
             return result
 
         # LLM matching is mandatory for checklist updates in this workflow.
         try:
             llm_matches = match_documents_with_llm(
-                doc_names,
+                checklist_items,
                 emails,
                 api_key,
                 provider=provider,
@@ -1009,47 +1268,41 @@ def update_checklist(
         except Exception as e:
             result['error'] = f'LLM checklist analysis failed: {e}'
             return result
-        llm_matches_by_key = {
-            canonical_doc_key(doc_name): match_data
-            for doc_name, match_data in (llm_matches or {}).items()
-        }
 
         # Process each row
         items_updated = 0
         details = []
 
-        for row_idx, row_data in enumerate(rows):
-            if doc_col_idx >= len(row_data):
-                continue
+        for item in checklist_items:
+            doc_name = item['document_name']
+            row_data = item.get('row_data', [])
+            row_id = item.get('row_id')
 
-            doc_name = row_data[doc_col_idx]
-            if not doc_name.strip():
-                continue
-
-            # Get current status
-            current_status = ''
-            if status_col_idx < len(row_data):
-                current_status = row_data[status_col_idx]
-
-            # LLM-driven match only; no regex/rules fallback in this workflow.
+            current_status = item.get('current_status', '')
             new_status = None
             matching_emails = []
 
-            llm_result = llm_matches.get(doc_name) if llm_matches else None
-            if not llm_result:
-                llm_result = llm_matches_by_key.get(canonical_doc_key(doc_name))
+            llm_result = None
+            if isinstance(llm_matches, dict):
+                by_row = llm_matches.get('by_row', {})
+                by_doc = llm_matches.get('by_doc', {})
+                llm_result = by_row.get(row_id) if isinstance(by_row, dict) else None
+                if not llm_result and isinstance(by_doc, dict):
+                    llm_result = by_doc.get(canonical_doc_key(doc_name))
 
             if llm_result:
                 new_status = normalize_llm_status(llm_result.get('status'))
                 # Get matching email subjects from indices
                 email_indices = llm_result.get('matching_email_indices', [])
                 for idx in email_indices[:3]:
-                    if idx < len(emails):
+                    if 0 <= idx < len(emails):
                         matching_emails.append(emails[idx].get('subject', 'No subject'))
 
             if new_status and new_status != current_status:
                 # Update the cell in the table
-                table_row = table.rows[row_idx + 1]  # +1 to skip header
+                if row_id is None or row_id < 0 or row_id >= len(table.rows):
+                    continue
+                table_row = table.rows[row_id]
                 if status_col_idx < len(table_row.cells):
                     cell = table_row.cells[status_col_idx]
 
@@ -1064,6 +1317,7 @@ def update_checklist(
                         'document': doc_name,
                         'old_status': current_status,
                         'new_status': new_status,
+                        'confidence': llm_result.get('confidence') if isinstance(llm_result, dict) else None,
                         'emails': matching_emails[:3]  # Limit to 3 examples
                     })
 
@@ -1082,7 +1336,7 @@ def update_checklist(
         result['items_updated'] = items_updated
         result['details'] = details
         result['emails_processed'] = len(emails)
-        result['llm_documents_with_activity'] = len(llm_matches or {})
+        result['llm_documents_with_activity'] = len((llm_matches or {}).get('by_row', {}))
 
         return result
 

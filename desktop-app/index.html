@@ -1829,6 +1829,42 @@
       margin-top: 6px;
     }
 
+    .feedback-recent {
+      margin-top: 8px;
+      border-top: 1px solid #2f2f2f;
+      padding-top: 8px;
+      max-height: 160px;
+      overflow-y: auto;
+    }
+
+    .feedback-recent-empty {
+      font-size: 11px;
+      color: #777;
+    }
+
+    .feedback-recent-item {
+      padding: 6px 0;
+      border-bottom: 1px solid #1f1f1f;
+    }
+
+    .feedback-recent-item:last-child {
+      border-bottom: none;
+    }
+
+    .feedback-recent-meta {
+      font-size: 10px;
+      color: #9a9a9a;
+      margin-bottom: 4px;
+    }
+
+    .feedback-recent-text {
+      font-size: 11px;
+      color: #ddd;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     .history-btn {
       background: transparent;
       border: 1px solid #333;
@@ -3537,10 +3573,12 @@
               <div style="font-size: 12px; color: #ccc; font-weight: 600;">Send Feedback</div>
               <textarea id="feedbackInput" placeholder="Share your request, issue, or idea..."></textarea>
               <div class="feedback-actions">
+                <button class="btn btn-secondary" id="feedbackViewBtn" style="margin-top: 0; padding: 6px 10px; font-size: 12px;">View Log</button>
                 <button class="btn btn-secondary" id="feedbackCancelBtn" style="margin-top: 0; padding: 6px 10px; font-size: 12px;">Cancel</button>
                 <button class="btn btn-primary" id="feedbackSubmitBtn" style="margin-top: 0; padding: 6px 10px; font-size: 12px;">Send</button>
               </div>
               <div class="feedback-status" id="feedbackStatus"></div>
+              <div class="feedback-recent" id="feedbackRecent"></div>
             </div>
           </div>
           <button class="history-btn" id="historyBtn" title="View History">
@@ -5696,6 +5734,188 @@
     // Current user state
     let currentUser = null;  // { id, username, displayName, isGuest }
 
+    // ========== FEEDBACK WIDGET ==========
+    const feedbackWidget = document.getElementById('feedbackWidget');
+    const feedbackBtn = document.getElementById('feedbackBtn');
+    const feedbackPopover = document.getElementById('feedbackPopover');
+    const feedbackInput = document.getElementById('feedbackInput');
+    const feedbackStatus = document.getElementById('feedbackStatus');
+    const feedbackRecent = document.getElementById('feedbackRecent');
+    const feedbackSubmitBtn = document.getElementById('feedbackSubmitBtn');
+    const feedbackCancelBtn = document.getElementById('feedbackCancelBtn');
+    const feedbackViewBtn = document.getElementById('feedbackViewBtn');
+    let feedbackCanViewLogs = false;
+
+    function escapeFeedbackHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function setFeedbackStatus(message, isError = false) {
+      if (!feedbackStatus) return;
+      feedbackStatus.textContent = message || '';
+      feedbackStatus.style.color = isError ? '#f87171' : '#888';
+    }
+
+    function getFeedbackUsername() {
+      if (currentUser && currentUser.username) return currentUser.username;
+      return '';
+    }
+
+    function renderFeedbackRecent(entries) {
+      if (!feedbackRecent) return;
+      if (!Array.isArray(entries) || entries.length === 0) {
+        feedbackRecent.innerHTML = '<div class="feedback-recent-empty">No feedback submitted yet.</div>';
+        return;
+      }
+
+      feedbackRecent.innerHTML = entries.slice(0, 8).map((entry) => {
+        const timestamp = entry && entry.timestamp ? new Date(entry.timestamp) : null;
+        const when = timestamp && !Number.isNaN(timestamp.valueOf())
+          ? timestamp.toLocaleString()
+          : 'Unknown time';
+        const who = escapeFeedbackHtml(entry && entry.username ? entry.username : 'unknown');
+        const text = escapeFeedbackHtml(entry && entry.request ? entry.request : '');
+        return `
+          <div class="feedback-recent-item">
+            <div class="feedback-recent-meta">${who} • ${when}</div>
+            <div class="feedback-recent-text">${text}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function loadRecentFeedback() {
+      if (!feedbackCanViewLogs) {
+        renderFeedbackRecent([]);
+        return;
+      }
+      try {
+        const result = await ipcRenderer.invoke('get-feedback', {
+          username: getFeedbackUsername(),
+          limit: 8
+        });
+        if (!result || !result.success) {
+          renderFeedbackRecent([]);
+          return;
+        }
+        renderFeedbackRecent(result.entries || []);
+      } catch (e) {
+        renderFeedbackRecent([]);
+      }
+    }
+
+    function closeFeedbackPopover(clearStatus = true) {
+      feedbackPopover.classList.remove('visible');
+      if (clearStatus) setFeedbackStatus('');
+    }
+
+    async function refreshFeedbackAccess() {
+      const username = getFeedbackUsername();
+      try {
+        const result = await ipcRenderer.invoke('can-access-feedback-log', { username });
+        feedbackCanViewLogs = !!(result && result.success && result.allowed);
+      } catch (e) {
+        feedbackCanViewLogs = false;
+      }
+
+      if (feedbackViewBtn) {
+        feedbackViewBtn.style.display = feedbackCanViewLogs ? 'inline-flex' : 'none';
+      }
+      if (feedbackRecent) {
+        feedbackRecent.style.display = feedbackCanViewLogs ? 'block' : 'none';
+      }
+    }
+
+    async function submitFeedbackRequest() {
+      const username = getFeedbackUsername();
+      const request = String(feedbackInput.value || '').trim();
+
+      if (!username) {
+        setFeedbackStatus('Please sign in before sending feedback.', true);
+        return;
+      }
+      if (!request) {
+        setFeedbackStatus('Please enter feedback before sending.', true);
+        return;
+      }
+
+      feedbackSubmitBtn.disabled = true;
+      setFeedbackStatus('Saving feedback...');
+      try {
+        const result = await ipcRenderer.invoke('submit-feedback', { username, request });
+        if (!result || !result.success) {
+          setFeedbackStatus(result?.error || 'Failed to save feedback.', true);
+          return;
+        }
+        feedbackInput.value = '';
+        setFeedbackStatus('Feedback saved.');
+        await loadRecentFeedback();
+      } catch (e) {
+        setFeedbackStatus(`Failed to save feedback: ${e.message}`, true);
+      } finally {
+        feedbackSubmitBtn.disabled = false;
+      }
+    }
+
+    feedbackBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (feedbackPopover.classList.contains('visible')) {
+        closeFeedbackPopover();
+        return;
+      }
+      feedbackPopover.classList.add('visible');
+      setFeedbackStatus('');
+      await refreshFeedbackAccess();
+      if (feedbackCanViewLogs) {
+        await loadRecentFeedback();
+      }
+      feedbackInput.focus();
+    });
+
+    feedbackCancelBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      closeFeedbackPopover();
+    });
+
+    feedbackSubmitBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      submitFeedbackRequest();
+    });
+
+    feedbackInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        submitFeedbackRequest();
+      }
+    });
+
+    feedbackViewBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const result = await ipcRenderer.invoke('open-feedback-log', { username: getFeedbackUsername() });
+      if (!result || !result.success) {
+        setFeedbackStatus(result?.error || 'Failed to open feedback log.', true);
+        return;
+      }
+      setFeedbackStatus(`Opened feedback log: ${result.path}`);
+    });
+
+    feedbackPopover.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (feedbackWidget && !feedbackWidget.contains(e.target)) {
+        closeFeedbackPopover();
+      }
+    });
+    refreshFeedbackAccess();
+
     // Tab switching
     const loginTabs = document.querySelectorAll('.login-tab');
     loginTabs.forEach(tab => {
@@ -5765,6 +5985,7 @@
             localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
             userName.textContent = result.user.displayName || result.user.username;
             loginModal.classList.add('hidden');
+            refreshFeedbackAccess();
             // Load user's API key
             loadUserApiKey();
           }
@@ -5796,6 +6017,7 @@
           localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
           userName.textContent = result.user.displayName || result.user.username;
           loginModal.classList.add('hidden');
+          refreshFeedbackAccess();
           pending2FAUserId = null;
           pending2FAEmail = null;
           // Load user's API key
@@ -5936,6 +6158,7 @@
               localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: loginResult.user.id }));
               userName.textContent = loginResult.user.displayName || loginResult.user.username;
               loginModal.classList.add('hidden');
+              refreshFeedbackAccess();
             }
           }
         } else {
@@ -5980,6 +6203,7 @@
             currentUser = { ...result.user, isGuest: false };
             userName.textContent = result.user.displayName || result.user.username;
             loginModal.classList.add('hidden');
+            refreshFeedbackAccess();
             loadUserApiKey();
             return;
           }
@@ -5989,6 +6213,7 @@
       }
       // No valid session - show login modal
       userName.textContent = 'Sign In Required';
+      refreshFeedbackAccess();
     }
 
     // Initialize session check
@@ -5999,6 +6224,7 @@
       // Clear session and show login modal
       localStorage.removeItem('emmaneigh_session');
       currentUser = null;
+      refreshFeedbackAccess();
       loginModal.classList.remove('hidden');
       // Reset forms
       resetLoginForms();
@@ -6384,10 +6610,13 @@
       setAgentStatus(`${agentAttachments.length} file(s) attached for Agent Mode.`);
     }
 
-    async function executeAgentPlan(plan) {
+    async function executeAgentPlan(plan, originalPrompt) {
       const action = String(plan && plan.action ? plan.action : 'no_op');
       const targetTab = plan && plan.target_tab ? String(plan.target_tab) : null;
       const runNow = !!(plan && plan.run_now);
+      const promptText = String(originalPrompt || '').trim();
+
+      const redlineExts = new Set(['pdf', 'docx', 'doc', 'rtf', 'txt', 'htm', 'html', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'xls', 'xlsx', 'xlsm', 'xlsb']);
 
       if (targetTab && AGENT_TAB_LABELS[targetTab]) {
         switchTab(targetTab);
@@ -6430,6 +6659,121 @@
         return { message: `Started Create Packet Shell for ${shellInputPaths.length} file(s).` };
       }
 
+      if (action === 'run_redline') {
+        const comparableFiles = agentAttachments
+          .filter(file => redlineExts.has(file.ext))
+          .map(file => file.path);
+        if (comparableFiles.length < 2) {
+          return { message: 'Attach two compatible documents to run redline automatically.' };
+        }
+        resetRedlineState();
+        setRedlineOriginalFile(comparableFiles[0]);
+        setRedlineModifiedFile(comparableFiles[1]);
+        redlineBtn.click();
+        return {
+          message: `Started Redline Documents using ${getAgentAttachmentName(comparableFiles[0])} and ${getAgentAttachmentName(comparableFiles[1])}.`
+        };
+      }
+
+      if (action === 'run_collate') {
+        const docxPaths = agentAttachments
+          .filter(file => file.ext === 'docx')
+          .map(file => file.path);
+        if (docxPaths.length < 2) {
+          return { message: 'Attach at least two DOCX files to run collate automatically.' };
+        }
+        resetCollateState();
+        baseDocPath = docxPaths[0];
+        commentedDocPaths = docxPaths.slice(1);
+        updateBaseDocDisplay();
+        updateCommentedDocsList();
+        updateCollateButton();
+        collateBtn.click();
+        return {
+          message: `Started Collate Documents with base ${getAgentAttachmentName(baseDocPath)} and ${commentedDocPaths.length} commented file(s).`
+        };
+      }
+
+      if (action === 'run_update_checklist') {
+        const checklistFile = agentAttachments.find(file => file.ext === 'docx');
+        const emailFile = agentAttachments.find(file => file.ext === 'csv');
+        if (!checklistFile || !emailFile) {
+          return { message: 'Attach one checklist DOCX and one email CSV to run Update Checklist.' };
+        }
+        resetChecklistState();
+        checklistDocPath = checklistFile.path;
+        checklistEmailPath = emailFile.path;
+        checklistDocSelected.textContent = checklistFile.name;
+        checklistEmailSelected.textContent = emailFile.name;
+        checklistDocDrop.classList.add('selected');
+        checklistEmailDrop.classList.add('selected');
+        clearChecklistDoc.classList.add('visible');
+        clearChecklistEmail.classList.add('visible');
+        updateChecklistButton();
+        updateChecklistBtn.click();
+        return { message: `Started Update Checklist using ${checklistFile.name} and ${emailFile.name}.` };
+      }
+
+      if (action === 'run_generate_punchlist') {
+        const checklistFile = agentAttachments.find(file => file.ext === 'docx');
+        if (!checklistFile) {
+          return { message: 'Attach a checklist DOCX to generate a punchlist.' };
+        }
+        resetPunchlistState();
+        punchlistChecklistPath = checklistFile.path;
+        punchlistChecklistSelected.textContent = checklistFile.name;
+        punchlistChecklistDrop.classList.add('selected');
+        clearPunchlistChecklist.classList.add('visible');
+        updatePunchlistButton();
+        generatePunchlistBtn.click();
+        return { message: `Started Generate Punchlist using ${checklistFile.name}.` };
+      }
+
+      if (action === 'run_email_ai_search') {
+        const csvAttachment = agentAttachments.find(file => file.ext === 'csv');
+        if ((!emailData || emailData.length === 0) && csvAttachment) {
+          await processEmailCsv(csvAttachment.path);
+        }
+        if (!emailData || emailData.length === 0) {
+          return { message: 'Upload an email CSV (or attach one here) so Agent Mode can answer email questions.' };
+        }
+        const query = promptText || 'Summarize key takeaways from the loaded emails.';
+        let provider = 'ollama';
+        try {
+          const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
+          provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'ollama');
+        } catch (_) {}
+
+        const aiResult = await ipcRenderer.invoke('nl-search-emails', {
+          emails: emailData,
+          query,
+          provider
+        });
+        if (!aiResult || !aiResult.success) {
+          return {
+            message: `Email AI search failed: ${(aiResult && aiResult.error) || 'Unknown error'}`
+          };
+        }
+        const relevance = Array.isArray(aiResult.relevant_email_indices) ? aiResult.relevant_email_indices.length : 0;
+        const answer = String(aiResult.answer || '').trim() || 'No answer returned.';
+        return { message: `${answer}${relevance ? `\n\nReferenced emails: ${relevance}` : ''}` };
+      }
+
+      if (action === 'run_general_llm_chat') {
+        const askResult = await ipcRenderer.invoke('agent-general-ask', {
+          prompt: promptText,
+          attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
+        });
+        if (!askResult || !askResult.success) {
+          return {
+            message: `Agent LLM request failed: ${(askResult && askResult.error) || 'Unknown error'}`
+          };
+        }
+        return {
+          message: String(askResult.text || '').trim() || 'No response returned by the model.'
+        };
+      }
+
       return { message: plan && plan.user_message ? plan.user_message : 'Command routed.' };
     }
 
@@ -6459,7 +6803,7 @@
         }
 
         const plan = result.plan || {};
-        const execution = await executeAgentPlan(plan);
+        const execution = await executeAgentPlan(plan, prompt);
         const responseParts = [];
         if (execution && execution.message) responseParts.push(execution.message);
         if (plan.user_message && plan.user_message !== execution.message) responseParts.push(plan.user_message);
