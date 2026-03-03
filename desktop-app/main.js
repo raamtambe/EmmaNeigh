@@ -279,10 +279,10 @@ function getApiKey() {
       }
     }
     // Fallback to environment variable
-    return process.env.ANTHROPIC_API_KEY || null;
+    return process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.HARVEY_API_KEY || null;
   } catch (e) {
     console.error('Failed to get API key:', e);
-    return process.env.ANTHROPIC_API_KEY || null;
+    return process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.HARVEY_API_KEY || null;
   }
 }
 
@@ -400,6 +400,23 @@ function normalizeAIProvider(provider) {
   if (value === 'claude') return 'anthropic';
   if (value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
   return DEFAULT_AI_PROVIDER;
+}
+
+function inferProviderFromApiKey(apiKey) {
+  const value = String(apiKey || '').trim().toLowerCase();
+  if (!value) return null;
+
+  if (value.startsWith('sk-ant-')) return 'anthropic';
+  if (value.startsWith('sk-proj-') || value.startsWith('sk-') || value.startsWith('sess-')) return 'openai';
+  if (value.startsWith('harvey_') || value.startsWith('hv_')) return 'harvey';
+
+  return null;
+}
+
+function resolveProviderForApiKey(provider, apiKey) {
+  const preferred = normalizeAIProvider(provider);
+  const inferred = inferProviderFromApiKey(apiKey);
+  return inferred || preferred;
 }
 
 function getAIProviderDisplayName(provider) {
@@ -674,7 +691,7 @@ async function callHarveyPrompt({ apiKey, prompt, maxTokens }) {
 }
 
 async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
-  const normalized = normalizeAIProvider(provider);
+  const normalized = resolveProviderForApiKey(provider, apiKey);
   if (normalized === 'openai') {
     return callOpenAIPrompt({ apiKey, prompt, maxTokens });
   }
@@ -1060,6 +1077,36 @@ ipcMain.handle('save-zip', async (event, zipPath, suggestedName) => {
 
   if (filePath) {
     fs.copyFileSync(zipPath, filePath);
+    return filePath;
+  }
+  return null;
+});
+
+// Save a single file to a user-selected location
+ipcMain.handle('save-file', async (event, sourcePath, suggestedName) => {
+  if (!sourcePath || !fs.existsSync(sourcePath)) {
+    return null;
+  }
+
+  const sourceExt = path.extname(sourcePath);
+  const sourceExtNoDot = sourceExt.replace('.', '').toLowerCase();
+  const defaultNameBase = suggestedName || path.basename(sourcePath);
+  const defaultName = path.extname(defaultNameBase)
+    ? defaultNameBase
+    : `${defaultNameBase}${sourceExt}`;
+
+  const dialogOptions = {
+    defaultPath: defaultName
+  };
+
+  if (sourceExtNoDot) {
+    dialogOptions.filters = [{ name: `${sourceExtNoDot.toUpperCase()} File`, extensions: [sourceExtNoDot] }];
+  }
+
+  const { filePath } = await dialog.showSaveDialog(mainWindow, dialogOptions);
+
+  if (filePath) {
+    fs.copyFileSync(sourcePath, filePath);
     return filePath;
   }
   return null;
@@ -1690,6 +1737,24 @@ function getLiteraOutputExtension(originalPath, compareOptions = {}) {
   return originalExt || '.docx';
 }
 
+function sanitizeFilenameSegment(name, fallback) {
+  const cleaned = String(name || '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return fallback;
+  if (cleaned.length <= 64) return cleaned;
+  return `${cleaned.slice(0, 61).trim()}...`;
+}
+
+function buildRedlineOutputFilename(originalPath, modifiedPath, outputExtension) {
+  const originalBase = sanitizeFilenameSegment(path.parse(originalPath || '').name, 'Original');
+  const modifiedBase = sanitizeFilenameSegment(path.parse(modifiedPath || '').name, 'Modified');
+  const ext = String(outputExtension || '.docx');
+  const normalizedExt = ext.startsWith('.') ? ext : `.${ext}`;
+  return `Redline - ${originalBase} v. ${modifiedBase}${normalizedExt}`;
+}
+
 function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
   if (!renderingStyle || typeof renderingStyle !== 'string') {
     return null;
@@ -1730,6 +1795,94 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
   return null;
 }
 
+function findPreferredLiteraColorStyle(literaType, literaPath) {
+  const styleExtByType = {
+    word: '.tpx',
+    powerpoint: '.tpp',
+    excel: '.tpz'
+  };
+  const expectedExt = styleExtByType[literaType];
+  if (!expectedExt) {
+    return null;
+  }
+
+  const preferredFilenames = [
+    `Color${expectedExt}`,
+    `Colour${expectedExt}`,
+    `Color (Kirkland Default)${expectedExt}`,
+    `Colour (Kirkland Default)${expectedExt}`,
+    `Kirkland Default${expectedExt}`
+  ];
+  const preferredSet = new Set(preferredFilenames.map(name => name.toLowerCase()));
+  const blockedTerms = ['black', 'mono', 'monochrome', 'grayscale', 'grey scale', 'gray scale', 'b&w'];
+
+  const startDirs = [literaPath];
+  const directSubdirs = ['Styles', 'Style', 'Templates', 'Rendering Styles', 'Comparison Styles'];
+  for (const subdir of directSubdirs) {
+    const candidate = path.join(literaPath, subdir);
+    if (fs.existsSync(candidate)) startDirs.push(candidate);
+  }
+
+  const styleFiles = [];
+  const visited = new Set();
+
+  function walk(currentDir, depth) {
+    if (depth > 3 || visited.has(currentDir)) return;
+    visited.add(currentDir);
+
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        const dirName = entry.name.toLowerCase();
+        if (depth < 3 || dirName.includes('style') || dirName.includes('template')) {
+          walk(fullPath, depth + 1);
+        }
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (ext === expectedExt) {
+        styleFiles.push(fullPath);
+      }
+    }
+  }
+
+  for (const dir of startDirs) {
+    walk(dir, 0);
+  }
+
+  if (!styleFiles.length) return null;
+
+  let bestPath = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const filePath of styleFiles) {
+    const baseName = path.basename(filePath).toLowerCase();
+    let score = 0;
+
+    if (preferredSet.has(baseName)) score += 100;
+    if (baseName.includes('color') || baseName.includes('colour')) score += 50;
+    if (baseName.includes('kirkland')) score += 20;
+    if (blockedTerms.some(term => baseName.includes(term))) score -= 120;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestPath = filePath;
+    }
+  }
+
+  if (bestScore <= 0) return null;
+  return bestPath;
+}
+
 /**
  * Run Litera Compare on a single document pair.
  * Uses Litera's documented command-line interface.
@@ -1756,7 +1909,11 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     }
 
     const literaInstallPath = path.dirname(literaExe.exe);
-    const stylePath = resolveLiteraStylePath(renderingStyle, literaExe.type, literaInstallPath);
+    const requestedStylePath = resolveLiteraStylePath(renderingStyle, literaExe.type, literaInstallPath);
+    const fallbackColorStylePath = requestedStylePath
+      ? null
+      : findPreferredLiteraColorStyle(literaExe.type, literaInstallPath);
+    const stylePath = requestedStylePath || fallbackColorStylePath;
     let args = [];
     let primaryOutputPath = outputPath;
     let tempAutoOutputPath = null;
@@ -1867,7 +2024,8 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
           litera_type: literaExe.type,
           output_format: normalizedOptions.output_format,
           change_pages_only: normalizedOptions.change_pages_only,
-          method
+          method,
+          litera_style: stylePath ? path.basename(stylePath) : null
         });
       } else {
         let errMsg = `Litera CLI failed (exit code ${code}).`;
@@ -1962,10 +2120,11 @@ ipcMain.handle('redline-documents', async (event, config) => {
             message: `Comparing pair ${i + 1} of ${config.pairs.length} with Litera...`
           });
 
-          const origName = path.parse(pair.original).name;
-          const modName = path.parse(pair.modified).name;
           const outputExt = getLiteraOutputExtension(pair.original, literaOptions);
-          const outputPath = path.join(outputFolder, `Redline_${origName}_vs_${modName}${outputExt}`);
+          const outputPath = path.join(
+            outputFolder,
+            buildRedlineOutputFilename(pair.original, pair.modified, outputExt)
+          );
 
           try {
             const result = await runLiteraComparison(
@@ -1996,11 +2155,9 @@ ipcMain.handle('redline-documents', async (event, config) => {
       } else {
         // Single pair with Litera
         const outputExt = getLiteraOutputExtension(config.original, literaOptions);
-        const origName = path.parse(config.original).name;
-        const modName = path.parse(config.modified).name;
         const outputPath = config.output || path.join(
           path.dirname(config.original),
-          `Redline_${origName}_vs_${modName}${outputExt}`
+          buildRedlineOutputFilename(config.original, config.modified, outputExt)
         );
 
         mainWindow.webContents.send('redline-progress', {
@@ -2323,39 +2480,39 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
 ipcMain.handle('nl-search-emails', async (event, config) => {
   const nlModuleName = 'email_nl_search';
   const processorPath = getProcessorPath(nlModuleName);
-  const provider = normalizeAIProvider(config.provider || getAIProvider());
-  const providerName = getAIProviderDisplayName(provider);
+  const requestedProvider = normalizeAIProvider(config.provider || getAIProvider());
 
   // Get the API key
   const apiKey = config.api_key || getApiKey();
+  const provider = resolveProviderForApiKey(requestedProvider, apiKey);
+  const providerName = getAIProviderDisplayName(provider);
 
   if (!apiKey) {
     return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
   }
 
-  // Use direct API for non-Anthropic providers, or when Python processor isn't available.
-  if (provider !== 'anthropic' || !processorPath) {
-    try {
-      const emails = config.emails || [];
-      const query = config.query || '';
+  let directError = null;
+  try {
+    const emails = config.emails || [];
+    const query = config.query || '';
 
-      if (!query) {
-        return { success: false, error: 'No query provided' };
-      }
+    if (!query) {
+      return { success: false, error: 'No query provided' };
+    }
 
-      // Prepare email context (limit to 100 emails, truncate bodies)
-      const emailContext = emails.slice(0, 100).map((email, i) => ({
-        index: i,
-        from: email.from || 'Unknown',
-        to: email.to || '',
-        subject: email.subject || '(No Subject)',
-        body_preview: (email.body || '').substring(0, 300),
-        date: email.date_received || email.date_sent || '',
-        attachments: email.attachments || '',
-        has_attachments: email.has_attachments || false
-      }));
+    // Prepare email context (limit to 100 emails, truncate bodies)
+    const emailContext = emails.slice(0, 100).map((email, i) => ({
+      index: i,
+      from: email.from || 'Unknown',
+      to: email.to || '',
+      subject: email.subject || '(No Subject)',
+      body_preview: (email.body || '').substring(0, 300),
+      date: email.date_received || email.date_sent || '',
+      attachments: email.attachments || '',
+      has_attachments: email.has_attachments || false
+    }));
 
-      const prompt = `You are an email assistant analyzing a database of emails from a legal transaction.
+    const prompt = `You are an email assistant analyzing a database of emails from a legal transaction.
 
 User Question: ${query}
 
@@ -2374,17 +2531,16 @@ Respond with a JSON object containing:
 
 Respond ONLY with the JSON object, no other text.`;
 
-      const aiResult = await callProviderPrompt({
-        provider,
-        apiKey,
-        prompt,
-        maxTokens: 1024
-      });
+    const aiResult = await callProviderPrompt({
+      provider,
+      apiKey,
+      prompt,
+      maxTokens: 1024
+    });
 
-      if (!aiResult.success) {
-        return { success: false, error: aiResult.error };
-      }
-
+    if (!aiResult.success) {
+      directError = aiResult.error || 'Failed to get AI response';
+    } else {
       const responseText = String(aiResult.text || '').trim();
       const parsed = extractJsonResponse(responseText) || {
         answer: responseText,
@@ -2403,14 +2559,19 @@ Respond ONLY with the JSON object, no other text.`;
         provider,
         query
       };
-    } catch (e) {
-      return { success: false, error: e.message };
     }
+  } catch (e) {
+    directError = e.message;
+  }
+
+  // Anthropic-only fallback to the packaged Python processor.
+  if (provider !== 'anthropic' || !processorPath) {
+    return { success: false, error: directError || 'Failed to get AI response' };
   }
 
   // Production: spawn Python subprocess
   if (app.isPackaged && !fs.existsSync(processorPath)) {
-    return { success: false, error: 'NL search processor not found' };
+    return { success: false, error: directError || 'NL search processor not found' };
   }
 
   if (process.platform !== 'win32' && app.isPackaged) {
@@ -2475,11 +2636,12 @@ Respond ONLY with the JSON object, no other text.`;
 ipcMain.handle('detect-tasks', async (event, config) => {
   const taskModuleName = 'task_detector';
   const processorPath = getProcessorPath(taskModuleName);
-  const provider = normalizeAIProvider(config.provider || getAIProvider());
-  const providerName = getAIProviderDisplayName(provider);
+  const requestedProvider = normalizeAIProvider(config.provider || getAIProvider());
 
   // Get the API key
   const apiKey = config.api_key || getApiKey();
+  const provider = resolveProviderForApiKey(requestedProvider, apiKey);
+  const providerName = getAIProviderDisplayName(provider);
 
   if (!apiKey) {
     return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
@@ -2490,23 +2652,22 @@ ipcMain.handle('detect-tasks', async (event, config) => {
     return { success: false, error: 'No emails to analyze for tasks.' };
   }
 
-  // Use direct provider API for non-Anthropic providers, or when Python processor is unavailable.
-  if (provider !== 'anthropic' || !processorPath) {
-    try {
-      // Prepare email context (limit to 50 emails, 500 char bodies)
-      const emailContext = emails.slice(0, 50).map((email, i) => ({
-        index: i,
-        from: email.from || 'Unknown',
-        to: email.to || '',
-        cc: email.cc || '',
-        subject: email.subject || '(No Subject)',
-        body: (email.body || '').substring(0, 500),
-        date: email.date_received || email.date_sent || '',
-        attachments: email.attachments || '',
-        has_attachments: email.has_attachments || false
-      }));
+  let directError = null;
+  try {
+    // Prepare email context (limit to 50 emails, 500 char bodies)
+    const emailContext = emails.slice(0, 50).map((email, i) => ({
+      index: i,
+      from: email.from || 'Unknown',
+      to: email.to || '',
+      cc: email.cc || '',
+      subject: email.subject || '(No Subject)',
+      body: (email.body || '').substring(0, 500),
+      date: email.date_received || email.date_sent || '',
+      attachments: email.attachments || '',
+      has_attachments: email.has_attachments || false
+    }));
 
-      const taskPrompt = `You are a legal transaction assistant analyzing emails sent to a first-year associate at a law firm. Your job is to identify actionable tasks that the associate needs to perform.
+    const taskPrompt = `You are a legal transaction assistant analyzing emails sent to a first-year associate at a law firm. Your job is to identify actionable tasks that the associate needs to perform.
 
 TASK CATEGORIES:
 - COLLATE: Merge comments or track changes from multiple document versions into a single document. Keywords: "collate", "merge comments", "consolidate changes", "combine markups", "track changes from all parties"
@@ -2553,16 +2714,16 @@ Respond ONLY with the JSON object, no other text.
 
 EMAILS TO ANALYZE (${emailContext.length} emails):
 ${JSON.stringify(emailContext, null, 2)}`;
-      const aiResult = await callProviderPrompt({
-        provider,
-        apiKey,
-        prompt: taskPrompt,
-        maxTokens: 4096
-      });
-      if (!aiResult.success) {
-        return { success: false, error: aiResult.error };
-      }
 
+    const aiResult = await callProviderPrompt({
+      provider,
+      apiKey,
+      prompt: taskPrompt,
+      maxTokens: 4096
+    });
+    if (!aiResult.success) {
+      directError = aiResult.error || 'Failed to analyze tasks';
+    } else {
       // Parse JSON from response
       let result;
       try {
@@ -2586,14 +2747,19 @@ ${JSON.stringify(emailContext, null, 2)}`;
         provider,
         model_used: aiResult.modelUsed || null
       };
-    } catch (e) {
-      return { success: false, error: e.message };
     }
+  } catch (e) {
+    directError = e.message;
+  }
+
+  // Anthropic-only fallback to the packaged Python processor.
+  if (provider !== 'anthropic' || !processorPath) {
+    return { success: false, error: directError || 'Failed to analyze tasks' };
   }
 
   // Production: spawn Python subprocess
   if (app.isPackaged && !fs.existsSync(processorPath)) {
-    return { success: false, error: 'Task detector processor not found' };
+    return { success: false, error: directError || 'Task detector processor not found' };
   }
 
   if (process.platform !== 'win32' && app.isPackaged) {
@@ -2799,8 +2965,10 @@ ipcMain.handle('test-api-key', async (event, payload) => {
       ? payload
       : { apiKey: payload, provider: getAIProvider() };
     const apiKey = String(parsedPayload.apiKey || '').trim();
-    const provider = normalizeAIProvider(parsedPayload.provider || getAIProvider());
+    const requestedProvider = normalizeAIProvider(parsedPayload.provider || getAIProvider());
+    const provider = resolveProviderForApiKey(requestedProvider, apiKey);
     const providerLabel = getAIProviderDisplayName(provider);
+    const providerAutoDetected = provider !== requestedProvider;
 
     if (!apiKey) {
       return { success: false, error: `No ${providerLabel} API key provided` };
@@ -2841,7 +3009,11 @@ ipcMain.handle('test-api-key', async (event, payload) => {
     }
 
     if (response.statusCode === 200) {
-      return { success: true, message: `${providerLabel} API key is valid` };
+      return {
+        success: true,
+        message: `${providerLabel} API key is valid${providerAutoDetected ? ' (auto-detected from key format)' : ''}`,
+        provider
+      };
     }
     if (response.statusCode === 401 || response.statusCode === 403) {
       return { success: false, error: `Invalid ${providerLabel} API key` };
@@ -3866,10 +4038,10 @@ ipcMain.handle('open-file', async (event, filePath) => {
 // Update Checklist - parse emails and update checklist status
 ipcMain.handle('update-checklist', async (event, config) => {
   const { checklistPath, emailPath } = config;
-  const provider = normalizeAIProvider(getAIProvider());
-  const providerName = getAIProviderDisplayName(provider);
   const apiKey = getApiKey();
-  const providerModel = provider === 'openai' ? getOpenAIModel() : getClaudeModel();
+  const provider = resolveProviderForApiKey(getAIProvider(), apiKey);
+  const providerName = getAIProviderDisplayName(provider);
+  const providerModel = provider === 'openai' ? getOpenAIModel() : (provider === 'anthropic' ? getClaudeModel() : '');
   const harveyBaseUrl = getHarveyBaseUrl();
 
   if (!apiKey) {
@@ -3954,10 +4126,10 @@ ipcMain.handle('update-checklist', async (event, config) => {
 // Generate Punchlist - extract open items from checklist
 ipcMain.handle('generate-punchlist', async (event, config) => {
   const { checklistPath, statusFilters } = config;
-  const provider = normalizeAIProvider(getAIProvider());
-  const providerName = getAIProviderDisplayName(provider);
   const apiKey = getApiKey();
-  const providerModel = provider === 'openai' ? getOpenAIModel() : getClaudeModel();
+  const provider = resolveProviderForApiKey(getAIProvider(), apiKey);
+  const providerName = getAIProviderDisplayName(provider);
+  const providerModel = provider === 'openai' ? getOpenAIModel() : (provider === 'anthropic' ? getClaudeModel() : '');
   const harveyBaseUrl = getHarveyBaseUrl();
 
   if (!apiKey) {

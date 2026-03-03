@@ -420,7 +420,10 @@
       overflow-y: auto;
       overflow-x: hidden;
       padding-right: 4px;
-      height: calc(100vh - 160px);
+      padding-bottom: 16px;
+      height: 100%;
+      min-height: 0;
+      max-height: 100%;
     }
 
     .nav-sidebar::-webkit-scrollbar {
@@ -3945,7 +3948,7 @@
         </div>
 
         <div class="result-actions">
-          <button class="btn btn-primary" id="redlineDownloadZipBtn">Download ZIP</button>
+          <button class="btn btn-primary" id="redlineDownloadZipBtn">Download Output</button>
           <button class="btn btn-secondary" id="redlineOpenFolderBtn">Open Output Folder</button>
           <button class="btn btn-secondary" id="redlineResetBtn">Compare More Documents</button>
         </div>
@@ -6891,7 +6894,9 @@
     let redlineModifiedPath = null;
     let redlinePairs = []; // [{original: path, modified: path}]
     let redlineOutputFolder = null;
-    let redlineZipPath = null;
+    let redlineDownloadMode = 'none'; // 'none' | 'file' | 'zip'
+    let redlineDownloadPath = null;
+    let redlineDownloadSuggestedName = null;
     let literaInstalled = false;
     let literaCapabilities = {};
 
@@ -6938,6 +6943,47 @@
     syncRedlineOptions();
 
     const REDLINE_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'];
+
+    function getFileNameOnly(filePath) {
+      return String(filePath || '').split(/[/\\]/).pop() || '';
+    }
+
+    function getFileBaseName(filePath) {
+      const filename = getFileNameOnly(filePath);
+      const dot = filename.lastIndexOf('.');
+      return dot > 0 ? filename.slice(0, dot) : filename;
+    }
+
+    function getFileExtension(filePath, fallback = '') {
+      const filename = getFileNameOnly(filePath);
+      const dot = filename.lastIndexOf('.');
+      if (dot <= 0) return fallback;
+      return filename.slice(dot);
+    }
+
+    function sanitizeExportSegment(name, fallback = 'Document') {
+      const cleaned = String(name || '')
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleaned) return fallback;
+      if (cleaned.length <= 48) return cleaned;
+      return cleaned.slice(0, 45).trim() + '...';
+    }
+
+    function getRedlineSuggestedFileName(pair, extension) {
+      const original = sanitizeExportSegment(getFileBaseName(pair && pair.original), 'Original');
+      const modified = sanitizeExportSegment(getFileBaseName(pair && pair.modified), 'Modified');
+      const ext = extension || '.docx';
+      return `Redline - ${original} v. ${modified}${ext}`;
+    }
+
+    function getRedlineSuggestedZipName(pairs, fileCount) {
+      if (!pairs || pairs.length === 0) return 'EmmaNeigh-Redline.zip';
+      const firstName = getRedlineSuggestedFileName(pairs[0], '');
+      const suffix = fileCount > 1 ? ` +${fileCount - 1}` : '';
+      return `${firstName}${suffix}.zip`;
+    }
 
     function showRedlineState(state) {
       redlineInputs.style.display = state === 'idle' ? 'block' : 'none';
@@ -7094,6 +7140,11 @@
 
       if (redlinePairs.length === 0) return;
 
+      redlineDownloadMode = 'none';
+      redlineDownloadPath = null;
+      redlineDownloadSuggestedName = null;
+      redlineDownloadZipBtn.textContent = 'Preparing Output...';
+
       showRedlineState('processing');
       redlineProgressText.textContent = 'Preparing comparison...';
       redlineProgressFill.style.width = '0%';
@@ -7209,12 +7260,40 @@
             }
           }
 
-          // Create ZIP for download
-          redlineProgressText.textContent = 'Creating ZIP file...';
-          if (result.mode !== 'batch' && result.output_path) {
-            redlineZipPath = await ipcRenderer.invoke('create-zip-files', [result.output_path]);
-          } else {
-            redlineZipPath = await ipcRenderer.invoke('create-zip', redlineOutputFolder);
+          // Prepare download output
+          if (result.mode === 'batch') {
+            const outputPaths = (result.results || [])
+              .filter(r => r && r.success && r.output_path)
+              .map(r => r.output_path);
+
+            if (outputPaths.length <= 1 && outputPaths[0]) {
+              redlineDownloadMode = 'file';
+              redlineDownloadPath = outputPaths[0];
+              redlineDownloadSuggestedName = getRedlineSuggestedFileName(
+                redlinePairs[0],
+                getFileExtension(outputPaths[0], '.docx')
+              );
+              redlineDownloadZipBtn.textContent = 'Download File';
+            } else if (outputPaths.length > 1) {
+              redlineProgressText.textContent = 'Creating ZIP file...';
+              redlineDownloadMode = 'zip';
+              redlineDownloadPath = await ipcRenderer.invoke('create-zip-files', outputPaths);
+              redlineDownloadSuggestedName = getRedlineSuggestedZipName(redlinePairs, outputPaths.length);
+              redlineDownloadZipBtn.textContent = 'Download ZIP';
+            } else {
+              redlineDownloadMode = 'none';
+              redlineDownloadPath = null;
+              redlineDownloadSuggestedName = null;
+              redlineDownloadZipBtn.textContent = 'Download Output';
+            }
+          } else if (result.output_path) {
+            redlineDownloadMode = 'file';
+            redlineDownloadPath = result.output_path;
+            redlineDownloadSuggestedName = getRedlineSuggestedFileName(
+              redlinePairs[0],
+              getFileExtension(result.output_path, '.docx')
+            );
+            redlineDownloadZipBtn.textContent = 'Download File';
           }
 
           // Log usage
@@ -7246,10 +7325,12 @@
       }
     });
 
-    // Download ZIP
+    // Download output
     redlineDownloadZipBtn.addEventListener('click', async () => {
-      if (redlineZipPath) {
-        await ipcRenderer.invoke('save-zip', redlineZipPath, 'EmmaNeigh-Redline.zip');
+      if (redlineDownloadMode === 'zip' && redlineDownloadPath) {
+        await ipcRenderer.invoke('save-zip', redlineDownloadPath, redlineDownloadSuggestedName || 'EmmaNeigh-Redline.zip');
+      } else if (redlineDownloadMode === 'file' && redlineDownloadPath) {
+        await ipcRenderer.invoke('save-file', redlineDownloadPath, redlineDownloadSuggestedName || getFileNameOnly(redlineDownloadPath));
       }
     });
 
@@ -7266,7 +7347,9 @@
       redlineModifiedPath = null;
       redlinePairs = [];
       redlineOutputFolder = null;
-      redlineZipPath = null;
+      redlineDownloadMode = 'none';
+      redlineDownloadPath = null;
+      redlineDownloadSuggestedName = null;
 
       redlineOriginalSelected.textContent = '';
       redlineModifiedSelected.textContent = '';
@@ -7286,6 +7369,7 @@
       redlineTableChanges.textContent = '0';
       redlineOutputFormat.value = 'native';
       redlineChangePagesOnly.checked = false;
+      redlineDownloadZipBtn.textContent = 'Download Output';
       syncRedlineOptions();
 
       updateRedlineButton();
