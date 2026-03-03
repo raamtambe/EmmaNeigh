@@ -11,13 +11,15 @@ A punchlist is a daily working document that shows:
 - Grouped by status (pending draft, with counsel, awaiting signature, etc.)
 
 Usage:
-    python punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] <api_key> [provider] [model] [harvey_base_url]
+    python punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] <api_key> [provider] [model] [provider_base_url]
 """
 
 import sys
 import os
 import json
 import re
+import socket
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -30,6 +32,21 @@ from docx.enum.style import WD_STYLE_TYPE
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_HARVEY_BASE_URL = "https://api.harvey.ai"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_LMSTUDIO_BASE_URL = "http://127.0.0.1:1234"
+DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
+DEFAULT_LMSTUDIO_MODEL = "local-model"
+MAX_HTTP_ATTEMPTS = 3
+RETRYABLE_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
+RETRYABLE_ERROR_MARKERS = (
+    "timeout",
+    "temporarily unavailable",
+    "connection reset",
+    "connection aborted",
+    "network is unreachable",
+    "name or service not known",
+    "temporary failure in name resolution",
+)
 
 
 def parse_json_response_text(response_text):
@@ -56,7 +73,50 @@ def parse_json_response_text(response_text):
         if json_lines:
             text = "\n".join(json_lines).strip()
 
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        fragment = extract_json_object_fragment(text)
+        if fragment:
+            return json.loads(fragment)
+        raise ValueError("LLM response was not valid JSON.")
+
+
+def extract_json_object_fragment(text):
+    """Extract the first complete JSON object from a larger text blob."""
+    source = str(text or "")
+    start = source.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for idx in range(start, len(source)):
+        ch = source[idx]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:idx + 1]
+
+    return None
 
 
 def canonical_doc_key(value):
@@ -65,13 +125,44 @@ def canonical_doc_key(value):
     return text
 
 
+def normalize_api_key(api_key):
+    return str(api_key or "").strip()
+
+
 def normalize_provider(provider):
     value = str(provider or "").strip().lower()
     if value == "claude":
         return "anthropic"
-    if value in ("anthropic", "openai", "harvey"):
+    if value in ("anthropic", "openai", "harvey", "ollama", "lmstudio"):
         return value
+    if value in ("lm studio", "lm-studio"):
+        return "lmstudio"
     return "anthropic"
+
+
+def infer_provider_from_api_key(api_key):
+    value = normalize_api_key(api_key).lower()
+    if not value:
+        return None
+    if value.startswith("sk-ant-"):
+        return "anthropic"
+    if value.startswith("harvey_") or value.startswith("hv_"):
+        return "harvey"
+    if value.startswith("sk-proj-") or value.startswith("sk-") or value.startswith("sess-"):
+        return "openai"
+    return None
+
+
+def resolve_provider(provider, api_key):
+    preferred = normalize_provider(provider)
+    if preferred in ("ollama", "lmstudio"):
+        return preferred
+    inferred = infer_provider_from_api_key(api_key)
+    return inferred or preferred
+
+
+def provider_requires_api_key(provider):
+    return normalize_provider(provider) in ("anthropic", "openai", "harvey")
 
 
 def extract_openai_text(content):
@@ -91,7 +182,10 @@ def extract_openai_text(content):
     return "\n".join(parts).strip()
 
 
-def parse_error_detail(raw_text):
+def parse_error_detail(raw_text, network_error=None):
+    if network_error:
+        return str(network_error)
+
     try:
         payload = json.loads(raw_text or "{}")
     except Exception:
@@ -105,6 +199,31 @@ def parse_error_detail(raw_text):
             return str(payload.get("message"))
 
     return (raw_text or "").strip()[:300] or "Unknown error"
+
+
+def should_retry_request(status_code, detail):
+    detail_text = str(detail or "").lower()
+    if status_code in RETRYABLE_HTTP_STATUS:
+        return True
+    return any(marker in detail_text for marker in RETRYABLE_ERROR_MARKERS)
+
+
+def backoff_sleep(attempt_idx):
+    # Short incremental backoff for transient API/network failures.
+    time.sleep(min(0.5 * (attempt_idx + 1), 2.0))
+
+
+def format_provider_error(provider_label, status_code, detail):
+    if status_code in (401, 403):
+        return (
+            f"{provider_label} authentication failed ({status_code}). "
+            f"Check API key and account/model access. Details: {detail}"
+        )
+    if status_code == 429:
+        return f"{provider_label} rate limit reached (429). Please retry. Details: {detail}"
+    if status_code == 0:
+        return f"{provider_label} network error: {detail}"
+    return f"{provider_label} error ({status_code}): {detail}"
 
 
 def is_likely_model_error(status_code, detail):
@@ -125,22 +244,31 @@ def perform_http_request(url, headers, body_bytes, timeout=90):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status_code = resp.getcode()
             raw_text = resp.read().decode("utf-8", errors="replace")
-            return status_code, raw_text
+            return status_code, raw_text, None
     except urllib.error.HTTPError as e:
         raw_text = e.read().decode("utf-8", errors="replace")
-        return e.code, raw_text
+        return e.code, raw_text, None
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", e)
+        return 0, "", f"Network error: {reason}"
+    except (socket.timeout, TimeoutError):
+        return 0, "", "Network error: request timed out"
+    except Exception as e:
+        return 0, "", f"Network error: {e}"
 
 
 def perform_json_request(url, headers, payload, timeout=90):
     request_headers = dict(headers or {})
     request_headers["Content-Type"] = "application/json"
     body_bytes = json.dumps(payload).encode("utf-8")
-    status_code, raw_text = perform_http_request(url, request_headers, body_bytes, timeout=timeout)
+    status_code, raw_text, network_error = perform_http_request(
+        url, request_headers, body_bytes, timeout=timeout
+    )
     try:
         parsed = json.loads(raw_text) if raw_text else {}
     except Exception:
         parsed = {}
-    return status_code, parsed, raw_text
+    return status_code, parsed, raw_text, network_error
 
 
 def build_multipart_form_data(fields):
@@ -159,6 +287,7 @@ def build_multipart_form_data(fields):
 
 
 def call_anthropic_prompt(prompt, api_key, model_name):
+    api_key = normalize_api_key(api_key)
     model_candidates = []
     for candidate in (
         model_name,
@@ -173,34 +302,43 @@ def call_anthropic_prompt(prompt, api_key, model_name):
 
     last_detail = "Unknown error"
     for candidate in model_candidates:
-        payload = {
-            "model": candidate,
-            "max_tokens": 2048,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        status_code, parsed, raw_text = perform_json_request(
-            "https://api.anthropic.com/v1/messages",
-            {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            payload,
-        )
+        model_unavailable = False
+        for attempt_idx in range(MAX_HTTP_ATTEMPTS):
+            payload = {
+                "model": candidate,
+                "max_tokens": 2048,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            status_code, parsed, raw_text, network_error = perform_json_request(
+                "https://api.anthropic.com/v1/messages",
+                {
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                payload,
+            )
 
-        if status_code != 200:
-            detail = parse_error_detail(raw_text)
-            last_detail = detail
-            if is_likely_model_error(status_code, detail):
-                continue
-            raise RuntimeError(f"Anthropic error ({status_code}): {detail}")
+            if status_code != 200:
+                detail = parse_error_detail(raw_text, network_error=network_error)
+                last_detail = detail
+                if should_retry_request(status_code, detail) and attempt_idx < (MAX_HTTP_ATTEMPTS - 1):
+                    backoff_sleep(attempt_idx)
+                    continue
+                if is_likely_model_error(status_code, detail):
+                    model_unavailable = True
+                    break
+                raise RuntimeError(format_provider_error("Anthropic", status_code, detail))
 
-        content = parsed.get("content") if isinstance(parsed, dict) else None
-        if isinstance(content, list) and content:
-            first = content[0]
-            if isinstance(first, dict) and first.get("text"):
-                return str(first.get("text")).strip(), candidate
-        raise RuntimeError("Anthropic response was missing message content.")
+            content = parsed.get("content") if isinstance(parsed, dict) else None
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict) and first.get("text"):
+                    return str(first.get("text")).strip(), candidate
+            raise RuntimeError("Anthropic response was missing message content.")
+
+        if model_unavailable:
+            continue
 
     raise RuntimeError(
         f"No supported Claude model is available for this API key. Last error: {last_detail}"
@@ -208,6 +346,7 @@ def call_anthropic_prompt(prompt, api_key, model_name):
 
 
 def call_openai_prompt(prompt, api_key, model_name):
+    api_key = normalize_api_key(api_key)
     model_candidates = []
     for candidate in (
         model_name,
@@ -224,40 +363,143 @@ def call_openai_prompt(prompt, api_key, model_name):
 
     last_detail = "Unknown error"
     for candidate in model_candidates:
-        payload = {
-            "model": candidate,
-            "max_tokens": 2048,
-            "temperature": 0,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        status_code, parsed, raw_text = perform_json_request(
-            "https://api.openai.com/v1/chat/completions",
-            {"Authorization": f"Bearer {api_key}"},
-            payload,
-        )
+        model_unavailable = False
+        for attempt_idx in range(MAX_HTTP_ATTEMPTS):
+            payload = {
+                "model": candidate,
+                "max_tokens": 2048,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            status_code, parsed, raw_text, network_error = perform_json_request(
+                "https://api.openai.com/v1/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                payload,
+            )
 
-        if status_code != 200:
-            detail = parse_error_detail(raw_text)
-            last_detail = detail
-            if is_likely_model_error(status_code, detail):
-                continue
-            raise RuntimeError(f"OpenAI error ({status_code}): {detail}")
+            if status_code != 200:
+                detail = parse_error_detail(raw_text, network_error=network_error)
+                last_detail = detail
+                if should_retry_request(status_code, detail) and attempt_idx < (MAX_HTTP_ATTEMPTS - 1):
+                    backoff_sleep(attempt_idx)
+                    continue
+                if is_likely_model_error(status_code, detail):
+                    model_unavailable = True
+                    break
+                raise RuntimeError(format_provider_error("OpenAI", status_code, detail))
 
-        choices = parsed.get("choices") if isinstance(parsed, dict) else None
-        message = choices[0].get("message") if isinstance(choices, list) and choices else {}
-        content = extract_openai_text(message.get("content") if isinstance(message, dict) else "")
-        if content:
-            return content, candidate
-        raise RuntimeError("OpenAI response was missing message content.")
+            choices = parsed.get("choices") if isinstance(parsed, dict) else None
+            message = choices[0].get("message") if isinstance(choices, list) and choices else {}
+            content = extract_openai_text(message.get("content") if isinstance(message, dict) else "")
+            if content:
+                return content, candidate
+            raise RuntimeError("OpenAI response was missing message content.")
+
+        if model_unavailable:
+            continue
 
     raise RuntimeError(
         f"No supported OpenAI model is available for this API key. Last error: {last_detail}"
     )
 
 
-def call_harvey_prompt(prompt, api_key, max_tokens, harvey_base_url):
+def call_openai_compatible_prompt(prompt, api_key, model_candidates, base_url, provider_label):
+    api_key = normalize_api_key(api_key)
+    candidates = []
+    for candidate in model_candidates:
+        candidate_value = str(candidate or "").strip()
+        if candidate_value and candidate_value not in candidates:
+            candidates.append(candidate_value)
+
+    last_detail = "Unknown error"
+    for candidate in candidates:
+        model_unavailable = False
+        for attempt_idx in range(MAX_HTTP_ATTEMPTS):
+            payload = {
+                "model": candidate,
+                "max_tokens": 2048,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            status_code, parsed, raw_text, network_error = perform_json_request(
+                f"{base_url}/v1/chat/completions",
+                headers,
+                payload,
+            )
+
+            if status_code != 200:
+                detail = parse_error_detail(raw_text, network_error=network_error)
+                last_detail = detail
+                if should_retry_request(status_code, detail) and attempt_idx < (MAX_HTTP_ATTEMPTS - 1):
+                    backoff_sleep(attempt_idx)
+                    continue
+                if is_likely_model_error(status_code, detail):
+                    model_unavailable = True
+                    break
+                raise RuntimeError(format_provider_error(provider_label, status_code, detail))
+
+            choices = parsed.get("choices") if isinstance(parsed, dict) else None
+            message = choices[0].get("message") if isinstance(choices, list) and choices else {}
+            content = extract_openai_text(message.get("content") if isinstance(message, dict) else "")
+            if content:
+                return content, candidate
+            raise RuntimeError(f"{provider_label} response was missing message content.")
+
+        if model_unavailable:
+            continue
+
+    raise RuntimeError(
+        f"No supported {provider_label} model is available. Last error: {last_detail}"
+    )
+
+
+def call_ollama_prompt(prompt, api_key, model_name, provider_base_url):
+    base_url = str(provider_base_url or os.environ.get("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).strip()
+    if not base_url:
+        base_url = DEFAULT_OLLAMA_BASE_URL
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    return call_openai_compatible_prompt(
+        prompt,
+        api_key,
+        [
+            model_name,
+            os.environ.get("OLLAMA_MODEL"),
+            DEFAULT_OLLAMA_MODEL,
+            "llama3.1:8b",
+            "qwen2.5:7b",
+        ],
+        base_url,
+        "Ollama",
+    )
+
+
+def call_lmstudio_prompt(prompt, api_key, model_name, provider_base_url):
+    base_url = str(provider_base_url or os.environ.get("LMSTUDIO_BASE_URL") or DEFAULT_LMSTUDIO_BASE_URL).strip()
+    if not base_url:
+        base_url = DEFAULT_LMSTUDIO_BASE_URL
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    return call_openai_compatible_prompt(
+        prompt,
+        api_key,
+        [
+            model_name,
+            os.environ.get("LMSTUDIO_MODEL"),
+            DEFAULT_LMSTUDIO_MODEL,
+        ],
+        base_url,
+        "LM Studio",
+    )
+
+
+def call_harvey_prompt(prompt, api_key, max_tokens, provider_base_url):
+    api_key = normalize_api_key(api_key)
     base_url = str(
-        harvey_base_url or os.environ.get("HARVEY_BASE_URL") or DEFAULT_HARVEY_BASE_URL
+        provider_base_url or os.environ.get("HARVEY_BASE_URL") or DEFAULT_HARVEY_BASE_URL
     ).strip()
     if not base_url:
         base_url = DEFAULT_HARVEY_BASE_URL
@@ -273,22 +515,28 @@ def call_harvey_prompt(prompt, api_key, max_tokens, harvey_base_url):
         }
     )
 
-    status_code, raw_text = perform_http_request(
-        f"{base_url}/api/v2/completion?include_citations=false",
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        body,
-    )
-    if status_code != 200:
-        detail = parse_error_detail(raw_text)
-        raise RuntimeError(f"Harvey error ({status_code}): {detail}")
+    parsed = {}
+    for attempt_idx in range(MAX_HTTP_ATTEMPTS):
+        status_code, raw_text, network_error = perform_http_request(
+            f"{base_url}/api/v2/completion?include_citations=false",
+            {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            body,
+        )
+        detail = parse_error_detail(raw_text, network_error=network_error)
+        if status_code != 200:
+            if should_retry_request(status_code, detail) and attempt_idx < (MAX_HTTP_ATTEMPTS - 1):
+                backoff_sleep(attempt_idx)
+                continue
+            raise RuntimeError(format_provider_error("Harvey", status_code, detail))
 
-    try:
-        parsed = json.loads(raw_text) if raw_text else {}
-    except Exception:
-        parsed = {}
+        try:
+            parsed = json.loads(raw_text) if raw_text else {}
+        except Exception:
+            parsed = {}
+        break
 
     text = ""
     if isinstance(parsed, dict):
@@ -299,12 +547,16 @@ def call_harvey_prompt(prompt, api_key, max_tokens, harvey_base_url):
     return str(text).strip(), "harvey-assist"
 
 
-def call_provider_prompt_json(prompt, api_key, provider, model_name=None, harvey_base_url=None):
-    provider_name = normalize_provider(provider)
+def call_provider_prompt_json(prompt, api_key, provider, model_name=None, provider_base_url=None):
+    provider_name = resolve_provider(provider, api_key)
     if provider_name == "openai":
         response_text, _ = call_openai_prompt(prompt, api_key, model_name)
     elif provider_name == "harvey":
-        response_text, _ = call_harvey_prompt(prompt, api_key, 2048, harvey_base_url)
+        response_text, _ = call_harvey_prompt(prompt, api_key, 2048, provider_base_url)
+    elif provider_name == "ollama":
+        response_text, _ = call_ollama_prompt(prompt, api_key, model_name, provider_base_url)
+    elif provider_name == "lmstudio":
+        response_text, _ = call_lmstudio_prompt(prompt, api_key, model_name, provider_base_url)
     else:
         response_text, _ = call_anthropic_prompt(prompt, api_key, model_name)
 
@@ -434,7 +686,7 @@ def categorize_items_with_llm(
     api_key,
     provider="anthropic",
     model_name=None,
-    harvey_base_url=None,
+    provider_base_url=None,
 ):
     """
     Use the selected LLM provider to categorize all items at once.
@@ -444,12 +696,12 @@ def categorize_items_with_llm(
         api_key: Provider API key
         provider: LLM provider (anthropic/openai/harvey)
         model_name: Optional model override
-        harvey_base_url: Optional Harvey API base URL
+        provider_base_url: Optional provider API base URL
 
     Returns:
         Dict mapping document_name to category
     """
-    if not api_key:
+    if provider_requires_api_key(provider) and not api_key:
         raise ValueError("API key is required for punchlist LLM categorization.")
 
     # Prepare items for the prompt
@@ -484,7 +736,7 @@ ONLY return the JSON object, no other text."""
         api_key,
         provider,
         model_name=model_name,
-        harvey_base_url=harvey_base_url,
+        provider_base_url=provider_base_url,
     )
 
     normalized = {}
@@ -572,7 +824,7 @@ def generate_punchlist(
     api_key=None,
     provider="anthropic",
     model_name=None,
-    harvey_base_url=None,
+    provider_base_url=None,
 ):
     """
     Generate punchlist document from checklist.
@@ -585,7 +837,7 @@ def generate_punchlist(
         api_key: Provider API key for LLM-based categorization
         provider: LLM provider (anthropic/openai/harvey)
         model_name: Optional provider model override
-        harvey_base_url: Optional Harvey API base URL
+        provider_base_url: Optional provider API base URL
 
     Returns:
         dict with: success, output_path, item_count, categories
@@ -603,7 +855,10 @@ def generate_punchlist(
         status_filters = ['pending', 'review', 'signature']
 
     try:
-        if not api_key:
+        api_key = normalize_api_key(api_key)
+        provider = resolve_provider(provider, api_key)
+
+        if provider_requires_api_key(provider) and not api_key:
             result['error'] = 'LLM API key is required to generate punchlist.'
             return result
 
@@ -663,7 +918,7 @@ def generate_punchlist(
                 api_key,
                 provider=provider,
                 model_name=model_name,
-                harvey_base_url=harvey_base_url,
+                provider_base_url=provider_base_url,
             )
         except Exception as e:
             result['error'] = f'LLM punchlist categorization failed: {e}'
@@ -829,7 +1084,7 @@ def main():
     if len(sys.argv) < 3:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] <api_key> [provider] [model] [harvey_base_url]'
+            'error': 'Usage: punchlist_generator.py <checklist_path> <output_folder> [status_filters_json] <api_key> [provider] [model] [provider_base_url]'
         }))
         sys.exit(1)
 
@@ -850,11 +1105,22 @@ def main():
         or os.environ.get('OPENAI_API_KEY')
         or os.environ.get('HARVEY_API_KEY')
     )
-    provider = normalize_provider(sys.argv[5] if len(sys.argv) > 5 else os.environ.get('AI_PROVIDER', 'anthropic'))
-    model_name = sys.argv[6] if len(sys.argv) > 6 else (
-        os.environ.get('OPENAI_MODEL') if provider == 'openai' else os.environ.get('CLAUDE_MODEL')
+    provider = resolve_provider(
+        sys.argv[5] if len(sys.argv) > 5 else os.environ.get('AI_PROVIDER', 'anthropic'),
+        api_key,
     )
-    harvey_base_url = sys.argv[7] if len(sys.argv) > 7 else os.environ.get('HARVEY_BASE_URL', DEFAULT_HARVEY_BASE_URL)
+    model_name = sys.argv[6] if len(sys.argv) > 6 else (
+        os.environ.get('OPENAI_MODEL') if provider == 'openai'
+        else os.environ.get('OLLAMA_MODEL') if provider == 'ollama'
+        else os.environ.get('LMSTUDIO_MODEL') if provider == 'lmstudio'
+        else os.environ.get('CLAUDE_MODEL')
+    )
+    provider_base_url = sys.argv[7] if len(sys.argv) > 7 else (
+        os.environ.get('HARVEY_BASE_URL', DEFAULT_HARVEY_BASE_URL) if provider == 'harvey'
+        else os.environ.get('OLLAMA_BASE_URL', DEFAULT_OLLAMA_BASE_URL) if provider == 'ollama'
+        else os.environ.get('LMSTUDIO_BASE_URL', DEFAULT_LMSTUDIO_BASE_URL) if provider == 'lmstudio'
+        else None
+    )
 
     result = generate_punchlist(
         checklist_path,
@@ -863,7 +1129,7 @@ def main():
         api_key,
         provider=provider,
         model_name=model_name,
-        harvey_base_url=harvey_base_url,
+        provider_base_url=provider_base_url,
     )
     print(json.dumps(result))
 

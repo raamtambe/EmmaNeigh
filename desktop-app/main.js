@@ -38,10 +38,15 @@ const historyDbPath = path.join(app.getPath('userData'), 'emmaneigh_history.db')
 const pendingLogsPath = path.join(app.getPath('userData'), 'pending_logs.json');
 const APP_VERSION = require('./package.json').version;
 const MACHINE_ID = crypto.createHash('sha256').update(os.hostname()).digest('hex').substring(0, 12);
-const DEFAULT_AI_PROVIDER = 'anthropic';
+const DEFAULT_AI_PROVIDER = 'ollama';
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const DEFAULT_HARVEY_BASE_URL = 'https://api.harvey.ai';
+const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
+const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
+const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b';
+const DEFAULT_LMSTUDIO_MODEL = 'local-model';
+const DEFAULT_LITERA_STYLE_NAME = 'Kirkland Default';
 
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
@@ -74,7 +79,7 @@ function logUserActivity(username, action) {
 function logUsageToFirestore(data) {
   const entry = {
     timestamp: new Date().toISOString(),
-    username: data.user_name || 'Guest',
+    username: data.user_name || 'unknown',
     feature: data.feature || 'unknown',
     action: data.action || 'process',
     engine: data.engine || null,
@@ -91,6 +96,24 @@ function logUsageToFirestore(data) {
     }
   }).catch(() => {
     queuePendingLog('usage_logs', entry);
+  });
+}
+
+function logFeedbackToFirestore(data) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    username: String(data.username || 'unknown'),
+    request: String(data.request || '').trim(),
+    app_version: APP_VERSION,
+    machine_id: MACHINE_ID
+  };
+
+  logToFirestore('user_feedback', entry).then(success => {
+    if (!success) {
+      queuePendingLog('user_feedback', entry);
+    }
+  }).catch(() => {
+    queuePendingLog('user_feedback', entry);
   });
 }
 
@@ -269,31 +292,59 @@ function saveDatabase() {
 // API Key storage (encrypted with safeStorage)
 const apiKeyPath = path.join(app.getPath('userData'), 'api_key.enc');
 
+function getApiKeyFromEnvironment() {
+  return (
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.HARVEY_API_KEY ||
+    null
+  );
+}
+
+function decodeApiKeyFromFile(rawValue) {
+  if (!rawValue || rawValue.length === 0) return null;
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(rawValue);
+    }
+  } catch (decryptError) {
+    // Fall through and try plain text decode (legacy/fallback path).
+  }
+
+  const plain = rawValue.toString('utf8').trim();
+  return plain || null;
+}
+
 function getApiKey() {
   try {
-    // First try encrypted storage
+    // First try file storage.
     if (fs.existsSync(apiKeyPath)) {
-      const encrypted = fs.readFileSync(apiKeyPath);
-      if (safeStorage.isEncryptionAvailable()) {
-        return safeStorage.decryptString(encrypted);
-      }
+      const raw = fs.readFileSync(apiKeyPath);
+      const stored = decodeApiKeyFromFile(raw);
+      if (stored) return stored;
     }
-    // Fallback to environment variable
-    return process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.HARVEY_API_KEY || null;
+    // Fallback to environment variable.
+    return getApiKeyFromEnvironment();
   } catch (e) {
     console.error('Failed to get API key:', e);
-    return process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.HARVEY_API_KEY || null;
+    return getApiKeyFromEnvironment();
   }
 }
 
 function setApiKey(apiKey) {
   try {
+    const normalizedKey = String(apiKey || '').trim();
+    if (!normalizedKey) return false;
+
     if (safeStorage.isEncryptionAvailable()) {
-      const encrypted = safeStorage.encryptString(apiKey);
+      const encrypted = safeStorage.encryptString(normalizedKey);
       fs.writeFileSync(apiKeyPath, encrypted);
       return true;
     }
-    return false;
+
+    // Fallback for environments where keychain-backed encryption is unavailable.
+    fs.writeFileSync(apiKeyPath, normalizedKey, { encoding: 'utf8' });
+    return true;
   } catch (e) {
     console.error('Failed to set API key:', e);
     return false;
@@ -398,8 +449,19 @@ function normalizeAIProvider(provider) {
   if (!value) return DEFAULT_AI_PROVIDER;
   if (value === 'chatgpt') return 'openai';
   if (value === 'claude') return 'anthropic';
-  if (value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
+  if (value === 'ollama' || value === 'lmstudio' || value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
+  if (value === 'lm studio' || value === 'lm-studio') return 'lmstudio';
   return DEFAULT_AI_PROVIDER;
+}
+
+function isLocalProvider(provider) {
+  const normalized = normalizeAIProvider(provider);
+  return normalized === 'ollama' || normalized === 'lmstudio';
+}
+
+function providerRequiresApiKey(provider) {
+  const normalized = normalizeAIProvider(provider);
+  return normalized === 'anthropic' || normalized === 'openai' || normalized === 'harvey';
 }
 
 function inferProviderFromApiKey(apiKey) {
@@ -415,12 +477,37 @@ function inferProviderFromApiKey(apiKey) {
 
 function resolveProviderForApiKey(provider, apiKey) {
   const preferred = normalizeAIProvider(provider);
+  if (isLocalProvider(preferred)) return preferred;
   const inferred = inferProviderFromApiKey(apiKey);
   return inferred || preferred;
 }
 
+function resolveAiCallContext({ apiKey, requestedProvider }) {
+  const normalizedKey = String(apiKey || '').trim();
+  const preferredProvider = normalizeAIProvider(requestedProvider);
+  const inferredProvider = inferProviderFromApiKey(normalizedKey);
+  const provider = resolveProviderForApiKey(preferredProvider, normalizedKey);
+  const providerName = getAIProviderDisplayName(provider);
+  const providerAutoDetected = !isLocalProvider(preferredProvider) && !!(inferredProvider && inferredProvider !== preferredProvider);
+  const providerAutoDetectNote = providerAutoDetected
+    ? `Selected provider did not match API key format; using ${providerName} automatically.`
+    : null;
+
+  return {
+    apiKey: normalizedKey,
+    provider,
+    providerName,
+    providerAutoDetected,
+    providerAutoDetectNote
+  };
+}
+
 function getAIProviderDisplayName(provider) {
   switch (normalizeAIProvider(provider)) {
+    case 'ollama':
+      return 'Ollama';
+    case 'lmstudio':
+      return 'LM Studio';
     case 'openai':
       return 'OpenAI';
     case 'harvey':
@@ -463,6 +550,33 @@ function extractJsonResponse(text) {
   return parseJsonSafe(candidate);
 }
 
+function parseProcessorJsonOutput(stdoutText) {
+  const raw = String(stdoutText || '').trim();
+  if (!raw) return null;
+
+  const direct = parseJsonSafe(raw);
+  if (direct && typeof direct === 'object') return direct;
+
+  const fromExtract = extractJsonResponse(raw);
+  if (fromExtract && typeof fromExtract === 'object') return fromExtract;
+
+  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const parsed = parseJsonSafe(lines[i]);
+    if (parsed && typeof parsed === 'object') return parsed;
+  }
+
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const sliced = raw.slice(firstBrace, lastBrace + 1);
+    const parsed = parseJsonSafe(sliced);
+    if (parsed && typeof parsed === 'object') return parsed;
+  }
+
+  return null;
+}
+
 function extractOpenAIText(messageContent) {
   if (typeof messageContent === 'string') return messageContent;
   if (Array.isArray(messageContent)) {
@@ -498,12 +612,14 @@ function buildMultipartFormData(fields) {
 }
 
 function requestHttps({ baseUrl, path: requestPath, method = 'GET', headers = {}, body = null, timeoutMs = 60000 }) {
+  const http = require('http');
   const https = require('https');
   const url = new URL(requestPath, baseUrl);
+  const transport = url.protocol === 'http:' ? http : https;
   const payload = body == null ? null : (Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8'));
 
   return new Promise((resolve) => {
-    const req = https.request({
+    const req = transport.request({
       hostname: url.hostname,
       port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: `${url.pathname}${url.search}`,
@@ -608,18 +724,35 @@ async function callAnthropicPrompt({ apiKey, prompt, maxTokens }) {
   };
 }
 
-async function callOpenAIPrompt({ apiKey, prompt, maxTokens }) {
-  const modelCandidates = Array.from(new Set([
-    getOpenAIModel(),
-    DEFAULT_OPENAI_MODEL,
-    'gpt-4.1-mini',
-    'gpt-4o-mini',
-    'gpt-4.1',
-    'gpt-4o'
-  ]));
+async function fetchOpenAICompatibleModels({ baseUrl, apiKey }) {
+  const headers = {};
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  const response = await requestHttps({
+    baseUrl,
+    path: '/v1/models',
+    method: 'GET',
+    headers,
+    timeoutMs: 15000
+  });
+  if (response.statusCode !== 200) return [];
+  const entries = Array.isArray(response.jsonBody?.data) ? response.jsonBody.data : [];
+  return entries
+    .map(item => String(item?.id || '').trim())
+    .filter(Boolean);
+}
+
+async function callOpenAICompatiblePrompt({ baseUrl, apiKey, prompt, maxTokens, modelCandidates, providerLabel }) {
+  let candidates = Array.from(new Set((modelCandidates || []).map(x => String(x || '').trim()).filter(Boolean)));
+  const discovered = await fetchOpenAICompatibleModels({ baseUrl, apiKey });
+  if (discovered.length > 0) {
+    candidates = Array.from(new Set([...candidates, ...discovered]));
+  }
+  if (candidates.length === 0) {
+    return { success: false, error: `${providerLabel} is reachable but no models were returned by /v1/models.` };
+  }
 
   let lastResponse = null;
-  for (const modelName of modelCandidates) {
+  for (const modelName of candidates) {
     const payload = JSON.stringify({
       model: modelName,
       max_tokens: maxTokens,
@@ -627,14 +760,14 @@ async function callOpenAIPrompt({ apiKey, prompt, maxTokens }) {
       messages: [{ role: 'user', content: prompt }]
     });
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
     const response = await requestHttps({
-      baseUrl: 'https://api.openai.com',
+      baseUrl,
       path: '/v1/chat/completions',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
+      headers,
       body: payload,
       timeoutMs: 90000
     });
@@ -642,20 +775,39 @@ async function callOpenAIPrompt({ apiKey, prompt, maxTokens }) {
     lastResponse = response;
     if (response.statusCode !== 200) {
       if (isLikelyModelError(response)) continue;
-      return { success: false, error: `OpenAI error (${response.statusCode}): ${getErrorDetail(response)}` };
+      return { success: false, error: `${providerLabel} error (${response.statusCode}): ${getErrorDetail(response)}` };
     }
 
     const content = extractOpenAIText(response.jsonBody?.choices?.[0]?.message?.content);
     if (!content) {
-      return { success: false, error: 'OpenAI response was missing message content.' };
+      return { success: false, error: `${providerLabel} response was missing message content.` };
     }
     return { success: true, text: content, modelUsed: modelName };
   }
 
   return {
     success: false,
-    error: `No supported OpenAI model is available for this API key. Last error: ${getErrorDetail(lastResponse)}`
+    error: `No supported ${providerLabel} model is available. Last error: ${getErrorDetail(lastResponse)}`
   };
+}
+
+async function callOpenAIPrompt({ apiKey, prompt, maxTokens }) {
+  const modelCandidates = [
+    getOpenAIModel(),
+    DEFAULT_OPENAI_MODEL,
+    'gpt-4.1-mini',
+    'gpt-4o-mini',
+    'gpt-4.1',
+    'gpt-4o'
+  ];
+  return callOpenAICompatiblePrompt({
+    baseUrl: 'https://api.openai.com',
+    apiKey,
+    prompt,
+    maxTokens,
+    modelCandidates,
+    providerLabel: 'OpenAI'
+  });
 }
 
 async function callHarveyPrompt({ apiKey, prompt, maxTokens }) {
@@ -690,8 +842,46 @@ async function callHarveyPrompt({ apiKey, prompt, maxTokens }) {
   return { success: true, text: String(text), modelUsed: 'harvey-assist' };
 }
 
+async function callOllamaPrompt({ apiKey, prompt, maxTokens }) {
+  const modelCandidates = [
+    getOllamaModel(),
+    DEFAULT_OLLAMA_MODEL,
+    'llama3.1:8b',
+    'qwen2.5:7b'
+  ];
+  return callOpenAICompatiblePrompt({
+    baseUrl: getOllamaBaseUrl(),
+    apiKey,
+    prompt,
+    maxTokens,
+    modelCandidates,
+    providerLabel: 'Ollama'
+  });
+}
+
+async function callLmStudioPrompt({ apiKey, prompt, maxTokens }) {
+  const modelCandidates = [
+    getLmStudioModel(),
+    DEFAULT_LMSTUDIO_MODEL
+  ];
+  return callOpenAICompatiblePrompt({
+    baseUrl: getLmStudioBaseUrl(),
+    apiKey,
+    prompt,
+    maxTokens,
+    modelCandidates,
+    providerLabel: 'LM Studio'
+  });
+}
+
 async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
   const normalized = resolveProviderForApiKey(provider, apiKey);
+  if (normalized === 'ollama') {
+    return callOllamaPrompt({ apiKey, prompt, maxTokens });
+  }
+  if (normalized === 'lmstudio') {
+    return callLmStudioPrompt({ apiKey, prompt, maxTokens });
+  }
   if (normalized === 'openai') {
     return callOpenAIPrompt({ apiKey, prompt, maxTokens });
   }
@@ -699,6 +889,245 @@ async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
     return callHarveyPrompt({ apiKey, prompt, maxTokens });
   }
   return callAnthropicPrompt({ apiKey, prompt, maxTokens });
+}
+
+const AGENT_TABS = new Set([
+  'packets',
+  'packetshell',
+  'execution',
+  'sigblocks',
+  'collate',
+  'redline',
+  'email',
+  'timetrack',
+  'updatechecklist',
+  'punchlist'
+]);
+
+const AGENT_TAB_ALIASES = {
+  signature_packets: 'packets',
+  sig_packets: 'packets',
+  sigpacket: 'packets',
+  packet_shell: 'packetshell',
+  execution_version: 'execution',
+  sig_blocks: 'sigblocks',
+  checklist: 'updatechecklist',
+  update_checklist: 'updatechecklist',
+  activity_summary: 'timetrack',
+  time_tracking: 'timetrack',
+  punch_list: 'punchlist',
+  email_search: 'email',
+  task_detection: 'email'
+};
+
+function normalizeAgentTabName(value) {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+    .replace(/\s+/g, '_');
+  if (!raw) return null;
+  const mapped = AGENT_TAB_ALIASES[raw] || raw;
+  return AGENT_TABS.has(mapped) ? mapped : null;
+}
+
+function buildAgentFallbackPlan(commandText, attachments) {
+  const prompt = String(commandText || '').toLowerCase();
+  const files = Array.isArray(attachments) ? attachments : [];
+  const hasPdf = files.some(file => file.ext === 'pdf');
+  const hasDocLike = files.some(file => file.ext === 'pdf' || file.ext === 'docx' || file.ext === 'doc');
+
+  if (/(signature|sig)\s*(packet|packets|page|pages)|signing set|execution pages?/.test(prompt)) {
+    if (hasPdf) {
+      return {
+        action: 'run_signature_packets',
+        target_tab: 'packets',
+        run_now: true,
+        required_extensions: ['pdf'],
+        missing_requirements: [],
+        user_message: `Running signature packets with ${files.filter(f => f.ext === 'pdf').length} PDF file(s).`
+      };
+    }
+    return {
+      action: 'open_tab',
+      target_tab: 'packets',
+      run_now: false,
+      required_extensions: ['pdf'],
+      missing_requirements: ['Attach one or more PDF files to run signature packets.'],
+      user_message: 'Opened Create Sig Packets. Attach PDFs, then run again.'
+    };
+  }
+
+  if (/packet\s*shell|signature\s*shell/.test(prompt)) {
+    if (hasDocLike) {
+      return {
+        action: 'run_packet_shell',
+        target_tab: 'packetshell',
+        run_now: true,
+        required_extensions: ['pdf', 'docx', 'doc'],
+        missing_requirements: [],
+        user_message: `Running packet shell on ${files.filter(f => f.ext === 'pdf' || f.ext === 'docx' || f.ext === 'doc').length} file(s).`
+      };
+    }
+    return {
+      action: 'open_tab',
+      target_tab: 'packetshell',
+      run_now: false,
+      required_extensions: ['pdf', 'docx', 'doc'],
+      missing_requirements: ['Attach one or more PDF or Word files to run packet shell.'],
+      user_message: 'Opened Create Packet Shell. Attach files, then run again.'
+    };
+  }
+
+  if (/redline|blackline|compare|comparison/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'redline',
+      run_now: false,
+      required_extensions: ['docx', 'doc', 'pdf'],
+      missing_requirements: [],
+      user_message: 'Opened Redline Documents.'
+    };
+  }
+
+  if (/collat(e|ion)|merge comments|consolidate/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'collate',
+      run_now: false,
+      required_extensions: ['docx', 'doc'],
+      missing_requirements: [],
+      user_message: 'Opened Collate Documents.'
+    };
+  }
+
+  if (/execution version|conformed|insert signed/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'execution',
+      run_now: false,
+      required_extensions: ['pdf'],
+      missing_requirements: [],
+      user_message: 'Opened Execution Versions.'
+    };
+  }
+
+  if (/sig\s*block|signature block|incumbency/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'sigblocks',
+      run_now: false,
+      required_extensions: ['docx', 'xlsx', 'csv'],
+      missing_requirements: [],
+      user_message: 'Opened Sig Blocks from Checklist.'
+    };
+  }
+
+  if (/email|inbox|search email/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'email',
+      run_now: false,
+      required_extensions: ['csv'],
+      missing_requirements: [],
+      user_message: 'Opened Email Search.'
+    };
+  }
+
+  if (/checklist|update checklist/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'updatechecklist',
+      run_now: false,
+      required_extensions: ['docx', 'csv'],
+      missing_requirements: [],
+      user_message: 'Opened Update Checklist.'
+    };
+  }
+
+  if (/punchlist|punch list/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'punchlist',
+      run_now: false,
+      required_extensions: ['docx'],
+      missing_requirements: [],
+      user_message: 'Opened Generate Punchlist.'
+    };
+  }
+
+  if (/time|activity summary|timeline/.test(prompt)) {
+    return {
+      action: 'open_tab',
+      target_tab: 'timetrack',
+      run_now: false,
+      required_extensions: ['csv'],
+      missing_requirements: [],
+      user_message: 'Opened Activity Summary.'
+    };
+  }
+
+  return {
+    action: 'no_op',
+    target_tab: null,
+    run_now: false,
+    required_extensions: [],
+    missing_requirements: [],
+    user_message: 'I can route commands for signature packets, packet shell, redline, collate, checklist, punchlist, email search, and time summary.'
+  };
+}
+
+function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
+  const files = Array.isArray(attachments) ? attachments : [];
+  const fallback = fallbackPlan || buildAgentFallbackPlan('', files);
+  const candidate = rawPlan && typeof rawPlan === 'object' ? rawPlan : {};
+  const allowedActions = new Set(['run_signature_packets', 'run_packet_shell', 'open_tab', 'no_op']);
+  const actionValue = String(candidate.action || '').trim().toLowerCase().replace(/-/g, '_');
+  const action = allowedActions.has(actionValue) ? actionValue : fallback.action;
+  let targetTab = normalizeAgentTabName(candidate.target_tab) || fallback.target_tab || null;
+  let runNow = Boolean(candidate.run_now);
+
+  const requiredExtensions = Array.isArray(candidate.required_extensions)
+    ? candidate.required_extensions.map(x => String(x || '').toLowerCase().replace(/^\./, '')).filter(Boolean).slice(0, 6)
+    : (Array.isArray(fallback.required_extensions) ? fallback.required_extensions : []);
+
+  let missingRequirements = Array.isArray(candidate.missing_requirements)
+    ? candidate.missing_requirements.map(x => String(x || '').trim()).filter(Boolean).slice(0, 6)
+    : (Array.isArray(fallback.missing_requirements) ? fallback.missing_requirements : []);
+
+  const userMessageRaw = String(candidate.user_message || '').trim();
+  const userMessage = userMessageRaw || String(fallback.user_message || '').trim();
+
+  if (action === 'run_signature_packets') {
+    targetTab = 'packets';
+    const hasPdf = files.some(file => file.ext === 'pdf');
+    if (!hasPdf) {
+      runNow = false;
+      missingRequirements = ['Attach one or more PDF files to run signature packets.'];
+    }
+  } else if (action === 'run_packet_shell') {
+    targetTab = 'packetshell';
+    const hasSupported = files.some(file => file.ext === 'pdf' || file.ext === 'docx' || file.ext === 'doc');
+    if (!hasSupported) {
+      runNow = false;
+      missingRequirements = ['Attach one or more PDF or Word files to run packet shell.'];
+    }
+  } else if (action === 'open_tab') {
+    runNow = false;
+    if (!targetTab) targetTab = fallback.target_tab || 'packets';
+  } else {
+    targetTab = null;
+    runNow = false;
+  }
+
+  return {
+    action,
+    target_tab: targetTab,
+    run_now: runNow,
+    required_extensions: requiredExtensions,
+    missing_requirements: missingRequirements,
+    user_message: userMessage
+  };
 }
 
 async function checkVersionEnforcement() {
@@ -1764,14 +2193,65 @@ function getLiteraStyleExtension(literaType) {
   return expectedExtByType[literaType] || null;
 }
 
-function getPreferredLiteraColorStyleNames(literaType) {
+function normalizeLiteraStyleName(styleName) {
+  return String(styleName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function getLiteraStyleNameVariants(styleName, expectedExt) {
+  const variants = [];
+  const seen = new Set();
+
+  function add(value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    variants.push(trimmed);
+  }
+
+  const raw = String(styleName || '').trim();
+  if (!raw || !expectedExt) return variants;
+
+  const rawExt = path.extname(raw).toLowerCase();
+  const base = rawExt ? raw.slice(0, -rawExt.length).trim() : raw;
+
+  if (rawExt === expectedExt) {
+    add(raw);
+  } else if (base) {
+    add(`${base}${expectedExt}`);
+  } else {
+    add(raw);
+  }
+
+  if (base) {
+    add(`${base}${expectedExt}`);
+    if (!/^colou?r\s*\(/i.test(base)) {
+      add(`Color (${base})${expectedExt}`);
+      add(`Colour (${base})${expectedExt}`);
+    }
+  }
+
+  return variants;
+}
+
+function getPreferredLiteraColorStyleNames(literaType, preferredStyleName = null) {
   const expectedExt = getLiteraStyleExtension(literaType);
   if (!expectedExt) return [];
 
+  const preferred = getLiteraStyleNameVariants(preferredStyleName, expectedExt);
   return [
+    ...preferred,
     `Color (Kirkland Default)${expectedExt}`,
     `Colour (Kirkland Default)${expectedExt}`,
     `Kirkland Default${expectedExt}`,
+    `Kirkland${expectedExt}`,
+    `Color (Default)${expectedExt}`,
+    `Colour (Default)${expectedExt}`,
+    `Default${expectedExt}`,
     `Color${expectedExt}`,
     `Colour${expectedExt}`
   ];
@@ -1792,15 +2272,18 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
     return null;
   }
 
-  // Ignore human-readable names without file extension.
-  if (path.extname(raw).toLowerCase() !== expectedExt) {
-    return null;
+  const rawExt = path.extname(raw).toLowerCase();
+  let styleToken = raw;
+  if (!rawExt) {
+    styleToken = `${raw}${expectedExt}`;
+  } else if (rawExt !== expectedExt) {
+    styleToken = `${raw.slice(0, -rawExt.length)}${expectedExt}`;
   }
 
-  const isAbsolute = path.isAbsolute(raw);
-  const candidates = path.isAbsolute(raw)
-    ? [raw]
-    : [path.join(literaPath, raw), raw];
+  const isAbsolute = path.isAbsolute(styleToken);
+  const candidates = isAbsolute
+    ? [styleToken]
+    : [path.join(literaPath, styleToken), styleToken];
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -1811,21 +2294,23 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
   // Litera supports style filenames from the default style location,
   // so return the filename itself when it is not an absolute path.
   if (!isAbsolute) {
-    return raw;
+    return styleToken;
   }
 
-  console.warn(`Litera style file not found: ${raw}`);
+  console.warn(`Litera style file not found: ${styleToken}`);
   return null;
 }
 
-function findPreferredLiteraColorStyle(literaType, literaPath) {
+function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleName = null) {
   const expectedExt = getLiteraStyleExtension(literaType);
   if (!expectedExt) {
     return null;
   }
 
-  const preferredFilenames = getPreferredLiteraColorStyleNames(literaType);
+  const preferredFilenames = getPreferredLiteraColorStyleNames(literaType, preferredStyleName);
   const preferredSet = new Set(preferredFilenames.map(name => name.toLowerCase()));
+  const preferredStyleBase = normalizeLiteraStyleName(path.parse(String(preferredStyleName || '')).name || preferredStyleName);
+  const preferKirkland = !preferredStyleBase || preferredStyleBase.includes('kirkland');
   const blockedTerms = ['black', 'mono', 'monochrome', 'grayscale', 'grey scale', 'gray scale', 'b&w'];
 
   const startDirs = [literaPath, path.dirname(literaPath)];
@@ -1855,7 +2340,7 @@ function findPreferredLiteraColorStyle(literaType, literaPath) {
   const visited = new Set();
 
   function walk(currentDir, depth) {
-    if (depth > 3 || visited.has(currentDir)) return;
+    if (depth > 5 || visited.has(currentDir)) return;
     visited.add(currentDir);
 
     let entries;
@@ -1869,7 +2354,7 @@ function findPreferredLiteraColorStyle(literaType, literaPath) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         const dirName = entry.name.toLowerCase();
-        if (depth < 3 || dirName.includes('style') || dirName.includes('template')) {
+        if (depth < 5 || dirName.includes('style') || dirName.includes('template')) {
           walk(fullPath, depth + 1);
         }
         continue;
@@ -1895,11 +2380,20 @@ function findPreferredLiteraColorStyle(literaType, literaPath) {
   for (const filePath of styleFiles) {
     const baseName = path.basename(filePath).toLowerCase();
     let score = 0;
+    const isBlocked = blockedTerms.some(term => baseName.includes(term));
 
-    if (preferredSet.has(baseName)) score += 100;
+    if (preferredSet.has(baseName)) score += 120;
+    if (preferredStyleBase && baseName.includes(preferredStyleBase)) score += 900;
     if (baseName.includes('color') || baseName.includes('colour')) score += 50;
-    if (baseName.includes('kirkland')) score += 20;
-    if (blockedTerms.some(term => baseName.includes(term))) score -= 120;
+    if (baseName.includes('default')) score += 20;
+    if (baseName.includes('redline')) score += 10;
+    if (preferKirkland && baseName.includes('kirkland')) score += 300;
+    if (preferKirkland && baseName.includes('kirkland default')) score += 200;
+    if (isBlocked) {
+      score -= 1000;
+    } else {
+      score += 10;
+    }
 
     if (score > bestScore) {
       bestScore = score;
@@ -1928,8 +2422,8 @@ function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
     addCandidate(requestedStyle);
   }
 
-  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath));
-  for (const styleName of getPreferredLiteraColorStyleNames(literaType)) {
+  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, renderingStyle));
+  for (const styleName of getPreferredLiteraColorStyleNames(literaType, renderingStyle)) {
     addCandidate(styleName);
   }
 
@@ -1944,12 +2438,17 @@ function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
 function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingStyle, compareOptions = {}) {
   return new Promise((resolve, reject) => {
     const origExt = path.extname(originalPath);
+    const originalBaseName = path.parse(originalPath || '').name.toLowerCase();
+    const modifiedBaseName = path.parse(modifiedPath || '').name.toLowerCase();
     const normalizedOptions = {
       output_format: String(compareOptions.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
       change_pages_only: !!compareOptions.change_pages_only
     };
     const literaType = getLiteraTypeForExtension(origExt);
-    const literaExe = getLiteraExecutable(origExt, { preferPerApp: normalizedOptions.change_pages_only });
+    const prefersPerAppForStyles = ['word', 'powerpoint', 'excel'].includes(literaType || '');
+    const literaExe = getLiteraExecutable(origExt, {
+      preferPerApp: normalizedOptions.change_pages_only || prefersPerAppForStyles
+    });
 
     if (!literaExe) {
       reject(new Error(`Litera Compare does not support ${origExt} files`));
@@ -1963,7 +2462,15 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
 
     const literaInstallPath = path.dirname(literaExe.exe);
     const styleCandidates = getLiteraColorStyleCandidates(literaExe.type, literaInstallPath, renderingStyle);
-    const styleAttempts = styleCandidates.length ? [...styleCandidates, null] : [null];
+    const hasStyleSupport = !!getLiteraStyleExtension(literaExe.type);
+    const styleAttempts = styleCandidates.length
+      ? (hasStyleSupport ? [...styleCandidates] : [...styleCandidates, null])
+      : [null];
+    if (styleCandidates.length) {
+      console.log('Litera style candidates:', styleCandidates.map(s => path.basename(String(s))));
+    } else if (getLiteraStyleExtension(literaExe.type)) {
+      console.warn('No explicit Litera color style found; using Litera default rendering style.');
+    }
 
     if (normalizedOptions.output_format === 'pdf' && !normalizedOptions.change_pages_only && literaType && !['word', 'pdf'].includes(literaType)) {
       reject(new Error('PDF output is currently supported only for Word/PDF comparisons.'));
@@ -1980,23 +2487,87 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
       })();
     }
 
-    function cleanupTempOutput(tempPath) {
+    function cleanupTempOutput(tempPath, options = {}) {
       if (tempPath && fs.existsSync(tempPath)) {
+        const keepIfMatches = options.keepIfMatches ? path.resolve(options.keepIfMatches) : null;
+        if (keepIfMatches && path.resolve(tempPath) === keepIfMatches) {
+          return;
+        }
         try { fs.unlinkSync(tempPath); } catch (_) {}
       }
     }
 
-    function buildArgsForStyle(styleValue) {
-      let args = [];
-      let primaryOutputPath = outputPath;
-      let tempAutoOutputPath = null;
+    function buildFallbackNativeOutputPath(primaryPath, sourcePath) {
+      const sourceExt = path.extname(sourcePath || '') || origExt || '.docx';
+      const primaryExt = path.extname(primaryPath || '');
+      const normalizedSourceExt = sourceExt.startsWith('.') ? sourceExt : `.${sourceExt}`;
+      if (primaryExt && primaryExt.toLowerCase() === normalizedSourceExt.toLowerCase()) {
+        return primaryPath;
+      }
+      const basePath = primaryExt
+        ? primaryPath.slice(0, -primaryExt.length)
+        : primaryPath;
+      return `${basePath}${normalizedSourceExt}`;
+    }
+
+    function findFallbackChangePagesPdf(primaryPath, startedAtMs) {
+      const outputDir = path.dirname(primaryPath);
+      let entries = [];
+      try {
+        entries = fs.readdirSync(outputDir, { withFileTypes: true });
+      } catch (_) {
+        return null;
+      }
+
+      let best = null;
+      let bestScore = Number.NEGATIVE_INFINITY;
+
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (path.extname(entry.name).toLowerCase() !== '.pdf') continue;
+        const fullPath = path.join(outputDir, entry.name);
+        let stat;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch (_) {
+          continue;
+        }
+        if (!stat || stat.size <= 0) continue;
+        if (stat.mtimeMs < (startedAtMs - 10000)) continue;
+
+        const lowerName = entry.name.toLowerCase();
+        let score = stat.mtimeMs;
+        if (lowerName.includes('redp')) score += 2000;
+        if (lowerName.includes('change')) score += 1000;
+        if (lowerName.includes('changed')) score += 1000;
+        if (originalBaseName && lowerName.includes(originalBaseName)) score += 1500;
+        if (modifiedBaseName && lowerName.includes(modifiedBaseName)) score += 1500;
+
+        if (score > bestScore) {
+          best = fullPath;
+          bestScore = score;
+        }
+      }
+
+      return best;
+    }
+
+      function buildArgsForStyle(styleValue) {
+        let args = [];
+        let primaryOutputPath = outputPath;
+        let tempAutoOutputPath = null;
+        let warning = null;
 
       if (literaExe.mode === 'auto') {
         if (normalizedOptions.change_pages_only) {
-          throw new Error('Change pages only redline requires lcp_main.exe or lcp_ppt.exe.');
+          warning = 'Change pages only is not supported by this Litera installation; generated a full redline document instead.';
+          tempAutoOutputPath = path.join(
+            app.getPath('temp'),
+            `litera_full_${Date.now()}_${Math.floor(Math.random() * 100000)}${origExt || '.docx'}`
+          );
         }
         // Litera CLI: lcp_auto.exe -o <original> -m <modified> -r <redline> [-s <style>]
-        args = ['-o', originalPath, '-m', modifiedPath, '-r', primaryOutputPath];
+        args = ['-o', originalPath, '-m', modifiedPath, '-r', tempAutoOutputPath || primaryOutputPath];
         if (styleValue) {
           args.push('-s', styleValue);
         }
@@ -2032,7 +2603,7 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
         throw new Error(`Unsupported Litera mode: ${literaExe.mode}`);
       }
 
-      return { args, primaryOutputPath, tempAutoOutputPath };
+      return { args, primaryOutputPath, tempAutoOutputPath, warning };
     }
 
     mainWindow.webContents.send('redline-progress', {
@@ -2061,7 +2632,8 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
         return;
       }
 
-      const { args, primaryOutputPath, tempAutoOutputPath } = attemptConfig;
+      const { args, primaryOutputPath, tempAutoOutputPath, warning } = attemptConfig;
+      const attemptStartedAt = Date.now();
 
       mainWindow.webContents.send('redline-progress', {
         percent: 45,
@@ -2095,9 +2667,63 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
       });
 
       proc.on('close', (code) => {
-        cleanupTempOutput(tempAutoOutputPath);
+        let resolvedOutputPath = primaryOutputPath;
+        let resolvedWarning = warning || null;
+        let usedChangePagesFallback = false;
+        const styleRejectedPattern = /(style).*(not found|missing|unable|cannot|can't|invalid)/i;
+        const styleRejected = !!styleValue && styleRejectedPattern.test(`${stdout}\n${stderr}`);
 
-        if (hasOutputFile(primaryOutputPath)) {
+        if (styleRejected) {
+          if (index < styleAttempts.length - 1) {
+            console.warn(`Litera style "${styleLabel}" appears invalid. Retrying with next style candidate.`);
+            cleanupTempOutput(tempAutoOutputPath);
+            runAttempt(index + 1);
+            return;
+          }
+          cleanupTempOutput(tempAutoOutputPath);
+          reject(new Error(`Litera could not apply style "${styleLabel}".`));
+          return;
+        }
+
+        if (!hasOutputFile(resolvedOutputPath) && tempAutoOutputPath && hasOutputFile(tempAutoOutputPath)) {
+          const fallbackOutputPath = buildFallbackNativeOutputPath(primaryOutputPath, tempAutoOutputPath);
+          try {
+            if (path.resolve(fallbackOutputPath) !== path.resolve(tempAutoOutputPath)) {
+              fs.copyFileSync(tempAutoOutputPath, fallbackOutputPath);
+              resolvedOutputPath = fallbackOutputPath;
+            } else {
+              resolvedOutputPath = tempAutoOutputPath;
+            }
+          } catch (_) {
+            resolvedOutputPath = tempAutoOutputPath;
+          }
+          usedChangePagesFallback = true;
+          if (!resolvedWarning) {
+            resolvedWarning = 'Change pages only output was unavailable; generated a full redline document instead.';
+          }
+        }
+
+        if (!hasOutputFile(resolvedOutputPath) && normalizedOptions.change_pages_only) {
+          const fallbackPdf = findFallbackChangePagesPdf(primaryOutputPath, attemptStartedAt);
+          if (fallbackPdf && hasOutputFile(fallbackPdf)) {
+            if (path.resolve(fallbackPdf) !== path.resolve(primaryOutputPath)) {
+              try {
+                fs.copyFileSync(fallbackPdf, primaryOutputPath);
+                resolvedOutputPath = primaryOutputPath;
+              } catch (_) {
+                resolvedOutputPath = fallbackPdf;
+              }
+            } else {
+              resolvedOutputPath = fallbackPdf;
+            }
+            if (!resolvedWarning) {
+              resolvedWarning = 'Used Litera fallback output path for changed-pages PDF.';
+            }
+          }
+        }
+
+        if (hasOutputFile(resolvedOutputPath)) {
+          cleanupTempOutput(tempAutoOutputPath, { keepIfMatches: resolvedOutputPath });
           const method = `CLI (${path.basename(literaExe.exe)})`;
           console.log(`Comparison complete via ${method}`);
 
@@ -2109,15 +2735,18 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
           resolve({
             success: true,
             engine: 'litera',
-            output_path: primaryOutputPath,
+            output_path: resolvedOutputPath,
             litera_type: literaExe.type,
             output_format: normalizedOptions.output_format,
-            change_pages_only: normalizedOptions.change_pages_only,
+            change_pages_only: normalizedOptions.change_pages_only && !usedChangePagesFallback,
             method,
-            litera_style: styleValue ? path.basename(String(styleValue)) : null
+            litera_style: styleValue ? path.basename(String(styleValue)) : null,
+            warning: resolvedWarning
           });
           return;
         }
+
+        cleanupTempOutput(tempAutoOutputPath);
 
         let errMsg = `Litera CLI failed (exit code ${code}).`;
         if (stdout.trim()) errMsg += `\nstdout: ${stdout.trim().substring(0, 800)}`;
@@ -2181,6 +2810,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
     output_format: String(config.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
     change_pages_only: !!config.change_pages_only
   };
+  const configuredStyleName = String(config.rendering_style || '').trim() || getLiteraDefaultStyleName();
   const requiresStrictLitera =
     literaOptions.change_pages_only || literaOptions.output_format === 'pdf';
 
@@ -2238,7 +2868,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
               pair.original,
               pair.modified,
               outputPath,
-              config.rendering_style,
+              configuredStyleName,
               literaOptions
             );
             results.push({ ...result, pair_index: i });
@@ -2276,7 +2906,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
           config.original,
           config.modified,
           outputPath,
-          config.rendering_style,
+          configuredStyleName,
           literaOptions
         );
 
@@ -2594,7 +3224,7 @@ ipcMain.handle('nl-search-emails', async (event, config) => {
   const provider = resolveProviderForApiKey(requestedProvider, apiKey);
   const providerName = getAIProviderDisplayName(provider);
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(provider) && !apiKey) {
     return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
   }
 
@@ -2738,6 +3368,130 @@ Respond ONLY with the JSON object, no other text.`;
   });
 });
 
+ipcMain.handle('agent-plan', async (event, payload) => {
+  try {
+    const prompt = String(payload?.prompt || '').trim();
+    if (!prompt) {
+      return { success: false, error: 'Please enter a command for Agent Mode.' };
+    }
+
+    const attachmentInput = Array.isArray(payload?.attachments) ? payload.attachments : [];
+    const attachments = attachmentInput
+      .map((item, index) => {
+        const itemPath = String(item?.path || '').trim();
+        const nameFromPath = itemPath ? path.basename(itemPath) : '';
+        const safeName = String(item?.name || nameFromPath || `attachment-${index + 1}`).trim();
+        const ext = String(path.extname(safeName || itemPath || '') || '').toLowerCase().replace(/^\./, '');
+        return { path: itemPath, name: safeName, ext };
+      })
+      .filter(item => item.path || item.name);
+
+    const fallbackPlan = buildAgentFallbackPlan(prompt, attachments);
+    const requestedProvider = normalizeAIProvider(payload?.provider || getAIProvider());
+    const apiKey = String(payload?.apiKey || getApiKey() || '').trim();
+    const provider = resolveProviderForApiKey(requestedProvider, apiKey);
+    const providerName = getAIProviderDisplayName(provider);
+
+    if (providerRequiresApiKey(provider) && !apiKey) {
+      return {
+        success: true,
+        source: 'rules',
+        provider,
+        providerName,
+        plan: fallbackPlan,
+        warning: `No ${providerName} API key configured. Using local routing logic.`
+      };
+    }
+
+    const capabilities = [
+      'packets: Create Sig Packets',
+      'packetshell: Create Packet Shell',
+      'execution: Execution Versions',
+      'sigblocks: Sig Blocks from Checklist',
+      'collate: Collate Documents',
+      'redline: Redline Documents',
+      'email: Email Search',
+      'timetrack: Activity Summary',
+      'updatechecklist: Update Checklist',
+      'punchlist: Generate Punchlist'
+    ];
+
+    const attachmentSummary = attachments.length
+      ? attachments.map(file => `${file.name} (${file.ext || 'unknown'})`).join(', ')
+      : 'None';
+
+    const plannerPrompt = `You are EmmaNeigh Agent Mode.
+Decide how to route the user command into one app action.
+
+Allowed actions:
+- run_signature_packets (requires PDF attachments)
+- run_packet_shell (requires PDF/DOC/DOCX attachments)
+- open_tab
+- no_op
+
+Allowed target_tab values:
+packets, packetshell, execution, sigblocks, collate, redline, email, timetrack, updatechecklist, punchlist
+
+App capabilities:
+${capabilities.join('\n')}
+
+User command:
+${prompt}
+
+Attached files:
+${attachmentSummary}
+
+Return JSON only with this exact shape:
+{
+  "action": "run_signature_packets|run_packet_shell|open_tab|no_op",
+  "target_tab": "packets|packetshell|execution|sigblocks|collate|redline|email|timetrack|updatechecklist|punchlist|null",
+  "run_now": true,
+  "required_extensions": ["pdf"],
+  "missing_requirements": [],
+  "user_message": "short one-sentence instruction for the user"
+}
+
+Rules:
+- If request is clearly for signature packets and PDFs are attached, choose run_signature_packets and run_now true.
+- If request is clearly for packet shell and compatible docs are attached, choose run_packet_shell and run_now true.
+- If required files are missing, choose open_tab with run_now false and include missing_requirements.
+- Never invent files or claim a workflow ran if run_now is false.
+- Output valid JSON only.`;
+
+    const aiResult = await callProviderPrompt({
+      provider,
+      apiKey,
+      prompt: plannerPrompt,
+      maxTokens: 450
+    });
+
+    if (!aiResult.success) {
+      return {
+        success: true,
+        source: 'rules',
+        provider,
+        providerName,
+        plan: fallbackPlan,
+        warning: aiResult.error || 'Agent planner fallback used due to provider error.'
+      };
+    }
+
+    const parsed = extractJsonResponse(aiResult.text || '');
+    const plan = sanitizeAgentPlan(parsed, fallbackPlan, attachments);
+    return {
+      success: true,
+      source: parsed ? 'llm' : 'rules',
+      provider,
+      providerName,
+      modelUsed: aiResult.modelUsed || null,
+      plan,
+      warning: parsed ? null : 'Could not parse model output. Used rules fallback.'
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // ========== TASK DETECTION ==========
 
 ipcMain.handle('detect-tasks', async (event, config) => {
@@ -2750,7 +3504,7 @@ ipcMain.handle('detect-tasks', async (event, config) => {
   const provider = resolveProviderForApiKey(requestedProvider, apiKey);
   const providerName = getAIProviderDisplayName(provider);
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(provider) && !apiKey) {
     return { success: false, error: `No API key configured. Please add your ${providerName} API key in Settings.` };
   }
 
@@ -3077,11 +3831,39 @@ ipcMain.handle('test-api-key', async (event, payload) => {
     const providerLabel = getAIProviderDisplayName(provider);
     const providerAutoDetected = provider !== requestedProvider;
 
+    let response;
+    if (provider === 'ollama') {
+      response = await requestHttps({
+        baseUrl: getOllamaBaseUrl(),
+        path: '/v1/models',
+        method: 'GET',
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        timeoutMs: 15000
+      });
+      if (response.statusCode === 200) {
+        return { success: true, message: 'Ollama connection successful', provider };
+      }
+      return { success: false, error: `Ollama is not reachable at ${getOllamaBaseUrl()}. ${getErrorDetail(response)}` };
+    }
+
+    if (provider === 'lmstudio') {
+      response = await requestHttps({
+        baseUrl: getLmStudioBaseUrl(),
+        path: '/v1/models',
+        method: 'GET',
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        timeoutMs: 15000
+      });
+      if (response.statusCode === 200) {
+        return { success: true, message: 'LM Studio connection successful', provider };
+      }
+      return { success: false, error: `LM Studio is not reachable at ${getLmStudioBaseUrl()}. ${getErrorDetail(response)}` };
+    }
+
     if (!apiKey) {
       return { success: false, error: `No ${providerLabel} API key provided` };
     }
 
-    let response;
     if (provider === 'openai') {
       response = await requestHttps({
         baseUrl: 'https://api.openai.com',
@@ -3146,8 +3928,13 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
     return { success: false, error: 'Username and password are required' };
   }
 
-  if (!email || !email.includes('@')) {
-    return { success: false, error: 'A valid email address is required for two-factor authentication' };
+  const normalizedEmail = String(email || '').trim();
+  if (normalizedEmail && !normalizedEmail.includes('@')) {
+    return { success: false, error: 'Please enter a valid email address or leave it blank' };
+  }
+
+  if (!securityQuestion || !securityAnswer || !String(securityAnswer).trim()) {
+    return { success: false, error: 'Security question and answer are required for password reset' };
   }
 
   if (password.length < 4) {
@@ -3164,8 +3951,8 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
       securityAnswerHash = hashPassword(securityAnswer.toLowerCase().trim());
     }
 
-    db.run(`INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-      [id, username.toLowerCase().trim(), email.trim(), passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
+    db.run(`INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+      [id, username.toLowerCase().trim(), normalizedEmail || null, passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
     saveDatabase();
 
     return { success: true, userId: id };
@@ -3177,7 +3964,7 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
   }
 });
 
-// Login with username/password (step 1 of login - may require 2FA)
+// Login with username/password
 ipcMain.handle('login-user', async (event, { username, password }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
 
@@ -3186,59 +3973,26 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
   }
 
   try {
-    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted, email, two_factor_enabled FROM users WHERE username = '${username.toLowerCase().trim()}'`);
+    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted FROM users WHERE username = '${username.toLowerCase().trim()}'`);
 
     if (result.length === 0 || result[0].values.length === 0) {
       return { success: false, error: 'User not found' };
     }
 
     const row = result[0].values[0];
-    const [id, uname, passwordHash, displayName, apiKeyEnc, email, twoFactorEnabled] = row;
+    const [id, uname, passwordHash, displayName, apiKeyEnc] = row;
 
     if (!verifyPassword(password, passwordHash)) {
       return { success: false, error: 'Invalid password' };
     }
 
-    // 2FA is mandatory for all users with an email address
-    if (email) {
-      // Generate and send verification code
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
+    saveDatabase();
+    logUserActivity(uname, 'login');
 
-      // Invalidate existing codes
-      db.run(`UPDATE verification_codes SET used = 1 WHERE user_id = '${id}' AND type = 'login' AND used = 0`);
-
-      // Store new code
-      db.run(`INSERT INTO verification_codes (user_id, code, type, expires_at) VALUES (?, ?, ?, ?)`,
-        [id, code, 'login', expiresAt]);
-      saveDatabase();
-
-      // Send verification email
-      const emailResult = await sendVerificationEmail(email, code, 'login');
-
-      // Mask email for display
-      const maskedEmail = email.replace(/(.{2})(.*)(@.*)/, '$1***$3');
-
-      const response = {
-        success: true,
-        requires2FA: true,
-        userId: id,
-        email: maskedEmail
-      };
-
-      // If SMTP not configured, include code for development/fallback
-      if (!emailResult.sent) {
-        response._devCode = code;
-        response._smtpNote = emailResult.reason || 'Email not sent';
-      }
-
-      return response;
-    }
-
-    // No email on account - require email to be set (2FA mandatory)
     return {
-      success: false,
-      error: 'Email address required for login. Please contact your administrator to add an email to your account.'
+      success: true,
+      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -3719,6 +4473,10 @@ ipcMain.handle('toggle-2fa', async (event, { userId, enable }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
 
   try {
+    if (!enable) {
+      return { success: false, error: 'Two-factor authentication is mandatory and cannot be disabled.' };
+    }
+
     // Check if user has verified email
     const result = db.exec(`SELECT email, email_verified FROM users WHERE id = '${userId}'`);
 
@@ -3785,7 +4543,7 @@ ipcMain.handle('update-user-email', async (event, { userId, email }) => {
     }
 
     // Update email and reset verification status
-    db.run(`UPDATE users SET email = '${email}', email_verified = 0, two_factor_enabled = 0 WHERE id = '${userId}'`);
+    db.run(`UPDATE users SET email = '${email}', email_verified = 0, two_factor_enabled = 1 WHERE id = '${userId}'`);
     saveDatabase();
 
     return { success: true };
@@ -3855,6 +4613,33 @@ function getOpenAIModel() {
   return model || DEFAULT_OPENAI_MODEL;
 }
 
+function getOllamaBaseUrl() {
+  const raw = (getSettingValue('ollama_base_url', DEFAULT_OLLAMA_BASE_URL) || '').trim();
+  if (!raw) return DEFAULT_OLLAMA_BASE_URL;
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
+function getLmStudioBaseUrl() {
+  const raw = (getSettingValue('lmstudio_base_url', DEFAULT_LMSTUDIO_BASE_URL) || '').trim();
+  if (!raw) return DEFAULT_LMSTUDIO_BASE_URL;
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
+function getOllamaModel() {
+  const model = (getSettingValue('ollama_model', DEFAULT_OLLAMA_MODEL) || '').trim();
+  return model || DEFAULT_OLLAMA_MODEL;
+}
+
+function getLmStudioModel() {
+  const model = (getSettingValue('lmstudio_model', DEFAULT_LMSTUDIO_MODEL) || '').trim();
+  return model || DEFAULT_LMSTUDIO_MODEL;
+}
+
+function getLiteraDefaultStyleName() {
+  const value = (getSettingValue('litera_default_style_name', DEFAULT_LITERA_STYLE_NAME) || '').trim();
+  return value || DEFAULT_LITERA_STYLE_NAME;
+}
+
 function getHarveyBaseUrl() {
   const raw = (getSettingValue('harvey_base_url', DEFAULT_HARVEY_BASE_URL) || '').trim();
   if (!raw) return DEFAULT_HARVEY_BASE_URL;
@@ -3880,13 +4665,25 @@ ipcMain.handle('save-smtp-settings', async (event, { host, port, user, pass, fro
   if (!db) return { success: false, error: 'Database not initialized' };
 
   try {
-    // Encrypt password if possible
-    let encryptedPass = pass;
-    if (pass && safeStorage.isEncryptionAvailable()) {
-      encryptedPass = safeStorage.encryptString(pass).toString('base64');
+    const existingStoredPassRaw = String(getSettingValue('smtp_pass', '') || '');
+    const hasNewPassword = typeof pass === 'string' && pass.length > 0;
+
+    // Preserve existing SMTP password unless user provides a new one.
+    let storedPassValue = existingStoredPassRaw;
+    if (hasNewPassword) {
+      storedPassValue = pass;
+      if (safeStorage.isEncryptionAvailable()) {
+        storedPassValue = safeStorage.encryptString(pass).toString('base64');
+      }
     }
 
-    const settings = { smtp_host: host, smtp_port: port, smtp_user: user, smtp_pass: encryptedPass, smtp_from: from || user };
+    const settings = {
+      smtp_host: host,
+      smtp_port: port,
+      smtp_user: user,
+      smtp_pass: storedPassValue,
+      smtp_from: from || user
+    };
     for (const [key, value] of Object.entries(settings)) {
       db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${(value || '').replace(/'/g, "''")}' )`);
     }
@@ -3919,11 +4716,23 @@ ipcMain.handle('get-smtp-settings', async (event) => {
 // Test SMTP connection
 ipcMain.handle('test-smtp', async (event, { host, port, user, pass, from }) => {
   try {
+    const saved = getSmtpSettings() || {};
+    const effectiveHost = String(host || '').trim() || String(saved.smtp_host || '').trim();
+    const effectivePort = String(port || '').trim() || String(saved.smtp_port || '').trim() || '587';
+    const effectiveUser = String(user || '').trim() || String(saved.smtp_user || '').trim();
+    const effectivePass = (typeof pass === 'string' && pass.length > 0)
+      ? pass
+      : String(saved.smtp_pass || '');
+
+    if (!effectiveHost || !effectiveUser || !effectivePass) {
+      return { success: false, error: 'SMTP host, user, and password are required. Save SMTP settings first.' };
+    }
+
     const transporter = nodemailer.createTransport({
-      host: host,
-      port: parseInt(port) || 587,
-      secure: parseInt(port) === 465,
-      auth: { user, pass }
+      host: effectiveHost,
+      port: parseInt(effectivePort) || 587,
+      secure: parseInt(effectivePort) === 465,
+      auth: { user: effectiveUser, pass: effectivePass }
     });
 
     await transporter.verify();
@@ -3975,7 +4784,7 @@ ipcMain.handle('log-usage', async (event, data) => {
       INSERT INTO usage_history (user_name, feature, action, input_count, output_count, duration_ms)
       VALUES (?, ?, ?, ?, ?, ?)
     `, [
-      data.user_name || 'Guest',
+      data.user_name || 'unknown',
       data.feature || 'unknown',
       data.action || 'process',
       data.input_count || 0,
@@ -3983,6 +4792,23 @@ ipcMain.handle('log-usage', async (event, data) => {
       data.duration_ms || 0
     ]);
     saveDatabase();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('submit-feedback', async (event, data) => {
+  try {
+    const username = String(data?.username || '').trim();
+    const request = String(data?.request || '').trim();
+    if (!username) {
+      return { success: false, error: 'Username is required.' };
+    }
+    if (!request) {
+      return { success: false, error: 'Feedback cannot be empty.' };
+    }
+    logFeedbackToFirestore({ username, request });
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -4144,18 +4970,36 @@ ipcMain.handle('open-file', async (event, filePath) => {
 
 // Update Checklist - parse emails and update checklist status
 ipcMain.handle('update-checklist', async (event, config) => {
+  config = config || {};
   const { checklistPath, emailPath } = config;
-  const apiKey = getApiKey();
-  const provider = resolveProviderForApiKey(getAIProvider(), apiKey);
-  const providerName = getAIProviderDisplayName(provider);
-  const providerModel = provider === 'openai' ? getOpenAIModel() : (provider === 'anthropic' ? getClaudeModel() : '');
-  const harveyBaseUrl = getHarveyBaseUrl();
+  const aiContext = resolveAiCallContext({
+    apiKey: config.api_key || getApiKey(),
+    requestedProvider: config.provider || getAIProvider()
+  });
+  const { apiKey, provider, providerName, providerAutoDetectNote } = aiContext;
+  const providerModel =
+    provider === 'openai' ? getOpenAIModel()
+    : provider === 'anthropic' ? getClaudeModel()
+    : provider === 'ollama' ? getOllamaModel()
+    : provider === 'lmstudio' ? getLmStudioModel()
+    : '';
+  const providerBaseUrl =
+    provider === 'harvey' ? getHarveyBaseUrl()
+    : provider === 'ollama' ? getOllamaBaseUrl()
+    : provider === 'lmstudio' ? getLmStudioBaseUrl()
+    : '';
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(provider) && !apiKey) {
     return {
       success: false,
       error: `No API key configured. Please add your ${providerName} API key in Settings.`
     };
+  }
+  if (!checklistPath || !fs.existsSync(checklistPath)) {
+    return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
+  }
+  if (!emailPath || !fs.existsSync(emailPath)) {
+    return { success: false, error: 'Email CSV file not found. Please select a valid .csv export.' };
   }
 
   // Create temp output folder
@@ -4183,11 +5027,14 @@ ipcMain.handle('update-checklist', async (event, config) => {
     let args;
 
     if (app.isPackaged) {
-      args = [clModuleName, checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, harveyBaseUrl];
+      args = [clModuleName, checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
     } else {
-      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, harveyBaseUrl];
+      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
     }
 
+    if (providerAutoDetectNote) {
+      mainWindow.webContents.send('checklist-progress', { message: providerAutoDetectNote, percent: 10 });
+    }
     mainWindow.webContents.send('checklist-progress', { message: `Analyzing checklist and emails with ${providerName}...`, percent: 20 });
 
     const proc = spawn(processorPath, args);
@@ -4211,17 +5058,21 @@ ipcMain.handle('update-checklist', async (event, config) => {
         return;
       }
 
-      try {
-        const result = JSON.parse(stdout);
-        resolve({
-          success: result.success,
-          outputPath: result.output_path,
-          itemsUpdated: result.items_updated,
-          error: result.error
-        });
-      } catch (e) {
-        resolve({ success: false, error: 'Failed to parse result: ' + e.message });
+      const result = parseProcessorJsonOutput(stdout);
+      if (!result) {
+        const stderrDetail = String(stderr || '').trim();
+        const stdoutDetail = String(stdout || '').trim().slice(-300);
+        const detail = stderrDetail || stdoutDetail;
+        resolve({ success: false, error: `Failed to parse checklist result.${detail ? ` Details: ${detail}` : ''}` });
+        return;
       }
+
+      resolve({
+        success: !!result.success,
+        outputPath: result.output_path,
+        itemsUpdated: result.items_updated,
+        error: result.error
+      });
     });
 
     proc.on('error', (err) => {
@@ -4232,18 +5083,33 @@ ipcMain.handle('update-checklist', async (event, config) => {
 
 // Generate Punchlist - extract open items from checklist
 ipcMain.handle('generate-punchlist', async (event, config) => {
+  config = config || {};
   const { checklistPath, statusFilters } = config;
-  const apiKey = getApiKey();
-  const provider = resolveProviderForApiKey(getAIProvider(), apiKey);
-  const providerName = getAIProviderDisplayName(provider);
-  const providerModel = provider === 'openai' ? getOpenAIModel() : (provider === 'anthropic' ? getClaudeModel() : '');
-  const harveyBaseUrl = getHarveyBaseUrl();
+  const aiContext = resolveAiCallContext({
+    apiKey: config.api_key || getApiKey(),
+    requestedProvider: config.provider || getAIProvider()
+  });
+  const { apiKey, provider, providerName, providerAutoDetectNote } = aiContext;
+  const providerModel =
+    provider === 'openai' ? getOpenAIModel()
+    : provider === 'anthropic' ? getClaudeModel()
+    : provider === 'ollama' ? getOllamaModel()
+    : provider === 'lmstudio' ? getLmStudioModel()
+    : '';
+  const providerBaseUrl =
+    provider === 'harvey' ? getHarveyBaseUrl()
+    : provider === 'ollama' ? getOllamaBaseUrl()
+    : provider === 'lmstudio' ? getLmStudioBaseUrl()
+    : '';
 
-  if (!apiKey) {
+  if (providerRequiresApiKey(provider) && !apiKey) {
     return {
       success: false,
       error: `No API key configured. Please add your ${providerName} API key in Settings.`
     };
+  }
+  if (!checklistPath || !fs.existsSync(checklistPath)) {
+    return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
   }
 
   // Create temp output folder
@@ -4272,11 +5138,14 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
     const filtersJson = JSON.stringify(statusFilters || ['pending', 'review', 'signature']);
 
     if (app.isPackaged) {
-      args = [plModuleName, checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, harveyBaseUrl];
+      args = [plModuleName, checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, providerBaseUrl];
     } else {
-      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, harveyBaseUrl];
+      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, providerBaseUrl];
     }
 
+    if (providerAutoDetectNote) {
+      mainWindow.webContents.send('punchlist-progress', { message: providerAutoDetectNote, percent: 15 });
+    }
     mainWindow.webContents.send('punchlist-progress', { message: `Analyzing checklist with ${providerName}...`, percent: 30 });
 
     const proc = spawn(processorPath, args);
@@ -4300,18 +5169,22 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
         return;
       }
 
-      try {
-        const result = JSON.parse(stdout);
-        resolve({
-          success: result.success,
-          outputPath: result.output_path,
-          itemCount: result.item_count,
-          categories: result.categories,
-          error: result.error
-        });
-      } catch (e) {
-        resolve({ success: false, error: 'Failed to parse result: ' + e.message });
+      const result = parseProcessorJsonOutput(stdout);
+      if (!result) {
+        const stderrDetail = String(stderr || '').trim();
+        const stdoutDetail = String(stdout || '').trim().slice(-300);
+        const detail = stderrDetail || stdoutDetail;
+        resolve({ success: false, error: `Failed to parse punchlist result.${detail ? ` Details: ${detail}` : ''}` });
+        return;
       }
+
+      resolve({
+        success: !!result.success,
+        outputPath: result.output_path,
+        itemCount: result.item_count,
+        categories: result.categories,
+        error: result.error
+      });
     });
 
     proc.on('error', (err) => {

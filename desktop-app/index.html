@@ -405,6 +405,21 @@
     }
 
     /* Navigation Sidebar */
+    .workspace-layout {
+      display: flex;
+      gap: 18px;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .manual-panel {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+    }
+
     .main-layout {
       display: flex;
       gap: 24px;
@@ -546,6 +561,212 @@
       flex-direction: column;
       min-width: 0;
       overflow-y: auto;
+    }
+
+    .agent-panel {
+      width: min(420px, 38vw);
+      min-width: 320px;
+      max-width: 480px;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #111 0%, #0d0d0d 100%);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      -webkit-app-region: no-drag;
+      overflow: hidden;
+    }
+
+    .agent-panel-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .agent-panel-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      color: #fff;
+      letter-spacing: 0.01em;
+    }
+
+    .agent-panel-header p {
+      font-size: 11px;
+      color: #8a8a8a;
+      margin-top: 2px;
+    }
+
+    .agent-clear-btn {
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #151515;
+      color: #888;
+      padding: 5px 9px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .agent-clear-btn:hover {
+      border-color: #555;
+      color: #ccc;
+    }
+
+    .agent-status {
+      font-size: 11px;
+      color: #9ca3af;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      background: #0d0d0d;
+    }
+
+    .agent-status.error {
+      color: #fca5a5;
+      border-color: #7f1d1d;
+      background: #1a0d0d;
+    }
+
+    .agent-attach-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .agent-attach-hint {
+      font-size: 11px;
+      color: #666;
+    }
+
+    .agent-attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+      min-height: 0;
+      max-height: 92px;
+      overflow-y: auto;
+    }
+
+    .agent-file-chip {
+      max-width: 100%;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid #2e2e2e;
+      background: #171717;
+      color: #d1d5db;
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .agent-file-chip span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
+    }
+
+    .agent-file-chip button {
+      border: none;
+      background: transparent;
+      color: #888;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding: 0;
+    }
+
+    .agent-file-chip button:hover {
+      color: #fff;
+    }
+
+    .agent-chat {
+      flex: 1;
+      min-height: 160px;
+      border: 1px solid #222;
+      border-radius: 10px;
+      background: #0a0a0a;
+      padding: 10px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .agent-msg {
+      max-width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .agent-msg-user {
+      align-self: flex-end;
+      background: #1e3a8a;
+      color: #dbeafe;
+      border: 1px solid #1d4ed8;
+    }
+
+    .agent-msg-assistant {
+      align-self: flex-start;
+      background: #1a1a1a;
+      color: #e5e7eb;
+      border: 1px solid #2f2f2f;
+    }
+
+    .agent-msg-system {
+      align-self: center;
+      background: transparent;
+      color: #888;
+      border: 1px dashed #333;
+    }
+
+    .agent-input-wrap {
+      margin-top: 10px;
+    }
+
+    .agent-prompt-input {
+      width: 100%;
+      resize: vertical;
+      min-height: 72px;
+      max-height: 180px;
+      background: #111;
+      color: #fff;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      -webkit-app-region: no-drag;
+    }
+
+    .agent-prompt-input:focus {
+      outline: none;
+      border-color: #555;
+    }
+
+    @media (max-width: 1200px) {
+      .workspace-layout {
+        flex-direction: column;
+      }
+
+      .agent-panel {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        min-height: 280px;
+      }
     }
 
     /* Legacy tabs - hidden but kept for JS compatibility */
@@ -887,8 +1108,10 @@
       bottom: 0;
       background: rgba(0, 0, 0, 0.9);
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
+      padding: 20px 12px;
+      overflow-y: auto;
       z-index: 1100;
       -webkit-app-region: no-drag;
     }
@@ -904,8 +1127,12 @@
       padding: 40px;
       max-width: 400px;
       width: 90%;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
       text-align: center;
       position: relative;
+      display: flex;
+      flex-direction: column;
     }
 
     .login-close-btn {
@@ -1066,6 +1293,7 @@
       display: flex;
       gap: 8px;
       margin-bottom: 24px;
+      flex-shrink: 0;
     }
 
     .login-tab {
@@ -1097,6 +1325,9 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 2px;
     }
 
     .login-form.hidden {
@@ -1526,6 +1757,78 @@
       gap: 12px;
     }
 
+    .feedback-widget {
+      position: relative;
+      -webkit-app-region: no-drag;
+    }
+
+    .feedback-btn {
+      background: transparent;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #666;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .feedback-btn:hover {
+      border-color: #555;
+      color: #fff;
+      background: #222;
+    }
+
+    .feedback-popover {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: min(320px, calc(100vw - 24px));
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 10px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+      padding: 12px;
+      z-index: 1500;
+      display: none;
+    }
+
+    .feedback-popover.visible {
+      display: block;
+    }
+
+    .feedback-popover textarea {
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 12px;
+      padding: 8px;
+      margin: 8px 0;
+      outline: none;
+      -webkit-app-region: no-drag;
+    }
+
+    .feedback-popover textarea:focus {
+      border-color: #555;
+    }
+
+    .feedback-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .feedback-status {
+      font-size: 11px;
+      color: #888;
+      min-height: 16px;
+      margin-top: 6px;
+    }
+
     .history-btn {
       background: transparent;
       border: 1px solid #333;
@@ -1722,8 +2025,10 @@
       height: 100%;
       background: rgba(0, 0, 0, 0.8);
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
+      overflow-y: auto;
+      padding: 20px 12px;
       z-index: 1000;
       opacity: 0;
       visibility: hidden;
@@ -2841,7 +3146,6 @@
   <!-- Login Modal -->
   <div class="login-modal" id="loginModal">
     <div class="login-box">
-      <button class="login-close-btn" id="loginCloseBtn">&times;</button>
       <h2>Welcome to EmmaNeigh</h2>
       <p class="subtitle">Sign in to save your API key and usage history</p>
 
@@ -2849,7 +3153,6 @@
       <div class="login-tabs">
         <button class="login-tab active" data-tab="login">Login</button>
         <button class="login-tab" data-tab="create">Create Account</button>
-        <button class="login-tab" data-tab="guest">Guest</button>
       </div>
 
       <!-- Login Form -->
@@ -2864,7 +3167,7 @@
       <!-- Create Account Form -->
       <div class="login-form hidden" id="createForm">
         <input type="text" id="createUsername" placeholder="Username" autocomplete="username">
-        <input type="email" id="createEmail" placeholder="Email (required for 2FA)" required>
+        <input type="email" id="createEmail" placeholder="Email (optional)">
         <input type="text" id="createDisplayName" placeholder="Display Name (optional)">
         <input type="password" id="createPassword" placeholder="Password (min 4 characters)" autocomplete="new-password">
         <input type="password" id="createPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password">
@@ -2893,13 +3196,6 @@
         <p class="login-error" id="forgotError"></p>
         <button id="resetPasswordBtn" style="display: none;">Reset Password</button>
         <p class="back-to-login"><a href="#" id="backToLoginLink">Back to Login</a></p>
-      </div>
-
-      <!-- Guest Mode -->
-      <div class="login-form hidden" id="guestForm">
-        <p>Continue without an account. Your API key and usage history will not be saved between sessions.</p>
-        <input type="text" id="guestName" placeholder="Your name (optional)">
-        <button id="guestBtn">Continue as Guest</button>
       </div>
 
       <!-- 2FA Verification Form -->
@@ -3031,18 +3327,20 @@
         <div style="margin-bottom: 8px;">
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">AI Provider</label>
           <select id="aiProviderSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+            <option value="ollama">Ollama (Local, Recommended)</option>
+            <option value="lmstudio">LM Studio (Local)</option>
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI (ChatGPT)</option>
             <option value="harvey">Harvey</option>
           </select>
         </div>
-        <div class="api-key-input-group">
+        <div class="api-key-input-group" id="apiKeyInputGroup">
           <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-api...">
         </div>
         <div class="api-key-status" id="apiKeyStatus">
           <span>No API key configured</span>
         </div>
-        <div class="api-key-actions">
+        <div class="api-key-actions" id="apiKeyActions">
           <button class="settings-btn settings-btn-primary" id="saveApiKeyBtn">Save Key</button>
           <button class="settings-btn settings-btn-secondary" id="testApiKeyBtn">Test Connection</button>
           <button class="settings-btn settings-btn-danger" id="deleteApiKeyBtn" style="display: none;">Delete</button>
@@ -3062,9 +3360,35 @@
           </select>
           <p style="font-size: 11px; color: #666; margin-top: 4px;">Model used for NL search, checklist updates, and punchlist generation</p>
         </div>
+
+        <div id="ollamaConfigRow" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Ollama Base URL</label>
+          <input type="text" id="ollamaBaseUrlInput" class="api-key-input" placeholder="http://127.0.0.1:11434" style="margin-bottom: 8px;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Ollama Model</label>
+          <input type="text" id="ollamaModelInput" class="api-key-input" placeholder="llama3.1:8b">
+          <p style="font-size: 11px; color: #666; margin-top: 4px;">No API key required for local Ollama.</p>
+        </div>
+
+        <div id="lmstudioConfigRow" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">LM Studio Base URL</label>
+          <input type="text" id="lmstudioBaseUrlInput" class="api-key-input" placeholder="http://127.0.0.1:1234" style="margin-bottom: 8px;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">LM Studio Model</label>
+          <input type="text" id="lmstudioModelInput" class="api-key-input" placeholder="local-model">
+          <p style="font-size: 11px; color: #666; margin-top: 4px;">No API key required for local LM Studio.</p>
+        </div>
+
+        <div id="literaStyleRow" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Litera Default Style</label>
+          <input type="text" id="literaDefaultStyleInput" class="api-key-input" placeholder="Kirkland Default">
+          <p style="font-size: 11px; color: #666; margin-top: 4px;">Set your firm's default Litera style name. The app maps this per file type (.tpx/.tpp/.tpz).</p>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+            <button class="settings-btn settings-btn-secondary" id="saveLiteraStyleBtn">Save Redline Style</button>
+            <span id="literaStyleStatus" style="font-size: 12px; color: #888;"></span>
+          </div>
+        </div>
       </div>
 
-      <div class="settings-section" id="securitySection">
+      <div class="settings-section" id="securitySection" style="display: none;">
         <h3>🔐 Two-Factor Authentication</h3>
         <div style="margin-bottom: 12px; padding: 8px 12px; background: #1a2a1a; border: 1px solid #2a4a2a; border-radius: 6px;">
           <p style="font-size: 12px; color: #4ade80; margin: 0;">2FA is mandatory. A 6-digit code is emailed to you on each login.</p>
@@ -3090,7 +3414,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section" id="smtpSection" style="display: none;">
         <h3>📧 SMTP Email Settings</h3>
         <p style="font-size: 12px; color: #888; margin-bottom: 12px;">Configure SMTP to send 2FA verification codes via email</p>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
@@ -3216,6 +3540,18 @@
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
           </button>
+          <div class="feedback-widget" id="feedbackWidget">
+            <button class="feedback-btn" id="feedbackBtn" title="Submit feedback">Feedback</button>
+            <div class="feedback-popover" id="feedbackPopover">
+              <div style="font-size: 12px; color: #ccc; font-weight: 600;">Send Feedback</div>
+              <textarea id="feedbackInput" placeholder="Share your request, issue, or idea..."></textarea>
+              <div class="feedback-actions">
+                <button class="btn btn-secondary" id="feedbackCancelBtn" style="margin-top: 0; padding: 6px 10px; font-size: 12px;">Cancel</button>
+                <button class="btn btn-primary" id="feedbackSubmitBtn" style="margin-top: 0; padding: 6px 10px; font-size: 12px;">Send</button>
+              </div>
+              <div class="feedback-status" id="feedbackStatus"></div>
+            </div>
+          </div>
           <button class="history-btn" id="historyBtn" title="View History">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/>
@@ -3229,14 +3565,16 @@
                 <circle cx="12" cy="7" r="4"/>
               </svg>
             </div>
-            <span id="userName">Guest</span>
+            <span id="userName">Sign In Required</span>
           </div>
         </div>
       </div>
     </header>
 
-    <!-- Main Layout: Sidebar + Content -->
-    <div class="main-layout">
+    <!-- Main Layout: Manual + Agent Mode -->
+    <div class="workspace-layout">
+      <div class="manual-panel">
+        <div class="main-layout">
       <!-- Navigation Sidebar -->
       <div class="nav-sidebar">
         <!-- Group 1: Signature Packets / Closing -->
@@ -3841,7 +4179,10 @@
             </svg>
             <p class="input-label">Drop original document here</p>
             <p class="input-hint">PDF, Word, PowerPoint, or Excel</p>
-            <p class="input-selected" id="redlineOriginalSelected"></p>
+            <div class="input-selected-wrapper">
+              <p class="input-selected" id="redlineOriginalSelected"></p>
+              <button class="clear-file-btn" id="clearRedlineOriginal">×</button>
+            </div>
           </div>
         </div>
 
@@ -3856,7 +4197,10 @@
             </svg>
             <p class="input-label">Drop modified document here</p>
             <p class="input-hint">The newer version to compare</p>
-            <p class="input-selected" id="redlineModifiedSelected"></p>
+            <div class="input-selected-wrapper">
+              <p class="input-selected" id="redlineModifiedSelected"></p>
+              <button class="clear-file-btn" id="clearRedlineModified">×</button>
+            </div>
           </div>
         </div>
 
@@ -4443,8 +4787,42 @@
       </div>
     </div><!-- End punchlistTab -->
 
-      </div><!-- End content-area -->
-    </div><!-- End main-layout -->
+          </div><!-- End content-area -->
+        </div><!-- End main-layout -->
+      </div><!-- End manual-panel -->
+
+      <aside class="agent-panel" id="agentPanel">
+        <div class="agent-panel-header">
+          <div>
+            <h3>Agent Mode</h3>
+            <p id="agentProviderLabel">Uses your current provider in Settings.</p>
+          </div>
+          <button class="agent-clear-btn" id="agentClearBtn">Clear</button>
+        </div>
+
+        <div class="agent-status" id="agentStatus">
+          Attach files and enter a command (example: "generate sig packet").
+        </div>
+
+        <div class="agent-attach-row">
+          <button class="btn btn-secondary" id="agentAttachBtn" style="margin-top: 0; padding: 6px 12px;">Attach Files</button>
+          <span class="agent-attach-hint">PDF, DOCX, CSV, XLSX</span>
+        </div>
+
+        <div class="agent-attachments" id="agentAttachments"></div>
+
+        <div class="agent-chat" id="agentChat">
+          <div class="agent-msg agent-msg-assistant">
+            Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.
+          </div>
+        </div>
+
+        <div class="agent-input-wrap">
+          <textarea id="agentPromptInput" class="agent-prompt-input" rows="3" placeholder='Try: "generate sig packet from these files"'></textarea>
+          <button class="btn btn-primary" id="agentRunBtn" style="margin-top: 8px;">Run</button>
+        </div>
+      </aside>
+    </div><!-- End workspace-layout -->
 
     <footer>
       <p>All processing happens locally. No data leaves your machine.</p>
@@ -4681,6 +5059,8 @@
     const apiProviderTitle = document.getElementById('apiProviderTitle');
     const apiKeyHelpText = document.getElementById('apiKeyHelpText');
     const aiProviderSelect = document.getElementById('aiProviderSelect');
+    const apiKeyInputGroup = document.getElementById('apiKeyInputGroup');
+    const apiKeyActions = document.getElementById('apiKeyActions');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const apiKeyStatus = document.getElementById('apiKeyStatus');
     const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
@@ -4688,51 +5068,130 @@
     const deleteApiKeyBtn = document.getElementById('deleteApiKeyBtn');
     const providerConsoleLink = document.getElementById('providerConsoleLink');
     const claudeModelRow = document.getElementById('claudeModelRow');
+    const ollamaConfigRow = document.getElementById('ollamaConfigRow');
+    const ollamaBaseUrlInput = document.getElementById('ollamaBaseUrlInput');
+    const ollamaModelInput = document.getElementById('ollamaModelInput');
+    const lmstudioConfigRow = document.getElementById('lmstudioConfigRow');
+    const lmstudioBaseUrlInput = document.getElementById('lmstudioBaseUrlInput');
+    const lmstudioModelInput = document.getElementById('lmstudioModelInput');
+    const literaDefaultStyleInput = document.getElementById('literaDefaultStyleInput');
+    const saveLiteraStyleBtn = document.getElementById('saveLiteraStyleBtn');
+    const literaStyleStatus = document.getElementById('literaStyleStatus');
 
     const PROVIDER_META = {
+      ollama: {
+        label: 'Ollama',
+        title: 'Ollama (Local)',
+        placeholder: '',
+        consoleUrl: 'https://ollama.com/download',
+        consoleText: 'ollama.com/download',
+        requiresKey: false
+      },
+      lmstudio: {
+        label: 'LM Studio',
+        title: 'LM Studio (Local)',
+        placeholder: '',
+        consoleUrl: 'https://lmstudio.ai/',
+        consoleText: 'lmstudio.ai',
+        requiresKey: false
+      },
       anthropic: {
         label: 'Anthropic',
         title: 'Anthropic API Key',
         placeholder: 'sk-ant-api...',
         consoleUrl: 'https://console.anthropic.com/',
-        consoleText: 'console.anthropic.com'
+        consoleText: 'console.anthropic.com',
+        requiresKey: true
       },
       openai: {
         label: 'OpenAI',
         title: 'OpenAI API Key',
         placeholder: 'sk-...',
         consoleUrl: 'https://platform.openai.com/api-keys',
-        consoleText: 'platform.openai.com/api-keys'
+        consoleText: 'platform.openai.com/api-keys',
+        requiresKey: true
       },
       harvey: {
         label: 'Harvey',
         title: 'Harvey API Key',
         placeholder: 'Paste Harvey bearer token...',
         consoleUrl: 'https://portal.harvey.ai/',
-        consoleText: 'portal.harvey.ai'
+        consoleText: 'portal.harvey.ai',
+        requiresKey: true
       }
     };
 
     function normalizeProvider(provider) {
       const value = (provider || '').trim().toLowerCase();
-      if (value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'ollama' || value === 'lmstudio' || value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'lm studio' || value === 'lm-studio') return 'lmstudio';
       if (value === 'chatgpt') return 'openai';
-      return 'anthropic';
+      if (value === 'claude') return 'anthropic';
+      return 'ollama';
+    }
+
+    function isLocalProviderSelection(provider) {
+      const normalized = normalizeProvider(provider);
+      return normalized === 'ollama' || normalized === 'lmstudio';
     }
 
     function getSelectedProvider() {
       return normalizeProvider(aiProviderSelect.value);
     }
 
+    function getProviderMeta(provider) {
+      const normalized = normalizeProvider(provider);
+      return PROVIDER_META[normalized] || PROVIDER_META.ollama;
+    }
+
+    async function loadLocalProviderSettings(provider) {
+      const selected = normalizeProvider(provider);
+      if (selected === 'ollama') {
+        const [baseUrl, model] = await Promise.all([
+          ipcRenderer.invoke('get-setting', 'ollama_base_url'),
+          ipcRenderer.invoke('get-setting', 'ollama_model')
+        ]);
+        ollamaBaseUrlInput.value = (baseUrl && baseUrl.success && baseUrl.value) ? baseUrl.value : 'http://127.0.0.1:11434';
+        ollamaModelInput.value = (model && model.success && model.value) ? model.value : 'llama3.1:8b';
+      } else if (selected === 'lmstudio') {
+        const [baseUrl, model] = await Promise.all([
+          ipcRenderer.invoke('get-setting', 'lmstudio_base_url'),
+          ipcRenderer.invoke('get-setting', 'lmstudio_model')
+        ]);
+        lmstudioBaseUrlInput.value = (baseUrl && baseUrl.success && baseUrl.value) ? baseUrl.value : 'http://127.0.0.1:1234';
+        lmstudioModelInput.value = (model && model.success && model.value) ? model.value : 'local-model';
+      }
+    }
+
+    async function saveLocalProviderSettings(provider) {
+      const selected = normalizeProvider(provider);
+      if (selected === 'ollama') {
+        await ipcRenderer.invoke('save-setting', { key: 'ollama_base_url', value: (ollamaBaseUrlInput.value || '').trim() || 'http://127.0.0.1:11434' });
+        await ipcRenderer.invoke('save-setting', { key: 'ollama_model', value: (ollamaModelInput.value || '').trim() || 'llama3.1:8b' });
+      } else if (selected === 'lmstudio') {
+        await ipcRenderer.invoke('save-setting', { key: 'lmstudio_base_url', value: (lmstudioBaseUrlInput.value || '').trim() || 'http://127.0.0.1:1234' });
+        await ipcRenderer.invoke('save-setting', { key: 'lmstudio_model', value: (lmstudioModelInput.value || '').trim() || 'local-model' });
+      }
+    }
+
     function applyProviderUi() {
       const provider = getSelectedProvider();
-      const meta = PROVIDER_META[provider] || PROVIDER_META.anthropic;
+      const meta = getProviderMeta(provider);
+      const localProvider = isLocalProviderSelection(provider);
 
       apiProviderTitle.textContent = `${meta.title}`;
-      apiKeyHelpText.textContent = `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
+      apiKeyHelpText.textContent = localProvider
+        ? `Local provider mode. Save base URL/model below and test the local connection.`
+        : `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
+      apiKeyInputGroup.style.display = localProvider ? 'none' : '';
+      apiKeyActions.style.display = '';
       apiKeyInput.placeholder = apiKeyInput.value ? '••••••••••••••••' : meta.placeholder;
       providerConsoleLink.textContent = meta.consoleText;
       claudeModelRow.style.display = provider === 'anthropic' ? '' : 'none';
+      ollamaConfigRow.style.display = provider === 'ollama' ? '' : 'none';
+      lmstudioConfigRow.style.display = provider === 'lmstudio' ? '' : 'none';
+      saveApiKeyBtn.textContent = localProvider ? 'Save Provider Settings' : 'Save Key';
+      testApiKeyBtn.textContent = localProvider ? 'Test Local Connection' : 'Test Connection';
     }
 
     async function loadProviderSetting() {
@@ -4740,15 +5199,35 @@
         const result = await ipcRenderer.invoke('get-setting', 'ai_provider');
         aiProviderSelect.value = normalizeProvider(result && result.success ? result.value : null);
       } catch (_) {
-        aiProviderSelect.value = 'anthropic';
+        aiProviderSelect.value = 'ollama';
       }
+      await loadLocalProviderSettings(aiProviderSelect.value);
       applyProviderUi();
+    }
+
+    async function loadLiteraStyleSetting() {
+      try {
+        const result = await ipcRenderer.invoke('get-setting', 'litera_default_style_name');
+        literaDefaultStyleInput.value = (result && result.success && result.value)
+          ? String(result.value)
+          : 'Kirkland Default';
+      } catch (_) {
+        literaDefaultStyleInput.value = 'Kirkland Default';
+      }
+      literaStyleStatus.textContent = '';
     }
 
     // Check if API key exists on startup
     async function checkApiKeyStatus() {
       const provider = getSelectedProvider();
-      const meta = PROVIDER_META[provider] || PROVIDER_META.anthropic;
+      const meta = getProviderMeta(provider);
+      if (isLocalProviderSelection(provider)) {
+        apiKeyStatus.innerHTML = `<span style="color: #60a5fa;">${meta.label} uses local connection settings. API key is optional.</span>`;
+        apiKeyStatus.className = 'api-key-status connected';
+        deleteApiKeyBtn.style.display = 'none';
+        return;
+      }
+
       const result = await ipcRenderer.invoke('get-api-key');
       if (result.hasKey) {
         apiKeyStatus.innerHTML = `<span style="color: #22c55e;">✓ ${meta.label} API key configured</span>`;
@@ -4766,7 +5245,9 @@
     settingsBtn.addEventListener('click', async () => {
       settingsModal.classList.add('visible');
       await loadProviderSetting();
+      await loadLiteraStyleSetting();
       await checkApiKeyStatus();
+      await updateAgentProviderLabel();
     });
 
     settingsClose.addEventListener('click', () => {
@@ -4780,6 +5261,24 @@
     });
 
     saveApiKeyBtn.addEventListener('click', async () => {
+      const provider = getSelectedProvider();
+      if (isLocalProviderSelection(provider)) {
+        saveApiKeyBtn.disabled = true;
+        saveApiKeyBtn.textContent = 'Saving...';
+        try {
+          await saveLocalProviderSettings(provider);
+          apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ Local provider settings saved</span>';
+          apiKeyStatus.className = 'api-key-status connected';
+        } catch (e) {
+          apiKeyStatus.innerHTML = `<span style="color: #ef4444;">${e.message || 'Failed to save provider settings'}</span>`;
+          apiKeyStatus.className = 'api-key-status error';
+        } finally {
+          saveApiKeyBtn.disabled = false;
+          saveApiKeyBtn.textContent = 'Save Provider Settings';
+        }
+        return;
+      }
+
       const key = apiKeyInput.value.trim();
       if (!key) {
         apiKeyStatus.innerHTML = '<span style="color: #ef4444;">Please enter an API key</span>';
@@ -4804,14 +5303,15 @@
     });
 
     testApiKeyBtn.addEventListener('click', async () => {
+      const provider = getSelectedProvider();
       let keyToTest = apiKeyInput.value.trim();
 
       // If no key in input, test the stored key
-      if (!keyToTest) {
+      if (!keyToTest && !isLocalProviderSelection(provider)) {
         keyToTest = await ipcRenderer.invoke('get-api-key-value');
       }
 
-      if (!keyToTest) {
+      if (!keyToTest && !isLocalProviderSelection(provider)) {
         apiKeyStatus.innerHTML = '<span style="color: #ef4444;">No API key to test</span>';
         return;
       }
@@ -4822,7 +5322,7 @@
 
       const result = await ipcRenderer.invoke('test-api-key', {
         apiKey: keyToTest,
-        provider: getSelectedProvider()
+        provider
       });
 
       if (result.success) {
@@ -4847,15 +5347,55 @@
 
     providerConsoleLink.addEventListener('click', (e) => {
       e.preventDefault();
-      const meta = PROVIDER_META[getSelectedProvider()] || PROVIDER_META.anthropic;
+      const meta = getProviderMeta(getSelectedProvider());
       require('electron').shell.openExternal(meta.consoleUrl);
     });
 
     aiProviderSelect.addEventListener('change', async () => {
       const provider = getSelectedProvider();
       await ipcRenderer.invoke('save-setting', { key: 'ai_provider', value: provider });
+      await loadLocalProviderSettings(provider);
       applyProviderUi();
       await checkApiKeyStatus();
+      if (typeof updateAgentProviderLabel === 'function') {
+        await updateAgentProviderLabel();
+      }
+    });
+
+    async function saveLiteraStyleSetting() {
+      const configuredStyle = literaDefaultStyleInput.value.trim() || 'Kirkland Default';
+      saveLiteraStyleBtn.disabled = true;
+      saveLiteraStyleBtn.textContent = 'Saving...';
+      literaStyleStatus.style.color = '#888';
+      literaStyleStatus.textContent = 'Saving...';
+      try {
+        const result = await ipcRenderer.invoke('save-setting', {
+          key: 'litera_default_style_name',
+          value: configuredStyle
+        });
+        if (result && result.success) {
+          literaDefaultStyleInput.value = configuredStyle;
+          literaStyleStatus.style.color = '#22c55e';
+          literaStyleStatus.textContent = `Saved: ${configuredStyle}`;
+        } else {
+          literaStyleStatus.style.color = '#ef4444';
+          literaStyleStatus.textContent = (result && result.error) ? result.error : 'Failed to save style';
+        }
+      } catch (e) {
+        literaStyleStatus.style.color = '#ef4444';
+        literaStyleStatus.textContent = e.message || 'Failed to save style';
+      } finally {
+        saveLiteraStyleBtn.disabled = false;
+        saveLiteraStyleBtn.textContent = 'Save Redline Style';
+      }
+    }
+
+    saveLiteraStyleBtn.addEventListener('click', saveLiteraStyleSetting);
+
+    literaDefaultStyleInput.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      await saveLiteraStyleSetting();
     });
 
     // ========== MODEL SELECTOR ==========
@@ -4914,6 +5454,7 @@
     });
 
     // ========== 2FA SETTINGS ==========
+    const ENABLE_EMAIL_2FA = false;
     const tfaEmailInput = document.getElementById('tfaEmailInput');
     const tfaUpdateEmailBtn = document.getElementById('tfaUpdateEmailBtn');
     const tfaEmailStatus = document.getElementById('tfaEmailStatus');
@@ -4922,9 +5463,20 @@
     const tfaVerifyEmailBtn = document.getElementById('tfaVerifyEmailBtn');
     const tfaVerifyStatus = document.getElementById('tfaVerifyStatus');
     const securitySection = document.getElementById('securitySection');
+    const smtpSection = document.getElementById('smtpSection');
+
+    if (!ENABLE_EMAIL_2FA) {
+      if (securitySection) securitySection.style.display = 'none';
+      if (smtpSection) smtpSection.style.display = 'none';
+    }
 
     // Load 2FA status when settings opens
     async function load2FAStatus() {
+      if (!ENABLE_EMAIL_2FA) {
+        securitySection.style.display = 'none';
+        return;
+      }
+
       if (!currentUser || currentUser.isGuest) {
         securitySection.style.display = 'none';
         return;
@@ -4991,15 +5543,15 @@
         });
 
         if (codeResult.success) {
-          tfaEmailStatus.innerHTML = '<span style="color: #22c55e;">Verification code sent!</span>';
+          if (codeResult._devCode) {
+            tfaEmailStatus.innerHTML = `<span style="color: #f59e0b;">SMTP not configured. Temporary verification code: ${codeResult._devCode}</span>`;
+          } else {
+            tfaEmailStatus.innerHTML = '<span style="color: #22c55e;">Verification code sent!</span>';
+          }
           tfaVerifySection.style.display = 'block';
           tfaSettingsCode.value = '';
+          tfaVerifyStatus.innerHTML = '';
           tfaSettingsCode.focus();
-
-          // For development
-          if (codeResult._devCode) {
-            console.log('[DEV] Email verification code:', codeResult._devCode);
-          }
         } else {
           tfaEmailStatus.innerHTML = `<span style="color: #ef4444;">${codeResult.error}</span>`;
         }
@@ -5223,6 +5775,12 @@
     let pending2FAUserId = null;
     let pending2FAEmail = null;
 
+    function setTfaMessage(text, color = '#ff4444') {
+      const tfaErrorEl = document.getElementById('tfaError');
+      tfaErrorEl.style.color = color;
+      tfaErrorEl.textContent = text || '';
+    }
+
     // Login form handler
     document.getElementById('loginBtn').addEventListener('click', async () => {
       const username = document.getElementById('loginUsername').value.trim();
@@ -5248,12 +5806,18 @@
             document.getElementById('twoFactorForm').classList.remove('hidden');
             document.getElementById('tfaEmailDisplay').textContent = result.email;
             document.getElementById('tfaCode').value = '';
-            document.getElementById('tfaError').textContent = '';
+            setTfaMessage('');
             document.getElementById('tfaCode').focus();
 
-            // For development, show the code in console
-            if (result._devCode) {
-              console.log('[DEV] 2FA Code:', result._devCode);
+            // SMTP fallback: show code in UI when email cannot be sent.
+            if (result._devCode && result._smtpNote) {
+              const smtpMissing = result._smtpNote === 'smtp_not_configured';
+              setTfaMessage(
+                smtpMissing
+                  ? `SMTP is not configured. Temporary verification code: ${result._devCode}`
+                  : `Email delivery failed (${result._smtpNote}). Temporary verification code: ${result._devCode}`,
+                '#f59e0b'
+              );
             }
           } else {
             // Direct login (no 2FA)
@@ -5275,10 +5839,9 @@
     // 2FA verification handler
     document.getElementById('tfaVerifyBtn').addEventListener('click', async () => {
       const code = document.getElementById('tfaCode').value.trim();
-      const errorEl = document.getElementById('tfaError');
 
       if (!code || code.length !== 6) {
-        errorEl.textContent = 'Please enter the 6-digit code';
+        setTfaMessage('Please enter the 6-digit code');
         return;
       }
 
@@ -5298,10 +5861,10 @@
           // Load user's API key
           loadUserApiKey();
         } else {
-          errorEl.textContent = result.error || 'Verification failed';
+          setTfaMessage(result.error || 'Verification failed');
         }
       } catch (e) {
-        errorEl.textContent = 'Verification error: ' + e.message;
+        setTfaMessage('Verification error: ' + e.message);
       }
     });
 
@@ -5319,7 +5882,6 @@
     // 2FA resend code
     document.getElementById('tfaResendBtn').addEventListener('click', async (e) => {
       e.preventDefault();
-      const errorEl = document.getElementById('tfaError');
 
       try {
         const result = await ipcRenderer.invoke('request-verification-code', {
@@ -5328,22 +5890,16 @@
         });
 
         if (result.success) {
-          errorEl.style.color = '#4ade80';
-          errorEl.textContent = 'New code sent!';
-          setTimeout(() => {
-            errorEl.style.color = '#ff4444';
-            errorEl.textContent = '';
-          }, 3000);
-
-          // For development, show the code
           if (result._devCode) {
-            console.log('[DEV] New 2FA Code:', result._devCode);
+            setTfaMessage(`SMTP unavailable. Temporary verification code: ${result._devCode}`, '#f59e0b');
+          } else {
+            setTfaMessage(result.message || 'New code sent!', '#4ade80');
           }
         } else {
-          errorEl.textContent = result.error || 'Failed to resend code';
+          setTfaMessage(result.error || 'Failed to resend code');
         }
       } catch (e) {
-        errorEl.textContent = 'Error: ' + e.message;
+        setTfaMessage('Error: ' + e.message);
       }
     });
 
@@ -5357,6 +5913,7 @@
       document.getElementById('loginForm').classList.remove('hidden');
       loginTabs.forEach(t => t.classList.remove('active'));
       loginTabs[0].classList.add('active');
+      setTfaMessage('');
     });
 
     // Allow Enter key to submit login
@@ -5380,8 +5937,18 @@
         return;
       }
 
-      if (!email || !email.includes('@')) {
-        errorEl.textContent = 'A valid email address is required for two-factor authentication';
+      if (email && !email.includes('@')) {
+        errorEl.textContent = 'Email is optional, but if provided it must be valid';
+        return;
+      }
+
+      if (!securityQuestion) {
+        errorEl.textContent = 'Please select a security question';
+        return;
+      }
+
+      if (!securityAnswer) {
+        errorEl.textContent = 'Please provide a security answer';
         return;
       }
 
@@ -5404,10 +5971,32 @@
           // Auto-login after creation
           const loginResult = await ipcRenderer.invoke('login-user', { username, password });
           if (loginResult.success) {
-            currentUser = { ...loginResult.user, isGuest: false };
-            localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: loginResult.user.id }));
-            userName.textContent = loginResult.user.displayName || loginResult.user.username;
-            loginModal.classList.add('hidden');
+            if (loginResult.requires2FA) {
+              pending2FAUserId = loginResult.userId;
+              pending2FAEmail = loginResult.email;
+              document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
+              document.querySelector('.login-tabs').style.display = 'none';
+              document.getElementById('twoFactorForm').classList.remove('hidden');
+              document.getElementById('tfaEmailDisplay').textContent = loginResult.email;
+              document.getElementById('tfaCode').value = '';
+              setTfaMessage('');
+              document.getElementById('tfaCode').focus();
+
+              if (loginResult._devCode && loginResult._smtpNote) {
+                const smtpMissing = loginResult._smtpNote === 'smtp_not_configured';
+                setTfaMessage(
+                  smtpMissing
+                    ? `SMTP is not configured. Temporary verification code: ${loginResult._devCode}`
+                    : `Email delivery failed (${loginResult._smtpNote}). Temporary verification code: ${loginResult._devCode}`,
+                  '#f59e0b'
+                );
+              }
+            } else {
+              currentUser = { ...loginResult.user, isGuest: false };
+              localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: loginResult.user.id }));
+              userName.textContent = loginResult.user.displayName || loginResult.user.username;
+              loginModal.classList.add('hidden');
+            }
           }
         } else {
           errorEl.textContent = result.error || 'Account creation failed';
@@ -5420,15 +6009,6 @@
     // Allow Enter key to submit create
     document.getElementById('createPasswordConfirm').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') document.getElementById('createBtn').click();
-    });
-
-    // Guest mode handler
-    document.getElementById('guestBtn').addEventListener('click', () => {
-      const name = document.getElementById('guestName').value.trim() || 'Guest';
-      currentUser = { id: null, username: null, displayName: name, isGuest: true };
-      userName.textContent = name;
-      localStorage.removeItem('emmaneigh_session');  // Clear any stored session
-      loginModal.classList.add('hidden');
     });
 
     // Load user's API key after login
@@ -5468,7 +6048,7 @@
         }
       }
       // No valid session - show login modal
-      userName.textContent = 'Guest';
+      userName.textContent = 'Sign In Required';
     }
 
     // Initialize session check
@@ -5482,14 +6062,6 @@
       loginModal.classList.remove('hidden');
       // Reset forms
       resetLoginForms();
-    });
-
-    // Close button handler
-    document.getElementById('loginCloseBtn').addEventListener('click', () => {
-      // Close modal and continue as Guest
-      currentUser = { id: null, username: null, displayName: 'Guest', isGuest: true };
-      userName.textContent = 'Guest';
-      loginModal.classList.add('hidden');
     });
 
     // Forgot password link handler
@@ -5604,10 +6176,12 @@
       document.getElementById('createPasswordConfirm').value = '';
       document.getElementById('createSecurityQuestion').value = '';
       document.getElementById('createSecurityAnswer').value = '';
-      document.getElementById('guestName').value = '';
+      const guestNameInput = document.getElementById('guestName');
+      if (guestNameInput) guestNameInput.value = '';
       document.getElementById('loginError').textContent = '';
       document.getElementById('createError').textContent = '';
       document.getElementById('forgotError').textContent = '';
+      setTfaMessage('');
       // Reset to login tab
       document.querySelector('.login-tabs').style.display = 'flex';
       loginTabs.forEach(t => t.classList.remove('active'));
@@ -5729,6 +6303,248 @@
         switchTab(item.dataset.tab);
       });
     });
+
+    // ========== AGENT MODE ==========
+    const agentProviderLabel = document.getElementById('agentProviderLabel');
+    const agentStatus = document.getElementById('agentStatus');
+    const agentAttachBtn = document.getElementById('agentAttachBtn');
+    const agentAttachmentsEl = document.getElementById('agentAttachments');
+    const agentChat = document.getElementById('agentChat');
+    const agentPromptInput = document.getElementById('agentPromptInput');
+    const agentRunBtn = document.getElementById('agentRunBtn');
+    const agentClearBtn = document.getElementById('agentClearBtn');
+
+    const AGENT_TAB_LABELS = {
+      packets: 'Create Sig Packets',
+      packetshell: 'Create Packet Shell',
+      execution: 'Execution Versions',
+      sigblocks: 'Sig Blocks from Checklist',
+      collate: 'Collate Documents',
+      redline: 'Redline Documents',
+      email: 'Email Search',
+      timetrack: 'Activity Summary',
+      updatechecklist: 'Update Checklist',
+      punchlist: 'Generate Punchlist'
+    };
+
+    const AGENT_UPLOAD_EXTENSIONS = ['pdf', 'docx', 'doc', 'csv', 'xlsx', 'xls', 'txt', 'msg', 'eml'];
+    let agentAttachments = [];
+    let agentBusy = false;
+
+    function getAgentAttachmentName(filePath) {
+      return String(filePath || '').split(/[/\\]/).pop() || filePath || 'file';
+    }
+
+    function getAgentAttachmentExt(filePath) {
+      const fileName = getAgentAttachmentName(filePath).toLowerCase();
+      const dot = fileName.lastIndexOf('.');
+      return dot > 0 ? fileName.slice(dot + 1) : '';
+    }
+
+    function setAgentStatus(message, isError = false) {
+      agentStatus.textContent = message || '';
+      agentStatus.classList.toggle('error', !!isError);
+    }
+
+    function addAgentMessage(role, text) {
+      const message = document.createElement('div');
+      if (role === 'user') {
+        message.className = 'agent-msg agent-msg-user';
+      } else if (role === 'system') {
+        message.className = 'agent-msg agent-msg-system';
+      } else {
+        message.className = 'agent-msg agent-msg-assistant';
+      }
+      message.textContent = text;
+      agentChat.appendChild(message);
+      agentChat.scrollTop = agentChat.scrollHeight;
+    }
+
+    function renderAgentAttachments() {
+      agentAttachmentsEl.innerHTML = '';
+      if (!agentAttachments.length) return;
+
+      agentAttachments.forEach((file, index) => {
+        const chip = document.createElement('div');
+        chip.className = 'agent-file-chip';
+        chip.innerHTML = `
+          <span>${file.name}</span>
+          <button type="button" data-agent-remove-index="${index}" aria-label="Remove file">&times;</button>
+        `;
+        agentAttachmentsEl.appendChild(chip);
+      });
+    }
+
+    async function updateAgentProviderLabel() {
+      try {
+        const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
+        const selectedProvider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : getSelectedProvider());
+        const meta = getProviderMeta(selectedProvider);
+        const localSuffix = isLocalProviderSelection(selectedProvider) ? ' (local)' : '';
+        agentProviderLabel.textContent = `Provider: ${meta.label}${localSuffix}`;
+      } catch (_) {
+        const fallbackMeta = getProviderMeta(getSelectedProvider());
+        agentProviderLabel.textContent = `Provider: ${fallbackMeta.label}`;
+      }
+    }
+
+    async function addAgentAttachmentsFromPicker() {
+      const selectedPaths = await ipcRenderer.invoke('select-files', AGENT_UPLOAD_EXTENSIONS);
+      if (!selectedPaths || selectedPaths.length === 0) return;
+
+      const existing = new Set(agentAttachments.map(file => file.path));
+      selectedPaths.forEach(filePath => {
+        if (existing.has(filePath)) return;
+        agentAttachments.push({
+          path: filePath,
+          name: getAgentAttachmentName(filePath),
+          ext: getAgentAttachmentExt(filePath)
+        });
+      });
+      renderAgentAttachments();
+      setAgentStatus(`${agentAttachments.length} file(s) attached for Agent Mode.`);
+    }
+
+    async function executeAgentPlan(plan) {
+      const action = String(plan && plan.action ? plan.action : 'no_op');
+      const targetTab = plan && plan.target_tab ? String(plan.target_tab) : null;
+      const runNow = !!(plan && plan.run_now);
+
+      if (targetTab && AGENT_TAB_LABELS[targetTab]) {
+        switchTab(targetTab);
+      }
+
+      if (!runNow) {
+        if (targetTab && AGENT_TAB_LABELS[targetTab]) {
+          return { message: `Opened ${AGENT_TAB_LABELS[targetTab]}.` };
+        }
+        return { message: plan && plan.user_message ? plan.user_message : 'Command routed. No direct execution was needed.' };
+      }
+
+      if (action === 'run_signature_packets') {
+        const pdfPaths = agentAttachments
+          .filter(file => file.ext === 'pdf')
+          .map(file => file.path);
+        if (!pdfPaths.length) {
+          return { message: 'Attach one or more PDF files to run signature packets.' };
+        }
+        packetsPaths = pdfPaths;
+        updatePacketsFileCount();
+        await processPackets({ files: pdfPaths });
+        agentAttachments = [];
+        renderAgentAttachments();
+        return { message: `Started Create Sig Packets for ${pdfPaths.length} PDF file(s).` };
+      }
+
+      if (action === 'run_packet_shell') {
+        const shellInputPaths = agentAttachments
+          .filter(file => file.ext === 'pdf' || file.ext === 'docx' || file.ext === 'doc')
+          .map(file => file.path);
+        if (!shellInputPaths.length) {
+          return { message: 'Attach PDF or Word files to run packet shell.' };
+        }
+        shellPaths = shellInputPaths;
+        updateShellFileCount();
+        await processPacketShell();
+        agentAttachments = [];
+        renderAgentAttachments();
+        return { message: `Started Create Packet Shell for ${shellInputPaths.length} file(s).` };
+      }
+
+      return { message: plan && plan.user_message ? plan.user_message : 'Command routed.' };
+    }
+
+    async function runAgentCommand() {
+      if (agentBusy) return;
+      const prompt = agentPromptInput.value.trim();
+      if (!prompt) {
+        setAgentStatus('Enter a command to run Agent Mode.', true);
+        return;
+      }
+
+      addAgentMessage('user', prompt);
+      agentPromptInput.value = '';
+      agentBusy = true;
+      agentRunBtn.disabled = true;
+      agentRunBtn.textContent = 'Running...';
+      setAgentStatus('Analyzing command...');
+
+      try {
+        const result = await ipcRenderer.invoke('agent-plan', {
+          prompt,
+          attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
+        });
+
+        if (!result || !result.success) {
+          throw new Error((result && result.error) || 'Agent planner request failed.');
+        }
+
+        const plan = result.plan || {};
+        const execution = await executeAgentPlan(plan);
+        const responseParts = [];
+        if (execution && execution.message) responseParts.push(execution.message);
+        if (plan.user_message && plan.user_message !== execution.message) responseParts.push(plan.user_message);
+        if (Array.isArray(plan.missing_requirements) && plan.missing_requirements.length > 0) {
+          responseParts.push(`Missing requirements: ${plan.missing_requirements.join(' ')}`);
+        }
+        if (result.warning) {
+          responseParts.push(`Note: ${result.warning}`);
+        }
+        if (responseParts.length === 0) {
+          responseParts.push('Command received. I routed it to the closest workflow.');
+        }
+
+        addAgentMessage('assistant', responseParts.join('\n'));
+
+        const providerDetails = `${result.providerName || 'AI'}${result.modelUsed ? ` (${result.modelUsed})` : ''}`;
+        const sourceSuffix = result.source === 'rules' ? ' - fallback routing' : '';
+        setAgentStatus(`Agent planner: ${providerDetails}${sourceSuffix}`);
+      } catch (e) {
+        addAgentMessage('assistant', `Error: ${e.message}`);
+        setAgentStatus(e.message || 'Agent command failed.', true);
+      } finally {
+        agentBusy = false;
+        agentRunBtn.disabled = false;
+        agentRunBtn.textContent = 'Run';
+      }
+    }
+
+    agentAttachBtn.addEventListener('click', addAgentAttachmentsFromPicker);
+
+    agentAttachmentsEl.addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-agent-remove-index]');
+      if (!button) return;
+      const index = Number(button.dataset.agentRemoveIndex);
+      if (Number.isInteger(index) && index >= 0 && index < agentAttachments.length) {
+        agentAttachments.splice(index, 1);
+        renderAgentAttachments();
+        setAgentStatus(`${agentAttachments.length} file(s) attached for Agent Mode.`);
+      }
+    });
+
+    agentRunBtn.addEventListener('click', runAgentCommand);
+
+    agentPromptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        runAgentCommand();
+      }
+    });
+
+    agentClearBtn.addEventListener('click', () => {
+      agentAttachments = [];
+      renderAgentAttachments();
+      agentPromptInput.value = '';
+      agentChat.innerHTML = `
+        <div class="agent-msg agent-msg-assistant">
+          Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.
+        </div>
+      `;
+      setAgentStatus('Agent Mode cleared.');
+    });
+
+    renderAgentAttachments();
+    updateAgentProviderLabel();
 
     // ========== SIGNATURE PACKETS TAB ==========
     const dropZone = document.getElementById('dropZone');
@@ -6889,6 +7705,8 @@
     const redlineLiteraFormat = document.getElementById('redlineLiteraFormat');
     const redlineOutputFormat = document.getElementById('redlineOutputFormat');
     const redlineChangePagesOnly = document.getElementById('redlineChangePagesOnly');
+    const clearRedlineOriginal = document.getElementById('clearRedlineOriginal');
+    const clearRedlineModified = document.getElementById('clearRedlineModified');
 
     let redlineOriginalPath = null;
     let redlineModifiedPath = null;
@@ -6999,6 +7817,43 @@
       redlineAddPairBtn.style.display = hasCurrentPair ? 'inline-block' : 'none';
     }
 
+    function setRedlineOriginalFile(filePath) {
+      redlineOriginalPath = filePath;
+      redlineOriginalSelected.textContent = getFileNameOnly(filePath);
+      redlineOriginalInput.classList.add('selected');
+      clearRedlineOriginal.classList.add('visible');
+      updateRedlineButton();
+    }
+
+    function clearRedlineOriginalFile() {
+      redlineOriginalPath = null;
+      redlineOriginalSelected.textContent = '';
+      redlineOriginalInput.classList.remove('selected');
+      clearRedlineOriginal.classList.remove('visible');
+      updateRedlineButton();
+    }
+
+    function setRedlineModifiedFile(filePath) {
+      redlineModifiedPath = filePath;
+      redlineModifiedSelected.textContent = getFileNameOnly(filePath);
+      redlineModifiedInput.classList.add('selected');
+      clearRedlineModified.classList.add('visible');
+      updateRedlineButton();
+    }
+
+    function clearRedlineModifiedFile() {
+      redlineModifiedPath = null;
+      redlineModifiedSelected.textContent = '';
+      redlineModifiedInput.classList.remove('selected');
+      clearRedlineModified.classList.remove('visible');
+      updateRedlineButton();
+    }
+
+    function clearCurrentRedlinePair() {
+      clearRedlineOriginalFile();
+      clearRedlineModifiedFile();
+    }
+
     function isRedlineFile(filename) {
       const ext = filename.split('.').pop().toLowerCase();
       return REDLINE_EXTENSIONS.includes(ext);
@@ -7019,23 +7874,18 @@
       redlineOriginalInput.classList.remove('active');
       const files = e.dataTransfer.files;
       if (files.length > 0 && isRedlineFile(files[0].name)) {
-        redlineOriginalPath = files[0].path;
-        redlineOriginalSelected.textContent = files[0].name;
-        redlineOriginalInput.classList.add('selected');
-        updateRedlineButton();
+        setRedlineOriginalFile(files[0].path);
       }
     });
 
-    redlineOriginalInput.addEventListener('click', async () => {
+    redlineOriginalInput.addEventListener('click', async (e) => {
+      if (e.target === clearRedlineOriginal || clearRedlineOriginal.contains(e.target)) return;
       const filePaths = await ipcRenderer.invoke('select-file', {
         title: 'Select Original Document',
         filters: [{ name: 'Documents', extensions: REDLINE_EXTENSIONS }]
       });
       if (filePaths) {
-        redlineOriginalPath = filePaths;
-        redlineOriginalSelected.textContent = filePaths.split(/[/\\]/).pop();
-        redlineOriginalInput.classList.add('selected');
-        updateRedlineButton();
+        setRedlineOriginalFile(filePaths);
       }
     });
 
@@ -7054,24 +7904,29 @@
       redlineModifiedInput.classList.remove('active');
       const files = e.dataTransfer.files;
       if (files.length > 0 && isRedlineFile(files[0].name)) {
-        redlineModifiedPath = files[0].path;
-        redlineModifiedSelected.textContent = files[0].name;
-        redlineModifiedInput.classList.add('selected');
-        updateRedlineButton();
+        setRedlineModifiedFile(files[0].path);
       }
     });
 
-    redlineModifiedInput.addEventListener('click', async () => {
+    redlineModifiedInput.addEventListener('click', async (e) => {
+      if (e.target === clearRedlineModified || clearRedlineModified.contains(e.target)) return;
       const filePaths = await ipcRenderer.invoke('select-file', {
         title: 'Select Modified Document',
         filters: [{ name: 'Documents', extensions: REDLINE_EXTENSIONS }]
       });
       if (filePaths) {
-        redlineModifiedPath = filePaths;
-        redlineModifiedSelected.textContent = filePaths.split(/[/\\]/).pop();
-        redlineModifiedInput.classList.add('selected');
-        updateRedlineButton();
+        setRedlineModifiedFile(filePaths);
       }
+    });
+
+    clearRedlineOriginal.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearRedlineOriginalFile();
+    });
+
+    clearRedlineModified.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearRedlineModifiedFile();
     });
 
     // Add another pair button
@@ -7093,13 +7948,7 @@
         redlinePairsList.classList.remove('hidden');
 
         // Reset current inputs for next pair
-        redlineOriginalPath = null;
-        redlineModifiedPath = null;
-        redlineOriginalSelected.textContent = '';
-        redlineModifiedSelected.textContent = '';
-        redlineOriginalInput.classList.remove('selected');
-        redlineModifiedInput.classList.remove('selected');
-        updateRedlineButton();
+        clearCurrentRedlinePair();
       }
     });
 
@@ -7211,10 +8060,16 @@
               redlineLiteraType.textContent = Array.from(types).join(', ') || '—';
               if (result.change_pages_only) {
                 redlineLiteraFormat.textContent = `PDF (changed pages) • ${result.successful} file(s)`;
-              } else if (result.output_format === 'pdf') {
-                redlineLiteraFormat.textContent = `PDF • ${result.successful} file(s)`;
               } else {
-                redlineLiteraFormat.textContent = result.successful + ' file(s)';
+                const sampleOutput = result.results.find(r => r && r.success && r.output_path);
+                const sampleExt = sampleOutput ? (sampleOutput.output_path.split('.').pop() || '').toUpperCase() : '';
+                if (sampleExt === 'PDF') {
+                  redlineLiteraFormat.textContent = `PDF • ${result.successful} file(s)`;
+                } else if (sampleExt) {
+                  redlineLiteraFormat.textContent = `${sampleExt} • ${result.successful} file(s)`;
+                } else {
+                  redlineLiteraFormat.textContent = result.successful + ' file(s)';
+                }
               }
             } else {
               // EmmaNeigh batch — sum up table stats
@@ -7240,7 +8095,7 @@
               if (result.change_pages_only) {
                 redlineResultText.textContent = 'Litera changed-pages redline generated (PDF)';
                 redlineLiteraFormat.textContent = 'PDF (changed pages)';
-              } else if (result.output_format === 'pdf') {
+              } else if (ext === 'PDF') {
                 redlineResultText.textContent = 'Litera redline document generated (PDF)';
                 redlineLiteraFormat.textContent = 'PDF';
               } else {
@@ -7358,6 +8213,8 @@
 
       redlineOriginalInput.classList.remove('selected');
       redlineModifiedInput.classList.remove('selected');
+      clearRedlineOriginal.classList.remove('visible');
+      clearRedlineModified.classList.remove('visible');
 
       // Reset engine result display
       redlineEngineResult.style.display = 'none';
@@ -7928,15 +8785,18 @@
     aiSearchBtn.addEventListener('click', async () => {
       const query = aiSearchInput.value.trim();
       if (!query || emailData.length === 0) return;
-      let provider = 'anthropic';
+      let provider = 'ollama';
       try {
         const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
-        provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'anthropic');
+        provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'ollama');
       } catch (_) {}
-      const providerLabel = (PROVIDER_META[provider] || PROVIDER_META.anthropic).label;
+      const providerLabel = getProviderMeta(provider).label;
 
       // Check if API key is configured
-      const apiKeyResult = await ipcRenderer.invoke('get-api-key');
+      const providerNeedsApiKey = !isLocalProviderSelection(provider);
+      const apiKeyResult = providerNeedsApiKey
+        ? await ipcRenderer.invoke('get-api-key')
+        : { hasKey: true };
       if (!apiKeyResult.hasKey) {
         alert(`Please configure your ${providerLabel} API key in Settings first.`);
         settingsModal.classList.add('visible');
