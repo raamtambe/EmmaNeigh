@@ -2028,6 +2028,50 @@ const LITERA_EXECUTABLES = {
   excel: 'lcx_main.exe'
 };
 
+function hasAnyLiteraExecutable(dirPath) {
+  return Object.values(LITERA_EXECUTABLES)
+    .some(exeName => fs.existsSync(path.join(dirPath, exeName)));
+}
+
+function scanForLiteraInstallation() {
+  const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const visited = new Set();
+
+  function walk(dirPath, depth) {
+    if (!dirPath || visited.has(dirPath) || depth > 3) return null;
+    visited.add(dirPath);
+
+    if (hasAnyLiteraExecutable(dirPath)) {
+      return dirPath;
+    }
+
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    } catch (_) {
+      return null;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const lower = entry.name.toLowerCase();
+      if (!(lower.includes('litera') || lower.includes('compare') || depth < 1)) continue;
+      const childPath = path.join(dirPath, entry.name);
+      const found = walk(childPath, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  for (const root of roots) {
+    const found = walk(root, 0);
+    if (found) return found;
+  }
+  return null;
+}
+
 // Cache the Litera install path once found
 let literaInstallPath = null;
 let literaChecked = false;
@@ -2046,13 +2090,18 @@ function findLiteraInstallation() {
   }
 
   for (const installPath of LITERA_INSTALL_PATHS) {
-    const hasLiteraExecutable = Object.values(LITERA_EXECUTABLES)
-      .some(exeName => fs.existsSync(path.join(installPath, exeName)));
-    if (hasLiteraExecutable) {
+    if (hasAnyLiteraExecutable(installPath)) {
       literaInstallPath = installPath;
       console.log('Found Litera Compare at:', installPath);
       return installPath;
     }
+  }
+
+  const scannedInstall = scanForLiteraInstallation();
+  if (scannedInstall) {
+    literaInstallPath = scannedInstall;
+    console.log('Found Litera Compare by scan at:', scannedInstall);
+    return scannedInstall;
   }
 
   console.log('Litera Compare not found');
@@ -2291,12 +2340,6 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
     }
   }
 
-  // Litera supports style filenames from the default style location,
-  // so return the filename itself when it is not an absolute path.
-  if (!isAbsolute) {
-    return styleToken;
-  }
-
   console.warn(`Litera style file not found: ${styleToken}`);
   return null;
 }
@@ -2424,7 +2467,8 @@ function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
 
   addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, renderingStyle));
   for (const styleName of getPreferredLiteraColorStyleNames(literaType, renderingStyle)) {
-    addCandidate(styleName);
+    const resolved = resolveLiteraStylePath(styleName, literaType, literaPath);
+    addCandidate(resolved);
   }
 
   return candidates;
@@ -2463,6 +2507,10 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     const literaInstallPath = path.dirname(literaExe.exe);
     const styleCandidates = getLiteraColorStyleCandidates(literaExe.type, literaInstallPath, renderingStyle);
     const hasStyleSupport = !!getLiteraStyleExtension(literaExe.type);
+    if (hasStyleSupport && styleCandidates.length === 0) {
+      reject(new Error(`No Litera color style file was found for ${literaExe.type}. Configure a valid style name/path in Settings (e.g., "Kirkland Default").`));
+      return;
+    }
     const styleAttempts = styleCandidates.length
       ? (hasStyleSupport ? [...styleCandidates] : [...styleCandidates, null])
       : [null];
@@ -2928,17 +2976,9 @@ ipcMain.handle('redline-documents', async (event, config) => {
         };
       }
     } catch (err) {
-      // If Litera fails and engine was 'auto', fall back to EmmaNeigh
-      if (engine === 'auto' && !requiresStrictLitera) {
-        console.warn('Litera Compare failed, falling back to EmmaNeigh:', err.message);
-        mainWindow.webContents.send('redline-progress', {
-          percent: 15,
-          message: 'Litera unavailable — using EmmaNeigh table comparison...'
-        });
-        // Fall through to EmmaNeigh below
-      } else {
-        throw err;
-      }
+      // Do not silently fallback when Litera was selected and started;
+      // users expect Litera-style output (including color rendering).
+      throw err;
     }
   }
 
@@ -3369,6 +3409,9 @@ Respond ONLY with the JSON object, no other text.`;
 });
 
 ipcMain.handle('agent-plan', async (event, payload) => {
+  let fallbackPlanForError = null;
+  let fallbackProvider = getAIProvider();
+  let fallbackProviderName = getAIProviderDisplayName(fallbackProvider);
   try {
     const prompt = String(payload?.prompt || '').trim();
     if (!prompt) {
@@ -3387,10 +3430,13 @@ ipcMain.handle('agent-plan', async (event, payload) => {
       .filter(item => item.path || item.name);
 
     const fallbackPlan = buildAgentFallbackPlan(prompt, attachments);
+    fallbackPlanForError = fallbackPlan;
     const requestedProvider = normalizeAIProvider(payload?.provider || getAIProvider());
     const apiKey = String(payload?.apiKey || getApiKey() || '').trim();
     const provider = resolveProviderForApiKey(requestedProvider, apiKey);
     const providerName = getAIProviderDisplayName(provider);
+    fallbackProvider = provider;
+    fallbackProviderName = providerName;
 
     if (providerRequiresApiKey(provider) && !apiKey) {
       return {
@@ -3399,7 +3445,7 @@ ipcMain.handle('agent-plan', async (event, payload) => {
         provider,
         providerName,
         plan: fallbackPlan,
-        warning: `No ${providerName} API key configured. Using local routing logic.`
+        warning: `${providerName} is not configured. Using local routing logic.`
       };
     }
 
@@ -3472,7 +3518,7 @@ Rules:
         provider,
         providerName,
         plan: fallbackPlan,
-        warning: aiResult.error || 'Agent planner fallback used due to provider error.'
+        warning: 'LLM connection unavailable. Using local routing logic.'
       };
     }
 
@@ -3488,7 +3534,23 @@ Rules:
       warning: parsed ? null : 'Could not parse model output. Used rules fallback.'
     };
   } catch (e) {
-    return { success: false, error: e.message };
+    const promptFallback = String(payload?.prompt || '').trim();
+    const attachments = Array.isArray(payload?.attachments)
+      ? payload.attachments.map(item => ({
+          path: String(item?.path || '').trim(),
+          name: String(item?.name || path.basename(String(item?.path || ''))).trim(),
+          ext: String(path.extname(String(item?.name || item?.path || '')) || '').toLowerCase().replace(/^\./, '')
+        }))
+      : [];
+    const plan = fallbackPlanForError || buildAgentFallbackPlan(promptFallback, attachments);
+    return {
+      success: true,
+      source: 'rules',
+      provider: fallbackProvider,
+      providerName: fallbackProviderName,
+      plan,
+      warning: 'LLM connection unavailable. Using local routing logic.'
+    };
   }
 });
 

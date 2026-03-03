@@ -8058,6 +8058,14 @@
               // Litera batch — show document type info
               const types = new Set(result.results.filter(r => r.litera_type).map(r => r.litera_type));
               redlineLiteraType.textContent = Array.from(types).join(', ') || '—';
+              const batchWarnings = (result.results || [])
+                .map(r => r && r.warning ? String(r.warning).trim() : '')
+                .filter(Boolean);
+              const batchStyles = Array.from(new Set(
+                (result.results || [])
+                  .map(r => r && r.litera_style ? String(r.litera_style).trim() : '')
+                  .filter(Boolean)
+              ));
               if (result.change_pages_only) {
                 redlineLiteraFormat.textContent = `PDF (changed pages) • ${result.successful} file(s)`;
               } else {
@@ -8070,6 +8078,12 @@
                 } else {
                   redlineLiteraFormat.textContent = result.successful + ' file(s)';
                 }
+              }
+              if (batchStyles.length > 0) {
+                redlineResultText.textContent += ` • Style: ${batchStyles.join(', ')}`;
+              }
+              if (batchWarnings.length > 0) {
+                redlineResultText.textContent += ` • ${batchWarnings[0]}`;
               }
             } else {
               // EmmaNeigh batch — sum up table stats
@@ -8103,6 +8117,9 @@
                 redlineLiteraFormat.textContent = ext;
               }
               redlineLiteraType.textContent = (result.litera_type || 'Document').charAt(0).toUpperCase() + (result.litera_type || 'document').slice(1);
+              if (result.litera_style) {
+                redlineResultText.textContent += ` • Style: ${result.litera_style}`;
+              }
               if (result.warning) {
                 redlineResultText.textContent += ` — ${result.warning}`;
               }
