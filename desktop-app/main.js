@@ -2251,22 +2251,39 @@ function normalizeLiteraStyleHint(value) {
     .trim();
 }
 
+function hasMonochromeStyleTerm(value) {
+  const lower = String(value || '').toLowerCase();
+  const blockedTerms = ['black', 'mono', 'monochrome', 'grayscale', 'grey scale', 'gray scale', 'b&w'];
+  return blockedTerms.some(term => lower.includes(term));
+}
+
+function looksLikeBinaryRegistryBlob(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return true;
+  return /^(?:[0-9a-f]{2},){4,}[0-9a-f]{2}$/i.test(normalized) || /^[0-9,\s-]+$/.test(normalized);
+}
+
 function parseRegistryStyleHints(registryOutput) {
   const hints = [];
   const lines = String(registryOutput || '').split(/\r?\n/);
   for (const line of lines) {
-    const match = line.match(/^\s*([^\s].*?)\s+REG_\w+\s+(.+)\s*$/);
+    const match = line.match(/^\s*([^\s].*?)\s+(REG_\w+)\s+(.+)\s*$/);
     if (!match) continue;
     const valueName = String(match[1] || '').trim().toLowerCase();
-    const valueData = normalizeLiteraStyleHint(match[2] || '');
+    const valueType = String(match[2] || '').trim().toUpperCase();
+    const valueData = normalizeLiteraStyleHint(match[3] || '');
     if (!valueData) continue;
+    if (!['REG_SZ', 'REG_EXPAND_SZ', 'REG_MULTI_SZ'].includes(valueType)) continue;
+    if (looksLikeBinaryRegistryBlob(valueData)) continue;
     if (
       !valueName.includes('style') &&
       !valueName.includes('render') &&
-      !/\.(tpx|tpp|tpz)\b/i.test(valueData)
+      !/\.(tpx|tpp|tpz)\b/i.test(valueData) &&
+      !/(color|colour|blue|red|green|kirkland|default)/i.test(valueData)
     ) {
       continue;
     }
+    if (hasMonochromeStyleTerm(valueData)) continue;
     hints.push(valueData);
   }
   return hints;
@@ -2494,6 +2511,16 @@ function getPreferredLiteraColorStyleNames(literaType, preferredStyleName = null
   const preferred = getLiteraStyleNameVariants(preferredStyleName, expectedExt);
   return [
     ...preferred,
+    `Blue Red Green${expectedExt}`,
+    `Blue-Red-Green${expectedExt}`,
+    `Blue Red${expectedExt}`,
+    `Blue-Red${expectedExt}`,
+    `Red Blue${expectedExt}`,
+    `Red-Blue${expectedExt}`,
+    `Color (Blue Red Green)${expectedExt}`,
+    `Color (Blue Red)${expectedExt}`,
+    `Colour (Blue Red Green)${expectedExt}`,
+    `Colour (Blue Red)${expectedExt}`,
     `Color (Kirkland Default)${expectedExt}`,
     `Colour (Kirkland Default)${expectedExt}`,
     `Kirkland Default${expectedExt}`,
@@ -2650,13 +2677,20 @@ function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleNam
 }
 
 function getPreferredStyleNameFromHints(styleHints = []) {
+  let firstNonMonochrome = null;
   for (const hint of styleHints) {
     const cleaned = String(hint || '').trim();
     if (!cleaned) continue;
-    if (path.extname(cleaned)) return path.parse(cleaned).name;
-    return cleaned;
+    if (hasMonochromeStyleTerm(cleaned)) continue;
+    const styleName = path.extname(cleaned) ? path.parse(cleaned).name : cleaned;
+    if (/(color|colour|blue|red|green|kirkland|default)/i.test(styleName)) {
+      return styleName;
+    }
+    if (!firstNonMonochrome) {
+      firstNonMonochrome = styleName;
+    }
   }
-  return null;
+  return firstNonMonochrome;
 }
 
 function getLiteraColorStyleCandidates(literaType, literaPath, options = {}) {
@@ -2668,10 +2702,13 @@ function getLiteraColorStyleCandidates(literaType, literaPath, options = {}) {
 
   function addCandidate(value) {
     if (!value) return;
-    const key = String(value).trim().toLowerCase();
+    const normalized = String(value).trim();
+    if (!normalized) return;
+    if (hasMonochromeStyleTerm(normalized)) return;
+    const key = normalized.toLowerCase();
     if (!key || seen.has(key)) return;
     seen.add(key);
-    candidates.push(value);
+    candidates.push(normalized);
   }
 
   function addStyleTokenCandidates(styleName) {
@@ -2683,26 +2720,39 @@ function getLiteraColorStyleCandidates(literaType, literaPath, options = {}) {
       return;
     }
 
+    const rawExt = path.extname(normalized);
+    const base = rawExt ? normalized.slice(0, -rawExt.length).trim() : normalized;
+    if (base) {
+      addCandidate(base);
+      if (!/^colou?r\s*\(/i.test(base)) {
+        addCandidate(`Color (${base})`);
+        addCandidate(`Colour (${base})`);
+      }
+    }
+
     for (const token of getLiteraStyleNameVariants(normalized, expectedExt)) {
       addCandidate(token);
+      const tokenExt = path.extname(token);
+      const tokenBase = tokenExt ? token.slice(0, -tokenExt.length).trim() : token;
+      if (tokenBase) addCandidate(tokenBase);
     }
   }
 
-  for (const styleHint of styleHints) {
-    addCandidate(resolveLiteraStylePath(styleHint, literaType, literaPath));
-    addStyleTokenCandidates(styleHint);
-  }
-
+  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleName));
   if (preferredStyleName) {
     addCandidate(resolveLiteraStylePath(preferredStyleName, literaType, literaPath));
     addStyleTokenCandidates(preferredStyleName);
   }
 
-  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleName));
   for (const styleName of getPreferredLiteraColorStyleNames(literaType, preferredStyleName)) {
     const resolved = resolveLiteraStylePath(styleName, literaType, literaPath);
     addCandidate(resolved);
     addStyleTokenCandidates(styleName);
+  }
+
+  for (const styleHint of styleHints) {
+    addCandidate(resolveLiteraStylePath(styleHint, literaType, literaPath));
+    addStyleTokenCandidates(styleHint);
   }
 
   return candidates;
