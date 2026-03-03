@@ -1755,6 +1755,28 @@ function buildRedlineOutputFilename(originalPath, modifiedPath, outputExtension)
   return `Redline - ${originalBase} v. ${modifiedBase}${normalizedExt}`;
 }
 
+function getLiteraStyleExtension(literaType) {
+  const expectedExtByType = {
+    word: '.tpx',
+    powerpoint: '.tpp',
+    excel: '.tpz'
+  };
+  return expectedExtByType[literaType] || null;
+}
+
+function getPreferredLiteraColorStyleNames(literaType) {
+  const expectedExt = getLiteraStyleExtension(literaType);
+  if (!expectedExt) return [];
+
+  return [
+    `Color (Kirkland Default)${expectedExt}`,
+    `Colour (Kirkland Default)${expectedExt}`,
+    `Kirkland Default${expectedExt}`,
+    `Color${expectedExt}`,
+    `Colour${expectedExt}`
+  ];
+}
+
 function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
   if (!renderingStyle || typeof renderingStyle !== 'string') {
     return null;
@@ -1765,22 +1787,17 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
     return null;
   }
 
-  const expectedExtByType = {
-    word: '.tpx',
-    powerpoint: '.tpp',
-    excel: '.tpz'
-  };
-
-  const expectedExt = expectedExtByType[literaType];
+  const expectedExt = getLiteraStyleExtension(literaType);
   if (!expectedExt) {
     return null;
   }
 
-  // Ignore human-readable names like "Color (Kirkland Default)".
+  // Ignore human-readable names without file extension.
   if (path.extname(raw).toLowerCase() !== expectedExt) {
     return null;
   }
 
+  const isAbsolute = path.isAbsolute(raw);
   const candidates = path.isAbsolute(raw)
     ? [raw]
     : [path.join(literaPath, raw), raw];
@@ -1791,36 +1808,47 @@ function resolveLiteraStylePath(renderingStyle, literaType, literaPath) {
     }
   }
 
+  // Litera supports style filenames from the default style location,
+  // so return the filename itself when it is not an absolute path.
+  if (!isAbsolute) {
+    return raw;
+  }
+
   console.warn(`Litera style file not found: ${raw}`);
   return null;
 }
 
 function findPreferredLiteraColorStyle(literaType, literaPath) {
-  const styleExtByType = {
-    word: '.tpx',
-    powerpoint: '.tpp',
-    excel: '.tpz'
-  };
-  const expectedExt = styleExtByType[literaType];
+  const expectedExt = getLiteraStyleExtension(literaType);
   if (!expectedExt) {
     return null;
   }
 
-  const preferredFilenames = [
-    `Color${expectedExt}`,
-    `Colour${expectedExt}`,
-    `Color (Kirkland Default)${expectedExt}`,
-    `Colour (Kirkland Default)${expectedExt}`,
-    `Kirkland Default${expectedExt}`
-  ];
+  const preferredFilenames = getPreferredLiteraColorStyleNames(literaType);
   const preferredSet = new Set(preferredFilenames.map(name => name.toLowerCase()));
   const blockedTerms = ['black', 'mono', 'monochrome', 'grayscale', 'grey scale', 'gray scale', 'b&w'];
 
-  const startDirs = [literaPath];
+  const startDirs = [literaPath, path.dirname(literaPath)];
   const directSubdirs = ['Styles', 'Style', 'Templates', 'Rendering Styles', 'Comparison Styles'];
   for (const subdir of directSubdirs) {
     const candidate = path.join(literaPath, subdir);
     if (fs.existsSync(candidate)) startDirs.push(candidate);
+  }
+
+  // Also look in known Windows data locations where style files are often stored.
+  const windowsRoots = [process.env.ProgramData, process.env.APPDATA, process.env.LOCALAPPDATA].filter(Boolean);
+  const windowsSuffixes = [
+    ['Litera', 'Compare'],
+    ['Litera', 'Compare', 'Styles'],
+    ['Litera', 'Compare', 'Rendering Styles'],
+    ['Litera', 'Workshare', 'Compare'],
+    ['Litera', 'Workshare', 'Compare', 'Styles']
+  ];
+  for (const root of windowsRoots) {
+    for (const suffixParts of windowsSuffixes) {
+      const candidate = path.join(root, ...suffixParts);
+      if (fs.existsSync(candidate)) startDirs.push(candidate);
+    }
   }
 
   const styleFiles = [];
@@ -1883,6 +1911,31 @@ function findPreferredLiteraColorStyle(literaType, literaPath) {
   return bestPath;
 }
 
+function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
+  const candidates = [];
+  const seen = new Set();
+
+  function addCandidate(value) {
+    if (!value) return;
+    const key = String(value).trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidates.push(value);
+  }
+
+  const requestedStyle = resolveLiteraStylePath(renderingStyle, literaType, literaPath);
+  if (requestedStyle) {
+    addCandidate(requestedStyle);
+  }
+
+  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath));
+  for (const styleName of getPreferredLiteraColorStyleNames(literaType)) {
+    addCandidate(styleName);
+  }
+
+  return candidates;
+}
+
 /**
  * Run Litera Compare on a single document pair.
  * Uses Litera's documented command-line interface.
@@ -1909,62 +1962,77 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     }
 
     const literaInstallPath = path.dirname(literaExe.exe);
-    const requestedStylePath = resolveLiteraStylePath(renderingStyle, literaExe.type, literaInstallPath);
-    const fallbackColorStylePath = requestedStylePath
-      ? null
-      : findPreferredLiteraColorStyle(literaExe.type, literaInstallPath);
-    const stylePath = requestedStylePath || fallbackColorStylePath;
-    let args = [];
-    let primaryOutputPath = outputPath;
-    let tempAutoOutputPath = null;
+    const styleCandidates = getLiteraColorStyleCandidates(literaExe.type, literaInstallPath, renderingStyle);
+    const styleAttempts = styleCandidates.length ? [...styleCandidates, null] : [null];
 
     if (normalizedOptions.output_format === 'pdf' && !normalizedOptions.change_pages_only && literaType && !['word', 'pdf'].includes(literaType)) {
       reject(new Error('PDF output is currently supported only for Word/PDF comparisons.'));
       return;
     }
 
-    if (literaExe.mode === 'auto') {
-      if (normalizedOptions.change_pages_only) {
-        reject(new Error('Change pages only redline requires lcp_main.exe or lcp_ppt.exe.'));
-        return;
+    function hasOutputFile(filePath) {
+      return fs.existsSync(filePath) && (() => {
+        try {
+          return fs.statSync(filePath).size > 0;
+        } catch (_) {
+          return true;
+        }
+      })();
+    }
+
+    function cleanupTempOutput(tempPath) {
+      if (tempPath && fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch (_) {}
       }
-      // Litera CLI: lcp_auto.exe -o <original> -m <modified> -r <redline> [-s <style>]
-      args = ['-o', originalPath, '-m', modifiedPath, '-r', primaryOutputPath];
-      if (stylePath) {
-        args.push('-s', stylePath);
+    }
+
+    function buildArgsForStyle(styleValue) {
+      let args = [];
+      let primaryOutputPath = outputPath;
+      let tempAutoOutputPath = null;
+
+      if (literaExe.mode === 'auto') {
+        if (normalizedOptions.change_pages_only) {
+          throw new Error('Change pages only redline requires lcp_main.exe or lcp_ppt.exe.');
+        }
+        // Litera CLI: lcp_auto.exe -o <original> -m <modified> -r <redline> [-s <style>]
+        args = ['-o', originalPath, '-m', modifiedPath, '-r', primaryOutputPath];
+        if (styleValue) {
+          args.push('-s', styleValue);
+        }
+      } else if (literaExe.mode === 'word' || literaExe.mode === 'powerpoint') {
+        // Per-app CLI fallback:
+        // lcp_main.exe/lcp_ppt.exe -org <original> -mod <modified> -auto <redline> -silent
+        let autoOutputPath = primaryOutputPath;
+        if (normalizedOptions.change_pages_only) {
+          tempAutoOutputPath = path.join(
+            app.getPath('temp'),
+            `litera_full_${Date.now()}_${Math.floor(Math.random() * 100000)}${origExt || '.docx'}`
+          );
+          autoOutputPath = tempAutoOutputPath;
+        }
+        args = ['-org', originalPath, '-mod', modifiedPath, '-auto', autoOutputPath, '-silent'];
+        if (styleValue) {
+          args.push('-style', styleValue);
+        }
+        if (normalizedOptions.change_pages_only) {
+          args.push('-autoredp', primaryOutputPath);
+        }
+      } else if (literaExe.mode === 'excel') {
+        if (normalizedOptions.change_pages_only) {
+          throw new Error('Change pages only redline is not supported for Excel comparisons.');
+        }
+        // Excel silent CLI:
+        // lcx_main.exe -s -lorg <original> -lmod <modified> -lres <redline> [-style <style.tpz>]
+        args = ['-s', '-lorg', originalPath, '-lmod', modifiedPath, '-lres', primaryOutputPath];
+        if (styleValue) {
+          args.push('-style', styleValue);
+        }
+      } else {
+        throw new Error(`Unsupported Litera mode: ${literaExe.mode}`);
       }
-    } else if (literaExe.mode === 'word' || literaExe.mode === 'powerpoint') {
-      // Per-app CLI fallback:
-      // lcp_main.exe/lcp_ppt.exe -org <original> -mod <modified> -auto <redline> -silent
-      let autoOutputPath = primaryOutputPath;
-      if (normalizedOptions.change_pages_only) {
-        tempAutoOutputPath = path.join(
-          app.getPath('temp'),
-          `litera_full_${Date.now()}_${Math.floor(Math.random() * 100000)}${origExt || '.docx'}`
-        );
-        autoOutputPath = tempAutoOutputPath;
-      }
-      args = ['-org', originalPath, '-mod', modifiedPath, '-auto', autoOutputPath, '-silent'];
-      if (stylePath) {
-        args.push('-style', stylePath);
-      }
-      if (normalizedOptions.change_pages_only) {
-        args.push('-autoredp', primaryOutputPath);
-      }
-    } else if (literaExe.mode === 'excel') {
-      if (normalizedOptions.change_pages_only) {
-        reject(new Error('Change pages only redline is not supported for Excel comparisons.'));
-        return;
-      }
-      // Excel silent CLI:
-      // lcx_main.exe -s -lorg <original> -lmod <modified> -lres <redline> [-style <style.tpz>]
-      args = ['-s', '-lorg', originalPath, '-lmod', modifiedPath, '-lres', primaryOutputPath];
-      if (stylePath) {
-        args.push('-style', stylePath);
-      }
-    } else {
-      reject(new Error(`Unsupported Litera mode: ${literaExe.mode}`));
-      return;
+
+      return { args, primaryOutputPath, tempAutoOutputPath };
     }
 
     mainWindow.webContents.send('redline-progress', {
@@ -1972,73 +2040,112 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
       message: `Running Litera Compare (${literaExe.type})...`
     });
 
-    console.log('Running Litera CLI:', literaExe.exe, args);
-    console.log('  Original:', originalPath);
-    console.log('  Modified:', modifiedPath);
-    console.log('  Output:', primaryOutputPath);
-
-    const proc = spawn(literaExe.exe, args, {
-      cwd: literaInstallPath,
-      windowsHide: true
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', (data) => {
-      stdout += data.toString();
-      console.log('Litera PS:', data.toString().trim());
-    });
-
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString();
-      console.error('Litera PS stderr:', data.toString().trim());
-    });
-
-    proc.on('close', (code) => {
-      if (tempAutoOutputPath && fs.existsSync(tempAutoOutputPath)) {
-        try { fs.unlinkSync(tempAutoOutputPath); } catch (_) {}
+    function runAttempt(index) {
+      if (index >= styleAttempts.length) {
+        reject(new Error('Litera CLI failed to produce output.'));
+        return;
       }
 
-      const hasOutput = fs.existsSync(primaryOutputPath) && (() => {
-        try {
-          return fs.statSync(primaryOutputPath).size > 0;
-        } catch (_) {
-          return true;
+      const styleValue = styleAttempts[index];
+      const styleLabel = styleValue ? path.basename(String(styleValue)) : 'default';
+      let attemptConfig;
+      try {
+        attemptConfig = buildArgsForStyle(styleValue);
+      } catch (err) {
+        if (index < styleAttempts.length - 1) {
+          console.warn(`Litera style attempt "${styleLabel}" skipped: ${err.message}`);
+          runAttempt(index + 1);
+          return;
         }
-      })();
+        reject(err);
+        return;
+      }
 
-      if (hasOutput) {
-        const method = `CLI (${path.basename(literaExe.exe)})`;
-        console.log(`Comparison complete via ${method}`);
+      const { args, primaryOutputPath, tempAutoOutputPath } = attemptConfig;
 
-        mainWindow.webContents.send('redline-progress', {
-          percent: 90,
-          message: `Comparison complete (${method})`
-        });
+      mainWindow.webContents.send('redline-progress', {
+        percent: 45,
+        message: styleValue
+          ? `Running Litera Compare with style: ${styleLabel}`
+          : `Running Litera Compare with default style`
+      });
 
-        resolve({
-          success: true,
-          engine: 'litera',
-          output_path: primaryOutputPath,
-          litera_type: literaExe.type,
-          output_format: normalizedOptions.output_format,
-          change_pages_only: normalizedOptions.change_pages_only,
-          method,
-          litera_style: stylePath ? path.basename(stylePath) : null
-        });
-      } else {
+      console.log('Running Litera CLI:', literaExe.exe, args);
+      console.log('  Original:', originalPath);
+      console.log('  Modified:', modifiedPath);
+      console.log('  Output:', primaryOutputPath);
+      console.log('  Style:', styleLabel);
+
+      const proc = spawn(literaExe.exe, args, {
+        cwd: literaInstallPath,
+        windowsHide: true
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+        console.log('Litera PS:', data.toString().trim());
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+        console.error('Litera PS stderr:', data.toString().trim());
+      });
+
+      proc.on('close', (code) => {
+        cleanupTempOutput(tempAutoOutputPath);
+
+        if (hasOutputFile(primaryOutputPath)) {
+          const method = `CLI (${path.basename(literaExe.exe)})`;
+          console.log(`Comparison complete via ${method}`);
+
+          mainWindow.webContents.send('redline-progress', {
+            percent: 90,
+            message: `Comparison complete (${method})`
+          });
+
+          resolve({
+            success: true,
+            engine: 'litera',
+            output_path: primaryOutputPath,
+            litera_type: literaExe.type,
+            output_format: normalizedOptions.output_format,
+            change_pages_only: normalizedOptions.change_pages_only,
+            method,
+            litera_style: styleValue ? path.basename(String(styleValue)) : null
+          });
+          return;
+        }
+
         let errMsg = `Litera CLI failed (exit code ${code}).`;
         if (stdout.trim()) errMsg += `\nstdout: ${stdout.trim().substring(0, 800)}`;
         if (stderr.trim()) errMsg += `\nstderr: ${stderr.trim().substring(0, 800)}`;
         errMsg += `\nCommand: ${path.basename(literaExe.exe)} ${args.join(' ')}`;
-        reject(new Error(errMsg));
-      }
-    });
 
-    proc.on('error', (err) => {
-      reject(new Error(`Failed to launch Litera command line: ${err.message}`));
-    });
+        if (index < styleAttempts.length - 1) {
+          console.warn(`Litera attempt failed with style "${styleLabel}". Retrying...`);
+          runAttempt(index + 1);
+          return;
+        }
+
+        reject(new Error(errMsg));
+      });
+
+      proc.on('error', (err) => {
+        cleanupTempOutput(tempAutoOutputPath);
+        const wrappedErr = new Error(`Failed to launch Litera command line: ${err.message}`);
+        if (index < styleAttempts.length - 1) {
+          console.warn(`Litera launch failed with style "${styleLabel}". Retrying...`);
+          runAttempt(index + 1);
+          return;
+        }
+        reject(wrappedErr);
+      });
+    }
+
+    runAttempt(0);
   });
 }
 
