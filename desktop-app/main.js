@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const archiver = require('archiver');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
@@ -46,7 +46,6 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
 const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b';
 const DEFAULT_LMSTUDIO_MODEL = 'local-model';
-const DEFAULT_LITERA_STYLE_NAME = 'Kirkland Default';
 
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
@@ -889,6 +888,104 @@ async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
     return callHarveyPrompt({ apiKey, prompt, maxTokens });
   }
   return callAnthropicPrompt({ apiKey, prompt, maxTokens });
+}
+
+function buildProviderHealthEndpoint(baseUrl, requestPath) {
+  try {
+    return new URL(requestPath, baseUrl).toString();
+  } catch (_) {
+    return `${String(baseUrl || '').replace(/\/+$/, '')}${requestPath || ''}`;
+  }
+}
+
+function getProviderConnectionConfig(providerInput, apiKeyInput) {
+  const apiKey = String(apiKeyInput || '').trim();
+  const requestedProvider = normalizeAIProvider(providerInput || getAIProvider());
+  const provider = resolveProviderForApiKey(requestedProvider, apiKey);
+  const providerName = getAIProviderDisplayName(provider);
+
+  let baseUrl = 'https://api.anthropic.com';
+  let healthPath = '/v1/models';
+  let model = getClaudeModel();
+
+  if (provider === 'ollama') {
+    baseUrl = getOllamaBaseUrl();
+    model = getOllamaModel();
+  } else if (provider === 'lmstudio') {
+    baseUrl = getLmStudioBaseUrl();
+    model = getLmStudioModel();
+  } else if (provider === 'openai') {
+    baseUrl = 'https://api.openai.com';
+    model = getOpenAIModel();
+  } else if (provider === 'harvey') {
+    baseUrl = getHarveyBaseUrl();
+    healthPath = '/api/whoami';
+    model = 'harvey-assist';
+  }
+
+  return {
+    requestedProvider,
+    provider,
+    providerName,
+    providerAutoDetected: provider !== requestedProvider,
+    requiresApiKey: providerRequiresApiKey(provider),
+    hasApiKey: !!apiKey,
+    model,
+    baseUrl,
+    healthPath,
+    healthEndpoint: buildProviderHealthEndpoint(baseUrl, healthPath)
+  };
+}
+
+async function runProviderHealthCheck(connectionConfig, apiKeyInput) {
+  const apiKey = String(apiKeyInput || '').trim();
+  if (!connectionConfig) {
+    return { ok: false, status: 'invalid_config', detail: 'Provider configuration missing.' };
+  }
+
+  if (connectionConfig.requiresApiKey && !apiKey) {
+    return {
+      ok: false,
+      status: 'missing_api_key',
+      statusCode: 0,
+      endpoint: connectionConfig.healthEndpoint,
+      detail: `No ${connectionConfig.providerName} API key configured.`
+    };
+  }
+
+  const headers = {};
+  if (connectionConfig.provider === 'anthropic') {
+    headers['anthropic-version'] = '2023-06-01';
+    headers['x-api-key'] = apiKey;
+  } else if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await requestHttps({
+    baseUrl: connectionConfig.baseUrl,
+    path: connectionConfig.healthPath,
+    method: 'GET',
+    headers,
+    timeoutMs: 15000
+  });
+
+  if (response.statusCode === 200) {
+    return {
+      ok: true,
+      status: 'reachable',
+      statusCode: response.statusCode,
+      endpoint: connectionConfig.healthEndpoint,
+      detail: `${connectionConfig.providerName} connection successful.`
+    };
+  }
+
+  return {
+    ok: false,
+    status: 'unreachable',
+    statusCode: response.statusCode || 0,
+    endpoint: connectionConfig.healthEndpoint,
+    detail: getErrorDetail(response)
+  };
 }
 
 const AGENT_TABS = new Set([
@@ -2028,6 +2125,34 @@ const LITERA_EXECUTABLES = {
   excel: 'lcx_main.exe'
 };
 
+const LITERA_STYLE_REGISTRY_PATHS = [
+  'HKCU\\Software\\Litera2',
+  'HKCU\\Software\\WOW6432Node\\Litera2',
+  'HKCU\\Software\\Litera',
+  'HKCU\\Software\\WOW6432Node\\Litera',
+  'HKCU\\Software\\Litera Compare PDF Publisher',
+  'HKCU\\Software\\Litera\\Compare',
+  'HKCU\\Software\\WOW6432Node\\Litera\\Compare',
+  'HKCU\\Software\\Litera\\Workshare\\Compare',
+  'HKCU\\Software\\WOW6432Node\\Litera\\Workshare\\Compare',
+  'HKCU\\Software\\Workshare\\Compare',
+  'HKCU\\Software\\WOW6432Node\\Workshare\\Compare',
+  'HKLM\\Software\\Litera2',
+  'HKLM\\Software\\WOW6432Node\\Litera2',
+  'HKLM\\Software\\Litera',
+  'HKLM\\Software\\WOW6432Node\\Litera',
+  'HKLM\\Software\\Litera Compare PDF Publisher',
+  'HKLM\\Software\\WOW6432Node\\Litera Compare PDF Publisher',
+  'HKLM\\Software\\Litera\\Compare',
+  'HKLM\\Software\\WOW6432Node\\Litera\\Compare',
+  'HKLM\\Software\\Litera\\Workshare\\Compare',
+  'HKLM\\Software\\WOW6432Node\\Litera\\Workshare\\Compare',
+  'HKLM\\Software\\Workshare\\Compare',
+  'HKLM\\Software\\WOW6432Node\\Workshare\\Compare'
+];
+
+let literaRegistryStyleHintsCache = null;
+
 function hasAnyLiteraExecutable(dirPath) {
   return Object.values(LITERA_EXECUTABLES)
     .some(exeName => fs.existsSync(path.join(dirPath, exeName)));
@@ -2106,6 +2231,81 @@ function findLiteraInstallation() {
 
   console.log('Litera Compare not found');
   return null;
+}
+
+function expandWindowsEnvVars(rawValue) {
+  return String(rawValue || '').replace(/%([^%]+)%/g, (fullMatch, varName) => {
+    const key = String(varName || '').trim();
+    if (!key) return fullMatch;
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) return process.env[key];
+    if (Object.prototype.hasOwnProperty.call(process.env, key.toUpperCase())) return process.env[key.toUpperCase()];
+    if (Object.prototype.hasOwnProperty.call(process.env, key.toLowerCase())) return process.env[key.toLowerCase()];
+    return fullMatch;
+  });
+}
+
+function normalizeLiteraStyleHint(value) {
+  return expandWindowsEnvVars(value)
+    .replace(/^"+|"+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseRegistryStyleHints(registryOutput) {
+  const hints = [];
+  const lines = String(registryOutput || '').split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\s*([^\s].*?)\s+REG_\w+\s+(.+)\s*$/);
+    if (!match) continue;
+    const valueName = String(match[1] || '').trim().toLowerCase();
+    const valueData = normalizeLiteraStyleHint(match[2] || '');
+    if (!valueData) continue;
+    if (
+      !valueName.includes('style') &&
+      !valueName.includes('render') &&
+      !/\.(tpx|tpp|tpz)\b/i.test(valueData)
+    ) {
+      continue;
+    }
+    hints.push(valueData);
+  }
+  return hints;
+}
+
+function getLiteraRegistryStyleHints() {
+  if (process.platform !== 'win32') return [];
+  if (Array.isArray(literaRegistryStyleHintsCache)) {
+    return [...literaRegistryStyleHintsCache];
+  }
+
+  const hints = [];
+  const seen = new Set();
+
+  function addHint(rawHint) {
+    const hint = normalizeLiteraStyleHint(rawHint);
+    if (!hint) return;
+    const key = hint.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    hints.push(hint);
+  }
+
+  for (const registryPath of LITERA_STYLE_REGISTRY_PATHS) {
+    try {
+      const query = spawnSync('reg', ['query', registryPath, '/s'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024
+      });
+      if (query.error || query.status !== 0 || !query.stdout) continue;
+      for (const hint of parseRegistryStyleHints(query.stdout)) {
+        addHint(hint);
+      }
+    } catch (_) {}
+  }
+
+  literaRegistryStyleHintsCache = hints;
+  return [...hints];
 }
 
 /**
@@ -2381,9 +2581,10 @@ function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleNam
 
   const styleFiles = [];
   const visited = new Set();
+  const maxDepth = 8;
 
   function walk(currentDir, depth) {
-    if (depth > 5 || visited.has(currentDir)) return;
+    if (depth > maxDepth || visited.has(currentDir)) return;
     visited.add(currentDir);
 
     let entries;
@@ -2397,7 +2598,7 @@ function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleNam
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         const dirName = entry.name.toLowerCase();
-        if (depth < 5 || dirName.includes('style') || dirName.includes('template')) {
+        if (depth < maxDepth || dirName.includes('style') || dirName.includes('template')) {
           walk(fullPath, depth + 1);
         }
         continue;
@@ -2448,9 +2649,22 @@ function findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleNam
   return bestPath;
 }
 
-function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
+function getPreferredStyleNameFromHints(styleHints = []) {
+  for (const hint of styleHints) {
+    const cleaned = String(hint || '').trim();
+    if (!cleaned) continue;
+    if (path.extname(cleaned)) return path.parse(cleaned).name;
+    return cleaned;
+  }
+  return null;
+}
+
+function getLiteraColorStyleCandidates(literaType, literaPath, options = {}) {
   const candidates = [];
   const seen = new Set();
+  const styleHints = Array.isArray(options.styleHints) ? options.styleHints : [];
+  const preferredStyleName = String(options.preferredStyleName || '').trim() || null;
+  const expectedExt = getLiteraStyleExtension(literaType);
 
   function addCandidate(value) {
     if (!value) return;
@@ -2460,15 +2674,35 @@ function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
     candidates.push(value);
   }
 
-  const requestedStyle = resolveLiteraStylePath(renderingStyle, literaType, literaPath);
-  if (requestedStyle) {
-    addCandidate(requestedStyle);
+  function addStyleTokenCandidates(styleName) {
+    if (!styleName) return;
+    const normalized = String(styleName).trim();
+    if (!normalized) return;
+    if (!expectedExt) {
+      addCandidate(normalized);
+      return;
+    }
+
+    for (const token of getLiteraStyleNameVariants(normalized, expectedExt)) {
+      addCandidate(token);
+    }
   }
 
-  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, renderingStyle));
-  for (const styleName of getPreferredLiteraColorStyleNames(literaType, renderingStyle)) {
+  for (const styleHint of styleHints) {
+    addCandidate(resolveLiteraStylePath(styleHint, literaType, literaPath));
+    addStyleTokenCandidates(styleHint);
+  }
+
+  if (preferredStyleName) {
+    addCandidate(resolveLiteraStylePath(preferredStyleName, literaType, literaPath));
+    addStyleTokenCandidates(preferredStyleName);
+  }
+
+  addCandidate(findPreferredLiteraColorStyle(literaType, literaPath, preferredStyleName));
+  for (const styleName of getPreferredLiteraColorStyleNames(literaType, preferredStyleName)) {
     const resolved = resolveLiteraStylePath(styleName, literaType, literaPath);
     addCandidate(resolved);
+    addStyleTokenCandidates(styleName);
   }
 
   return candidates;
@@ -2479,7 +2713,7 @@ function getLiteraColorStyleCandidates(literaType, literaPath, renderingStyle) {
  * Uses Litera's documented command-line interface.
  * Returns a Promise that resolves with the comparison result.
  */
-function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingStyle, compareOptions = {}) {
+function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOptions = {}) {
   return new Promise((resolve, reject) => {
     const origExt = path.extname(originalPath);
     const originalBaseName = path.parse(originalPath || '').name.toLowerCase();
@@ -2505,14 +2739,17 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
     }
 
     const literaInstallPath = path.dirname(literaExe.exe);
-    const styleCandidates = getLiteraColorStyleCandidates(literaExe.type, literaInstallPath, renderingStyle);
     const hasStyleSupport = !!getLiteraStyleExtension(literaExe.type);
-    if (hasStyleSupport && styleCandidates.length === 0) {
-      reject(new Error(`No Litera color style file was found for ${literaExe.type}. Configure a valid style name/path in Settings (e.g., "Kirkland Default").`));
-      return;
-    }
-    const styleAttempts = styleCandidates.length
-      ? (hasStyleSupport ? [...styleCandidates] : [...styleCandidates, null])
+    const registryStyleHints = hasStyleSupport ? getLiteraRegistryStyleHints() : [];
+    const preferredStyleName = getPreferredStyleNameFromHints(registryStyleHints);
+    const styleCandidates = hasStyleSupport
+      ? getLiteraColorStyleCandidates(literaExe.type, literaInstallPath, {
+          styleHints: registryStyleHints,
+          preferredStyleName
+        })
+      : [];
+    const styleAttempts = hasStyleSupport
+      ? (styleCandidates.length ? [...styleCandidates] : [null])
       : [null];
     if (styleCandidates.length) {
       console.log('Litera style candidates:', styleCandidates.map(s => path.basename(String(s))));
@@ -2788,7 +3025,7 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, renderingSt
             output_format: normalizedOptions.output_format,
             change_pages_only: normalizedOptions.change_pages_only && !usedChangePagesFallback,
             method,
-            litera_style: styleValue ? path.basename(String(styleValue)) : null,
+            litera_style: styleValue ? path.basename(String(styleValue)) : 'Litera Default',
             warning: resolvedWarning
           });
           return;
@@ -2858,7 +3095,6 @@ ipcMain.handle('redline-documents', async (event, config) => {
     output_format: String(config.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
     change_pages_only: !!config.change_pages_only
   };
-  const configuredStyleName = String(config.rendering_style || '').trim() || getLiteraDefaultStyleName();
   const requiresStrictLitera =
     literaOptions.change_pages_only || literaOptions.output_format === 'pdf';
 
@@ -2916,7 +3152,6 @@ ipcMain.handle('redline-documents', async (event, config) => {
               pair.original,
               pair.modified,
               outputPath,
-              configuredStyleName,
               literaOptions
             );
             results.push({ ...result, pair_index: i });
@@ -2954,7 +3189,6 @@ ipcMain.handle('redline-documents', async (event, config) => {
           config.original,
           config.modified,
           outputPath,
-          configuredStyleName,
           literaOptions
         );
 
@@ -3412,6 +3646,7 @@ ipcMain.handle('agent-plan', async (event, payload) => {
   let fallbackPlanForError = null;
   let fallbackProvider = getAIProvider();
   let fallbackProviderName = getAIProviderDisplayName(fallbackProvider);
+  let fallbackDiagnostics = null;
   try {
     const prompt = String(payload?.prompt || '').trim();
     if (!prompt) {
@@ -3433,10 +3668,23 @@ ipcMain.handle('agent-plan', async (event, payload) => {
     fallbackPlanForError = fallbackPlan;
     const requestedProvider = normalizeAIProvider(payload?.provider || getAIProvider());
     const apiKey = String(payload?.apiKey || getApiKey() || '').trim();
-    const provider = resolveProviderForApiKey(requestedProvider, apiKey);
-    const providerName = getAIProviderDisplayName(provider);
+    const connection = getProviderConnectionConfig(requestedProvider, apiKey);
+    const provider = connection.provider;
+    const providerName = connection.providerName;
     fallbackProvider = provider;
     fallbackProviderName = providerName;
+    fallbackDiagnostics = {
+      ...connection,
+      health: connection.requiresApiKey && !apiKey
+        ? {
+            ok: false,
+            status: 'missing_api_key',
+            statusCode: 0,
+            endpoint: connection.healthEndpoint,
+            detail: `No ${providerName} API key configured.`
+          }
+        : null
+    };
 
     if (providerRequiresApiKey(provider) && !apiKey) {
       return {
@@ -3445,7 +3693,8 @@ ipcMain.handle('agent-plan', async (event, payload) => {
         provider,
         providerName,
         plan: fallbackPlan,
-        warning: `${providerName} is not configured. Using local routing logic.`
+        warning: `${providerName} API key is missing. Using local routing logic.`,
+        diagnostics: fallbackDiagnostics
       };
     }
 
@@ -3518,20 +3767,42 @@ Rules:
         provider,
         providerName,
         plan: fallbackPlan,
-        warning: 'LLM connection unavailable. Using local routing logic.'
+        warning: `LLM request failed for ${providerName}: ${aiResult.error}. Using local routing logic.`,
+        diagnostics: {
+          ...connection,
+          health: {
+            ok: false,
+            status: 'llm_error',
+            statusCode: 0,
+            endpoint: connection.healthEndpoint,
+            detail: aiResult.error
+          }
+        }
       };
     }
 
     const parsed = extractJsonResponse(aiResult.text || '');
     const plan = sanitizeAgentPlan(parsed, fallbackPlan, attachments);
+    const modelUsed = aiResult.modelUsed || connection.model || null;
     return {
       success: true,
       source: parsed ? 'llm' : 'rules',
       provider,
       providerName,
-      modelUsed: aiResult.modelUsed || null,
+      modelUsed,
       plan,
-      warning: parsed ? null : 'Could not parse model output. Used rules fallback.'
+      warning: parsed ? null : 'Could not parse model output. Used rules fallback.',
+      diagnostics: {
+        ...connection,
+        model: modelUsed,
+        health: {
+          ok: true,
+          status: 'reachable',
+          statusCode: 200,
+          endpoint: connection.healthEndpoint,
+          detail: `${providerName} responded successfully.`
+        }
+      }
     };
   } catch (e) {
     const promptFallback = String(payload?.prompt || '').trim();
@@ -3549,7 +3820,27 @@ Rules:
       provider: fallbackProvider,
       providerName: fallbackProviderName,
       plan,
-      warning: 'LLM connection unavailable. Using local routing logic.'
+      warning: `LLM connection failed: ${e.message}. Using local routing logic.`,
+      diagnostics: fallbackDiagnostics
+    };
+  }
+});
+
+ipcMain.handle('agent-llm-diagnostics', async (event, payload) => {
+  try {
+    const requestedProvider = normalizeAIProvider(payload?.provider || getAIProvider());
+    const apiKey = String(payload?.apiKey || getApiKey() || '').trim();
+    const connection = getProviderConnectionConfig(requestedProvider, apiKey);
+    const health = await runProviderHealthCheck(connection, apiKey);
+    return {
+      success: true,
+      ...connection,
+      health
+    };
+  } catch (e) {
+    return {
+      success: false,
+      error: e.message
     };
   }
 });
@@ -4695,11 +4986,6 @@ function getOllamaModel() {
 function getLmStudioModel() {
   const model = (getSettingValue('lmstudio_model', DEFAULT_LMSTUDIO_MODEL) || '').trim();
   return model || DEFAULT_LMSTUDIO_MODEL;
-}
-
-function getLiteraDefaultStyleName() {
-  const value = (getSettingValue('litera_default_style_name', DEFAULT_LITERA_STYLE_NAME) || '').trim();
-  return value || DEFAULT_LITERA_STYLE_NAME;
 }
 
 function getHarveyBaseUrl() {

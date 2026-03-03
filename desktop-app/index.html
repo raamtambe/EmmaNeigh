@@ -3377,15 +3377,6 @@
           <p style="font-size: 11px; color: #666; margin-top: 4px;">No API key required for local LM Studio.</p>
         </div>
 
-        <div id="literaStyleRow" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
-          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Litera Default Style</label>
-          <input type="text" id="literaDefaultStyleInput" class="api-key-input" placeholder="Kirkland Default">
-          <p style="font-size: 11px; color: #666; margin-top: 4px;">Set your firm's default Litera style name. The app maps this per file type (.tpx/.tpp/.tpz).</p>
-          <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
-            <button class="settings-btn settings-btn-secondary" id="saveLiteraStyleBtn">Save Redline Style</button>
-            <span id="literaStyleStatus" style="font-size: 12px; color: #888;"></span>
-          </div>
-        </div>
       </div>
 
       <div class="settings-section" id="securitySection" style="display: none;">
@@ -4796,6 +4787,7 @@
           <div>
             <h3>Agent Mode</h3>
             <p id="agentProviderLabel">Uses your current provider in Settings.</p>
+            <p id="agentConnectionLabel" style="font-size: 11px; color: #888; margin-top: 4px;">Connection details loading...</p>
           </div>
           <button class="agent-clear-btn" id="agentClearBtn">Clear</button>
         </div>
@@ -5074,9 +5066,6 @@
     const lmstudioConfigRow = document.getElementById('lmstudioConfigRow');
     const lmstudioBaseUrlInput = document.getElementById('lmstudioBaseUrlInput');
     const lmstudioModelInput = document.getElementById('lmstudioModelInput');
-    const literaDefaultStyleInput = document.getElementById('literaDefaultStyleInput');
-    const saveLiteraStyleBtn = document.getElementById('saveLiteraStyleBtn');
-    const literaStyleStatus = document.getElementById('literaStyleStatus');
 
     const PROVIDER_META = {
       ollama: {
@@ -5181,7 +5170,7 @@
 
       apiProviderTitle.textContent = `${meta.title}`;
       apiKeyHelpText.textContent = localProvider
-        ? `Local provider mode. Save base URL/model below and test the local connection.`
+        ? `Local provider mode. Save base URL/model below, and make sure Ollama/LM Studio is running before testing.`
         : `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
       apiKeyInputGroup.style.display = localProvider ? 'none' : '';
       apiKeyActions.style.display = '';
@@ -5203,18 +5192,6 @@
       }
       await loadLocalProviderSettings(aiProviderSelect.value);
       applyProviderUi();
-    }
-
-    async function loadLiteraStyleSetting() {
-      try {
-        const result = await ipcRenderer.invoke('get-setting', 'litera_default_style_name');
-        literaDefaultStyleInput.value = (result && result.success && result.value)
-          ? String(result.value)
-          : 'Kirkland Default';
-      } catch (_) {
-        literaDefaultStyleInput.value = 'Kirkland Default';
-      }
-      literaStyleStatus.textContent = '';
     }
 
     // Check if API key exists on startup
@@ -5245,7 +5222,6 @@
     settingsBtn.addEventListener('click', async () => {
       settingsModal.classList.add('visible');
       await loadProviderSetting();
-      await loadLiteraStyleSetting();
       await checkApiKeyStatus();
       await updateAgentProviderLabel();
     });
@@ -5360,42 +5336,6 @@
       if (typeof updateAgentProviderLabel === 'function') {
         await updateAgentProviderLabel();
       }
-    });
-
-    async function saveLiteraStyleSetting() {
-      const configuredStyle = literaDefaultStyleInput.value.trim() || 'Kirkland Default';
-      saveLiteraStyleBtn.disabled = true;
-      saveLiteraStyleBtn.textContent = 'Saving...';
-      literaStyleStatus.style.color = '#888';
-      literaStyleStatus.textContent = 'Saving...';
-      try {
-        const result = await ipcRenderer.invoke('save-setting', {
-          key: 'litera_default_style_name',
-          value: configuredStyle
-        });
-        if (result && result.success) {
-          literaDefaultStyleInput.value = configuredStyle;
-          literaStyleStatus.style.color = '#22c55e';
-          literaStyleStatus.textContent = `Saved: ${configuredStyle}`;
-        } else {
-          literaStyleStatus.style.color = '#ef4444';
-          literaStyleStatus.textContent = (result && result.error) ? result.error : 'Failed to save style';
-        }
-      } catch (e) {
-        literaStyleStatus.style.color = '#ef4444';
-        literaStyleStatus.textContent = e.message || 'Failed to save style';
-      } finally {
-        saveLiteraStyleBtn.disabled = false;
-        saveLiteraStyleBtn.textContent = 'Save Redline Style';
-      }
-    }
-
-    saveLiteraStyleBtn.addEventListener('click', saveLiteraStyleSetting);
-
-    literaDefaultStyleInput.addEventListener('keydown', async (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      await saveLiteraStyleSetting();
     });
 
     // ========== MODEL SELECTOR ==========
@@ -6306,6 +6246,7 @@
 
     // ========== AGENT MODE ==========
     const agentProviderLabel = document.getElementById('agentProviderLabel');
+    const agentConnectionLabel = document.getElementById('agentConnectionLabel');
     const agentStatus = document.getElementById('agentStatus');
     const agentAttachBtn = document.getElementById('agentAttachBtn');
     const agentAttachmentsEl = document.getElementById('agentAttachments');
@@ -6346,6 +6287,39 @@
       agentStatus.classList.toggle('error', !!isError);
     }
 
+    function renderAgentConnectionSummary(diagnostics) {
+      if (!agentConnectionLabel) return;
+      if (!diagnostics) {
+        agentConnectionLabel.textContent = 'Connection details unavailable.';
+        agentConnectionLabel.style.color = '#f59e0b';
+        return;
+      }
+
+      const parts = [];
+      if (diagnostics.model) {
+        parts.push(`Model: ${diagnostics.model}`);
+      }
+      if (diagnostics.requiresApiKey) {
+        parts.push(diagnostics.hasApiKey ? 'API key: configured' : 'API key: missing');
+      } else {
+        parts.push('API key: not required');
+      }
+      if (diagnostics.baseUrl) {
+        parts.push(`Endpoint: ${diagnostics.baseUrl}`);
+      }
+      if (diagnostics.health && diagnostics.health.ok) {
+        parts.push('Status: reachable');
+        agentConnectionLabel.style.color = '#22c55e';
+      } else if (diagnostics.health && diagnostics.health.detail) {
+        parts.push(`Status: ${diagnostics.health.detail}`);
+        agentConnectionLabel.style.color = '#f59e0b';
+      } else {
+        parts.push('Status: unknown');
+        agentConnectionLabel.style.color = '#f59e0b';
+      }
+      agentConnectionLabel.textContent = parts.join(' • ');
+    }
+
     function addAgentMessage(role, text) {
       const message = document.createElement('div');
       if (role === 'user') {
@@ -6377,14 +6351,19 @@
 
     async function updateAgentProviderLabel() {
       try {
-        const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
-        const selectedProvider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : getSelectedProvider());
-        const meta = getProviderMeta(selectedProvider);
-        const localSuffix = isLocalProviderSelection(selectedProvider) ? ' (local)' : '';
-        agentProviderLabel.textContent = `Provider: ${meta.label}${localSuffix}`;
+        const diagnostics = await ipcRenderer.invoke('agent-llm-diagnostics');
+        if (diagnostics && diagnostics.success) {
+          const selectedProvider = normalizeProvider(diagnostics.provider || diagnostics.requestedProvider);
+          const localSuffix = isLocalProviderSelection(selectedProvider) ? ' (local)' : '';
+          agentProviderLabel.textContent = `Provider: ${(diagnostics.providerName || getProviderMeta(selectedProvider).label)}${localSuffix}`;
+          renderAgentConnectionSummary(diagnostics);
+          return;
+        }
+        throw new Error((diagnostics && diagnostics.error) || 'Diagnostics unavailable');
       } catch (_) {
         const fallbackMeta = getProviderMeta(getSelectedProvider());
         agentProviderLabel.textContent = `Provider: ${fallbackMeta.label}`;
+        renderAgentConnectionSummary(null);
       }
     }
 
@@ -6498,10 +6477,12 @@
 
         const providerDetails = `${result.providerName || 'AI'}${result.modelUsed ? ` (${result.modelUsed})` : ''}`;
         const sourceSuffix = result.source === 'rules' ? ' - fallback routing' : '';
-        setAgentStatus(`Agent planner: ${providerDetails}${sourceSuffix}`);
+        setAgentStatus(`Agent planner: ${providerDetails}${sourceSuffix}${result.warning ? ` • ${result.warning}` : ''}`, !!result.warning);
+        renderAgentConnectionSummary(result.diagnostics || null);
       } catch (e) {
         addAgentMessage('assistant', `Error: ${e.message}`);
         setAgentStatus(e.message || 'Agent command failed.', true);
+        await updateAgentProviderLabel();
       } finally {
         agentBusy = false;
         agentRunBtn.disabled = false;
