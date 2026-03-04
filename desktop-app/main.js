@@ -66,6 +66,49 @@ function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+  const email = normalizeEmail(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function buildUsernameFromEmail(email) {
+  const localPart = normalizeEmail(email).split('@')[0] || 'user';
+  const sanitized = localPart
+    .replace(/[^a-z0-9._-]/g, '_')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  return sanitized || 'user';
+}
+
+function getAvailableUsername(baseUsername) {
+  if (!db) return baseUsername || 'user';
+  const base = String(baseUsername || 'user').trim() || 'user';
+  let candidate = base;
+  let index = 1;
+  while (index < 100000) {
+    const escaped = candidate.replace(/'/g, "''");
+    const result = db.exec(`SELECT id FROM users WHERE username = '${escaped}' LIMIT 1`);
+    const exists = result.length > 0 && result[0].values.length > 0;
+    if (!exists) return candidate;
+    candidate = `${base}_${index}`;
+    index += 1;
+  }
+  return `${base}_${Date.now()}`;
+}
+
+function parseSqliteDate(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
 function canAccessFeedbackLog(username) {
   return FEEDBACK_ADMIN_USERNAMES.has(normalizeUsername(username));
 }
@@ -400,11 +443,13 @@ async function requireFirebaseTelemetry(actionLabel) {
  * Log user activity to Firebase Firestore.
  * Falls back to offline queue if Firestore is unavailable.
  */
-async function logUserActivity(username, action) {
+async function logUserActivity(username, action, metadata = {}) {
   const entry = {
     timestamp: new Date().toISOString(),
     username: username || 'unknown',
     action: action,
+    email: metadata.email ? normalizeEmail(metadata.email) : null,
+    display_name: metadata.displayName || null,
     app_version: APP_VERSION,
     machine_id: MACHINE_ID
   };
@@ -424,6 +469,7 @@ async function logUsageToFirestore(data) {
   const entry = {
     timestamp: new Date().toISOString(),
     username: data.user_name || 'unknown',
+    email: data.user_email ? normalizeEmail(data.user_email) : null,
     feature: data.feature || 'unknown',
     action: data.action || 'process',
     engine: data.engine || null,
@@ -5247,6 +5293,112 @@ ipcMain.handle('get-api-key-value', async () => {
 
 // ========== USER ACCOUNT HANDLERS ==========
 
+// Email-only login (mandatory email identity)
+ipcMain.handle('email-login', async (event, { email, displayName }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  const telemetryGate = await requireFirebaseTelemetry('email login');
+  if (!telemetryGate.success) return telemetryGate;
+
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    return { success: false, error: 'Please enter a valid email address' };
+  }
+
+  const safeEmail = normalizedEmail.replace(/'/g, "''");
+  let isNewUser = false;
+  let createdUserId = null;
+
+  try {
+    const existing = db.exec(`
+      SELECT id, username, display_name, api_key_encrypted
+      FROM users
+      WHERE lower(trim(email)) = '${safeEmail}'
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+
+    let id;
+    let username;
+    let storedDisplayName;
+    let apiKeyEnc;
+    const resolvedDisplayName = String(displayName || '').trim();
+
+    if (existing.length > 0 && existing[0].values.length > 0) {
+      [id, username, storedDisplayName, apiKeyEnc] = existing[0].values[0];
+    } else {
+      isNewUser = true;
+      id = crypto.randomUUID();
+      createdUserId = id;
+      const usernameSeed = buildUsernameFromEmail(normalizedEmail);
+      username = getAvailableUsername(usernameSeed);
+      storedDisplayName = resolvedDisplayName || usernameSeed;
+      const placeholderPassword = hashPassword(crypto.randomUUID());
+
+      db.run(`
+        INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      `, [
+        id,
+        username,
+        normalizedEmail,
+        placeholderPassword,
+        null,
+        null,
+        storedDisplayName
+      ]);
+    }
+
+    const finalDisplayName = resolvedDisplayName || storedDisplayName || buildUsernameFromEmail(normalizedEmail);
+    db.run(`
+      UPDATE users
+      SET email = '${safeEmail}', display_name = '${finalDisplayName.replace(/'/g, "''")}', last_login = datetime('now')
+      WHERE id = '${id}'
+    `);
+
+    const loginLogged = await logUserActivity(username, 'login', {
+      email: normalizedEmail,
+      displayName: finalDisplayName
+    });
+    if (!loginLogged) {
+      if (isNewUser && createdUserId) {
+        db.run(`DELETE FROM users WHERE id = '${createdUserId}'`);
+      }
+      saveDatabase();
+      return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+    }
+
+    if (isNewUser) {
+      const createdLogged = await logUserActivity(username, 'account_created', {
+        email: normalizedEmail,
+        displayName: finalDisplayName
+      });
+      if (!createdLogged) {
+        if (createdUserId) {
+          db.run(`DELETE FROM users WHERE id = '${createdUserId}'`);
+        }
+        saveDatabase();
+        return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
+      }
+    }
+
+    saveDatabase();
+
+    return {
+      success: true,
+      isNewUser,
+      user: {
+        id,
+        username,
+        displayName: finalDisplayName,
+        email: normalizedEmail,
+        hasApiKey: !!apiKeyEnc
+      }
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // Create new user account
 ipcMain.handle('create-user', async (event, { username, password, displayName, email, securityQuestion, securityAnswer }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
@@ -5257,9 +5409,9 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
     return { success: false, error: 'Username and password are required' };
   }
 
-  const normalizedEmail = String(email || '').trim();
-  if (normalizedEmail && !normalizedEmail.includes('@')) {
-    return { success: false, error: 'Please enter a valid email address or leave it blank' };
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    return { success: false, error: 'A valid email address is required' };
   }
 
   if (!securityQuestion || !securityAnswer || !String(securityAnswer).trim()) {
@@ -5271,6 +5423,11 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
   }
 
   try {
+    const existingEmail = db.exec(`SELECT id FROM users WHERE email = '${normalizedEmail}'`);
+    if (existingEmail.length > 0 && existingEmail[0].values.length > 0) {
+      return { success: false, error: 'Email address is already in use' };
+    }
+
     const id = crypto.randomUUID();
     const passwordHash = hashPassword(password);
 
@@ -5281,8 +5438,18 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
     }
 
     db.run(`INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-      [id, username.toLowerCase().trim(), normalizedEmail || null, passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
+      [id, username.toLowerCase().trim(), normalizedEmail, passwordHash, securityQuestion || null, securityAnswerHash, displayName || username]);
     saveDatabase();
+
+    const activityLogged = await logUserActivity(username.toLowerCase().trim(), 'account_created', {
+      email: normalizedEmail,
+      displayName: displayName || username
+    });
+    if (!activityLogged) {
+      db.run(`DELETE FROM users WHERE id = '${id}'`);
+      saveDatabase();
+      return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
+    }
 
     return { success: true, userId: id };
   } catch (e) {
@@ -5294,30 +5461,47 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
 });
 
 // Login with username/password
-ipcMain.handle('login-user', async (event, { username, password }) => {
+ipcMain.handle('login-user', async (event, { username, password, email }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   const telemetryGate = await requireFirebaseTelemetry('login');
   if (!telemetryGate.success) return telemetryGate;
 
-  if (!username || !password) {
-    return { success: false, error: 'Username and password are required' };
+  if (!username || !password || !email) {
+    return { success: false, error: 'Username, password, and email are required' };
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    return { success: false, error: 'Please enter a valid email address' };
   }
 
   try {
-    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted FROM users WHERE username = '${username.toLowerCase().trim()}'`);
+    const result = db.exec(`SELECT id, username, password_hash, display_name, api_key_encrypted, email FROM users WHERE username = '${username.toLowerCase().trim()}'`);
 
     if (result.length === 0 || result[0].values.length === 0) {
       return { success: false, error: 'User not found' };
     }
 
     const row = result[0].values[0];
-    const [id, uname, passwordHash, displayName, apiKeyEnc] = row;
+    const [id, uname, passwordHash, displayName, apiKeyEnc, storedEmail] = row;
 
     if (!verifyPassword(password, passwordHash)) {
       return { success: false, error: 'Invalid password' };
     }
 
-    const activityLogged = await logUserActivity(uname, 'login');
+    const currentEmail = normalizeEmail(storedEmail || '');
+    if (currentEmail && currentEmail !== normalizedEmail) {
+      return { success: false, error: 'Email does not match the email on this account' };
+    }
+
+    if (!currentEmail) {
+      db.run(`UPDATE users SET email = '${normalizedEmail}' WHERE id = '${id}'`);
+    }
+
+    const activityLogged = await logUserActivity(uname, 'login', {
+      email: normalizedEmail,
+      displayName: displayName || uname
+    });
     if (!activityLogged) {
       return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
     }
@@ -5327,7 +5511,7 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
 
     return {
       success: true,
-      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+      user: { id, username: uname, displayName: displayName || uname, email: normalizedEmail, hasApiKey: !!apiKeyEnc }
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -5371,15 +5555,19 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
     db.run(`UPDATE verification_codes SET used = 1 WHERE id = ${codeId}`);
 
     // Get user info and complete login
-    const userResult = db.exec(`SELECT id, username, display_name, api_key_encrypted FROM users WHERE id = '${userId}'`);
+    const userResult = db.exec(`SELECT id, username, display_name, api_key_encrypted, email FROM users WHERE id = '${userId}'`);
 
     if (userResult.length === 0 || userResult[0].values.length === 0) {
       return { success: false, error: 'User not found' };
     }
 
-    const [id, username, displayName, apiKeyEnc] = userResult[0].values[0];
+    const [id, username, displayName, apiKeyEnc, email] = userResult[0].values[0];
+    const normalizedEmail = normalizeEmail(email || '');
 
-    const activityLogged = await logUserActivity(username, 'login');
+    const activityLogged = await logUserActivity(username, 'login', {
+      email: normalizedEmail,
+      displayName: displayName || username
+    });
     if (!activityLogged) {
       return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
     }
@@ -5390,7 +5578,7 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
 
     return {
       success: true,
-      user: { id, username, displayName: displayName || username, hasApiKey: !!apiKeyEnc }
+      user: { id, username, displayName: displayName || username, email: normalizedEmail || null, hasApiKey: !!apiKeyEnc }
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -5402,31 +5590,51 @@ ipcMain.handle('get-user-stats', async () => {
   if (!db) return { success: false, error: 'Database not initialized' };
 
   try {
-    // Total registered users
-    const totalResult = db.exec(`SELECT COUNT(*) FROM users`);
-    const totalUsers = totalResult.length > 0 ? totalResult[0].values[0][0] : 0;
+    const usersResult = db.exec(`
+      SELECT username, display_name, email, last_login, created_at
+      FROM users
+      WHERE email IS NOT NULL AND TRIM(email) != ''
+      ORDER BY datetime(last_login) DESC, datetime(created_at) DESC
+    `);
 
-    // Users active in last 30 days
-    const activeResult = db.exec(`SELECT COUNT(*) FROM users WHERE last_login >= datetime('now', '-30 days')`);
-    const activeUsers = activeResult.length > 0 ? activeResult[0].values[0][0] : 0;
+    const uniqueByEmail = new Map();
+    const rows = usersResult.length > 0 ? usersResult[0].values : [];
+    for (const row of rows) {
+      const normalizedEmail = normalizeEmail(row[2] || '');
+      if (!isValidEmail(normalizedEmail)) continue;
+      if (uniqueByEmail.has(normalizedEmail)) continue;
+      uniqueByEmail.set(normalizedEmail, {
+        username: row[0],
+        displayName: row[1],
+        email: normalizedEmail,
+        lastLogin: row[3],
+        createdAt: row[4]
+      });
+    }
 
-    // Users active in last 7 days
-    const weeklyResult = db.exec(`SELECT COUNT(*) FROM users WHERE last_login >= datetime('now', '-7 days')`);
-    const weeklyActive = weeklyResult.length > 0 ? weeklyResult[0].values[0][0] : 0;
+    const uniqueUsers = Array.from(uniqueByEmail.values());
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const weeklyActive = uniqueUsers.filter((user) => {
+      const parsed = parseSqliteDate(user.lastLogin);
+      return !!parsed && (now - parsed.getTime()) <= (7 * dayMs);
+    }).length;
+    const activeUsers = uniqueUsers.filter((user) => {
+      const parsed = parseSqliteDate(user.lastLogin);
+      return !!parsed && (now - parsed.getTime()) <= (30 * dayMs);
+    }).length;
 
-    // User list with last login (no sensitive data)
-    const usersResult = db.exec(`SELECT username, display_name, email, last_login, created_at FROM users ORDER BY last_login DESC`);
-    const users = usersResult.length > 0 ? usersResult[0].values.map(row => ({
-      username: row[0],
-      displayName: row[1],
-      email: row[2] ? row[2].replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
-      lastLogin: row[3],
-      createdAt: row[4]
-    })) : [];
+    const users = uniqueUsers.map((user) => ({
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email ? user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null,
+      lastLogin: user.lastLogin,
+      createdAt: user.createdAt
+    }));
 
     return {
       success: true,
-      totalUsers,
+      totalUsers: uniqueUsers.length,
       activeUsers,
       weeklyActive,
       users
@@ -5503,18 +5711,19 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
   if (!telemetryGate.success) return telemetryGate;
 
   try {
-    const result = db.exec(`SELECT id, username, display_name, api_key_encrypted FROM users WHERE id = '${userId}'`);
+    const result = db.exec(`SELECT id, username, display_name, api_key_encrypted, email FROM users WHERE id = '${userId}'`);
 
     if (result.length === 0 || result[0].values.length === 0) {
       return { success: false, error: 'User not found' };
     }
 
     const row = result[0].values[0];
-    const [id, uname, displayName, apiKeyEnc] = row;
+    const [id, uname, displayName, apiKeyEnc, email] = row;
+    const normalizedEmail = normalizeEmail(email || '');
 
     return {
       success: true,
-      user: { id, username: uname, displayName: displayName || uname, hasApiKey: !!apiKeyEnc }
+      user: { id, username: uname, displayName: displayName || uname, email: normalizedEmail || null, hasApiKey: !!apiKeyEnc }
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -5872,19 +6081,29 @@ ipcMain.handle('get-2fa-status', async (event, { userId }) => {
 ipcMain.handle('update-user-email', async (event, { userId, email }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
 
-  if (!email || !email.includes('@')) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
     return { success: false, error: 'Invalid email address' };
   }
 
   try {
     // Check if email is already used by another user
-    const existing = db.exec(`SELECT id FROM users WHERE email = '${email}' AND id != '${userId}'`);
+    const existing = db.exec(`SELECT id FROM users WHERE email = '${normalizedEmail}' AND id != '${userId}'`);
     if (existing.length > 0 && existing[0].values.length > 0) {
       return { success: false, error: 'Email address is already in use' };
     }
 
-    // Update email and reset verification status
-    db.run(`UPDATE users SET email = '${email}', email_verified = 0, two_factor_enabled = 1 WHERE id = '${userId}'`);
+    db.run(`UPDATE users SET email = '${normalizedEmail}', email_verified = 0, two_factor_enabled = 0 WHERE id = '${userId}'`);
+
+    const userResult = db.exec(`SELECT username, display_name FROM users WHERE id = '${userId}'`);
+    if (userResult.length > 0 && userResult[0].values.length > 0) {
+      const [username, displayName] = userResult[0].values[0];
+      await logUserActivity(username, 'email_updated', {
+        email: normalizedEmail,
+        displayName: displayName || username
+      });
+    }
+
     saveDatabase();
 
     return { success: true };

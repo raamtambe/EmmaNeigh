@@ -3183,29 +3183,30 @@
   <div class="login-modal" id="loginModal">
     <div class="login-box">
       <h2>Welcome to EmmaNeigh</h2>
-      <p class="subtitle">Sign in to save your API key and usage history</p>
+      <p class="subtitle">Enter your email to continue</p>
       <p class="login-error" id="firebaseLoginStatus" style="margin-bottom: 10px;"></p>
       <button id="openSettingsFromLoginBtn" style="display: none; width: 100%; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; border: 1px solid #333; background: #151515; color: #ddd; font-size: 12px; cursor: pointer;">Configure Required Firebase Logging</button>
 
       <!-- Tab Toggle -->
-      <div class="login-tabs">
+      <div class="login-tabs" style="display: none;">
         <button class="login-tab active" data-tab="login">Login</button>
         <button class="login-tab" data-tab="create">Create Account</button>
       </div>
 
       <!-- Login Form -->
       <div class="login-form" id="loginForm">
-        <input type="text" id="loginUsername" placeholder="Username" autocomplete="username">
-        <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+        <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" style="display: none;">
+        <input type="email" id="loginEmail" placeholder="Email (required)" autocomplete="email">
+        <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" style="display: none;">
         <p class="login-error" id="loginError"></p>
-        <button id="loginBtn">Login</button>
-        <p class="forgot-password-link"><a href="#" id="forgotPasswordLink">Forgot Password?</a></p>
+        <button id="loginBtn">Continue</button>
+        <p class="forgot-password-link" style="display: none;"><a href="#" id="forgotPasswordLink">Forgot Password?</a></p>
       </div>
 
       <!-- Create Account Form -->
       <div class="login-form hidden" id="createForm">
         <input type="text" id="createUsername" placeholder="Username" autocomplete="username">
-        <input type="email" id="createEmail" placeholder="Email (optional)">
+        <input type="email" id="createEmail" placeholder="Email (required)">
         <input type="text" id="createDisplayName" placeholder="Display Name (optional)">
         <input type="password" id="createPassword" placeholder="Password (min 4 characters)" autocomplete="new-password">
         <input type="password" id="createPasswordConfirm" placeholder="Confirm Password" autocomplete="new-password">
@@ -3507,7 +3508,7 @@
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px;">
           <div style="background: #1a1a1a; border-radius: 8px; padding: 12px; text-align: center;">
             <div id="statTotalUsers" style="font-size: 24px; font-weight: 600; color: #fff;">-</div>
-            <div style="font-size: 11px; color: #888;">Total Users</div>
+            <div style="font-size: 11px; color: #888;">Unique Emails</div>
           </div>
           <div style="background: #1a1a1a; border-radius: 8px; padding: 12px; text-align: center;">
             <div id="statWeeklyActive" style="font-size: 24px; font-weight: 600; color: #4ade80;">-</div>
@@ -5948,17 +5949,23 @@
 
     // Helper function to log usage (call this after each feature completes)
     async function logUsage(feature, action, inputCount, outputCount, durationMs) {
-      const currentUser = localStorage.getItem('emmaneigh_user');
+      const storedUser = localStorage.getItem('emmaneigh_user');
       let userName = 'Guest';
+      let userEmail = '';
       try {
-        if (currentUser) {
-          const user = JSON.parse(currentUser);
+        if (currentUser && !currentUser.isGuest) {
+          userName = currentUser.username || currentUser.displayName || 'User';
+          userEmail = currentUser.email || '';
+        } else if (storedUser) {
+          const user = JSON.parse(storedUser);
           userName = user.name || 'Guest';
+          userEmail = user.email || '';
         }
       } catch (e) {}
 
       await ipcRenderer.invoke('log-usage', {
         user_name: userName,
+        user_email: userEmail,
         feature: feature,
         action: action,
         input_count: inputCount,
@@ -6231,6 +6238,19 @@
       });
     });
 
+    const EMAIL_ONLY_ACCESS = true;
+    if (EMAIL_ONLY_ACCESS) {
+      const tabsEl = document.querySelector('.login-tabs');
+      if (tabsEl) tabsEl.style.display = 'none';
+      const createFormEl = document.getElementById('createForm');
+      const forgotFormEl = document.getElementById('forgotForm');
+      const twoFactorFormEl = document.getElementById('twoFactorForm');
+      if (createFormEl) createFormEl.classList.add('hidden');
+      if (forgotFormEl) forgotFormEl.classList.add('hidden');
+      if (twoFactorFormEl) twoFactorFormEl.classList.add('hidden');
+      document.getElementById('loginForm').classList.remove('hidden');
+    }
+
     // 2FA state
     let pending2FAUserId = null;
     let pending2FAEmail = null;
@@ -6243,52 +6263,36 @@
 
     // Login form handler
     document.getElementById('loginBtn').addEventListener('click', async () => {
-      const username = document.getElementById('loginUsername').value.trim();
-      const password = document.getElementById('loginPassword').value;
+      const email = document.getElementById('loginEmail').value.trim();
       const errorEl = document.getElementById('loginError');
 
-      if (!username || !password) {
-        errorEl.textContent = 'Please enter username and password';
+      if (!email) {
+        errorEl.textContent = 'Please enter your email';
+        return;
+      }
+
+      if (!email.includes('@')) {
+        errorEl.textContent = 'Please enter a valid email';
         return;
       }
 
       try {
-        const result = await ipcRenderer.invoke('login-user', { username, password });
+        const result = await ipcRenderer.invoke('email-login', { email });
 
         if (result.success) {
-          if (result.requires2FA) {
-            // Show 2FA form
-            pending2FAUserId = result.userId;
-            pending2FAEmail = result.email;
-
-            document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
-            document.querySelector('.login-tabs').style.display = 'none';
-            document.getElementById('twoFactorForm').classList.remove('hidden');
-            document.getElementById('tfaEmailDisplay').textContent = result.email;
-            document.getElementById('tfaCode').value = '';
-            setTfaMessage('');
-            document.getElementById('tfaCode').focus();
-
-            // SMTP fallback: show code in UI when email cannot be sent.
-            if (result._devCode && result._smtpNote) {
-              const smtpMissing = result._smtpNote === 'smtp_not_configured';
-              setTfaMessage(
-                smtpMissing
-                  ? `SMTP is not configured. Temporary verification code: ${result._devCode}`
-                  : `Email delivery failed (${result._smtpNote}). Temporary verification code: ${result._devCode}`,
-                '#f59e0b'
-              );
-            }
-          } else {
-            // Direct login (no 2FA)
-            currentUser = { ...result.user, isGuest: false };
-            localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
-            userName.textContent = result.user.displayName || result.user.username;
-            loginModal.classList.add('hidden');
-            refreshFeedbackAccess();
-            // Load user's API key
-            loadUserApiKey();
-          }
+          currentUser = { ...result.user, isGuest: false };
+          localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
+          localStorage.setItem('emmaneigh_user', JSON.stringify({
+            id: result.user.id,
+            name: result.user.displayName || result.user.username || result.user.email,
+            username: result.user.username || '',
+            email: result.user.email || email
+          }));
+          userName.textContent = result.user.displayName || result.user.username;
+          loginModal.classList.add('hidden');
+          refreshFeedbackAccess();
+          // Load user's API key
+          loadUserApiKey();
         } else {
           errorEl.textContent = result.error || 'Login failed';
         }
@@ -6315,6 +6319,12 @@
         if (result.success) {
           currentUser = { ...result.user, isGuest: false };
           localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
+          localStorage.setItem('emmaneigh_user', JSON.stringify({
+            id: result.user.id,
+            name: result.user.displayName || result.user.username || result.user.email,
+            username: result.user.username || '',
+            email: result.user.email || ''
+          }));
           userName.textContent = result.user.displayName || result.user.username;
           loginModal.classList.add('hidden');
           refreshFeedbackAccess();
@@ -6371,7 +6381,7 @@
       pending2FAUserId = null;
       pending2FAEmail = null;
       document.getElementById('twoFactorForm').classList.add('hidden');
-      document.querySelector('.login-tabs').style.display = 'flex';
+      document.querySelector('.login-tabs').style.display = EMAIL_ONLY_ACCESS ? 'none' : 'flex';
       document.getElementById('loginForm').classList.remove('hidden');
       loginTabs.forEach(t => t.classList.remove('active'));
       loginTabs[0].classList.add('active');
@@ -6379,90 +6389,38 @@
     });
 
     // Allow Enter key to submit login
-    document.getElementById('loginPassword').addEventListener('keypress', (e) => {
+    document.getElementById('loginEmail').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') document.getElementById('loginBtn').click();
     });
 
     // Create account form handler
     document.getElementById('createBtn').addEventListener('click', async () => {
-      const username = document.getElementById('createUsername').value.trim();
       const email = document.getElementById('createEmail').value.trim();
       const displayName = document.getElementById('createDisplayName').value.trim();
-      const password = document.getElementById('createPassword').value;
-      const confirm = document.getElementById('createPasswordConfirm').value;
-      const securityQuestion = document.getElementById('createSecurityQuestion').value;
-      const securityAnswer = document.getElementById('createSecurityAnswer').value.trim();
       const errorEl = document.getElementById('createError');
 
-      if (!username) {
-        errorEl.textContent = 'Username is required';
-        return;
-      }
-
-      if (email && !email.includes('@')) {
-        errorEl.textContent = 'Email is optional, but if provided it must be valid';
-        return;
-      }
-
-      if (!securityQuestion) {
-        errorEl.textContent = 'Please select a security question';
-        return;
-      }
-
-      if (!securityAnswer) {
-        errorEl.textContent = 'Please provide a security answer';
-        return;
-      }
-
-      if (password.length < 4) {
-        errorEl.textContent = 'Password must be at least 4 characters';
-        return;
-      }
-
-      if (password !== confirm) {
-        errorEl.textContent = 'Passwords do not match';
+      if (!email || !email.includes('@')) {
+        errorEl.textContent = 'Email is required';
         return;
       }
 
       try {
-        const result = await ipcRenderer.invoke('create-user', {
-          username, password, displayName, email, securityQuestion, securityAnswer
-        });
-
+        const result = await ipcRenderer.invoke('email-login', { email, displayName });
         if (result.success) {
-          // Auto-login after creation
-          const loginResult = await ipcRenderer.invoke('login-user', { username, password });
-          if (loginResult.success) {
-            if (loginResult.requires2FA) {
-              pending2FAUserId = loginResult.userId;
-              pending2FAEmail = loginResult.email;
-              document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
-              document.querySelector('.login-tabs').style.display = 'none';
-              document.getElementById('twoFactorForm').classList.remove('hidden');
-              document.getElementById('tfaEmailDisplay').textContent = loginResult.email;
-              document.getElementById('tfaCode').value = '';
-              setTfaMessage('');
-              document.getElementById('tfaCode').focus();
-
-              if (loginResult._devCode && loginResult._smtpNote) {
-                const smtpMissing = loginResult._smtpNote === 'smtp_not_configured';
-                setTfaMessage(
-                  smtpMissing
-                    ? `SMTP is not configured. Temporary verification code: ${loginResult._devCode}`
-                    : `Email delivery failed (${loginResult._smtpNote}). Temporary verification code: ${loginResult._devCode}`,
-                  '#f59e0b'
-                );
-              }
-            } else {
-              currentUser = { ...loginResult.user, isGuest: false };
-              localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: loginResult.user.id }));
-              userName.textContent = loginResult.user.displayName || loginResult.user.username;
-              loginModal.classList.add('hidden');
-              refreshFeedbackAccess();
-            }
-          }
+          currentUser = { ...result.user, isGuest: false };
+          localStorage.setItem('emmaneigh_session', JSON.stringify({ userId: result.user.id }));
+          localStorage.setItem('emmaneigh_user', JSON.stringify({
+            id: result.user.id,
+            name: result.user.displayName || result.user.username || result.user.email,
+            username: result.user.username || '',
+            email: result.user.email || email
+          }));
+          userName.textContent = result.user.displayName || result.user.username;
+          loginModal.classList.add('hidden');
+          refreshFeedbackAccess();
+          loadUserApiKey();
         } else {
-          errorEl.textContent = result.error || 'Account creation failed';
+          errorEl.textContent = result.error || 'Sign in failed';
         }
       } catch (e) {
         errorEl.textContent = 'Error: ' + e.message;
@@ -6499,8 +6457,14 @@
         try {
           const { userId } = JSON.parse(session);
           const result = await ipcRenderer.invoke('get-user-by-id', { userId });
-          if (result.success) {
+          if (result.success && result.user && result.user.email) {
             currentUser = { ...result.user, isGuest: false };
+            localStorage.setItem('emmaneigh_user', JSON.stringify({
+              id: result.user.id,
+              name: result.user.displayName || result.user.username || result.user.email,
+              username: result.user.username || '',
+              email: result.user.email || ''
+            }));
             userName.textContent = result.user.displayName || result.user.username;
             loginModal.classList.add('hidden');
             refreshFeedbackAccess();
@@ -6510,6 +6474,8 @@
         } catch (e) {
           console.error('Session restore failed:', e);
         }
+        localStorage.removeItem('emmaneigh_session');
+        localStorage.removeItem('emmaneigh_user');
       }
       // No valid session - show login modal
       userName.textContent = 'Sign In Required';
@@ -6523,6 +6489,7 @@
     userInfo.addEventListener('click', () => {
       // Clear session and show login modal
       localStorage.removeItem('emmaneigh_session');
+      localStorage.removeItem('emmaneigh_user');
       currentUser = null;
       refreshFeedbackAccess();
       loginModal.classList.remove('hidden');
@@ -6552,7 +6519,7 @@
     document.getElementById('backToLoginLink').addEventListener('click', (e) => {
       e.preventDefault();
       // Show tabs and reset to login form
-      document.querySelector('.login-tabs').style.display = 'flex';
+      document.querySelector('.login-tabs').style.display = EMAIL_ONLY_ACCESS ? 'none' : 'flex';
       document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
       document.getElementById('loginForm').classList.remove('hidden');
       loginTabs.forEach(t => t.classList.remove('active'));
@@ -6617,7 +6584,7 @@
         if (result.success) {
           alert('Password reset successful! Please login with your new password.');
           // Go back to login form
-          document.querySelector('.login-tabs').style.display = 'flex';
+          document.querySelector('.login-tabs').style.display = EMAIL_ONLY_ACCESS ? 'none' : 'flex';
           document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
           document.getElementById('loginForm').classList.remove('hidden');
           loginTabs.forEach(t => t.classList.remove('active'));
@@ -6634,6 +6601,7 @@
     // Helper function to reset login forms
     function resetLoginForms() {
       document.getElementById('loginUsername').value = '';
+      document.getElementById('loginEmail').value = '';
       document.getElementById('loginPassword').value = '';
       document.getElementById('createUsername').value = '';
       document.getElementById('createEmail').value = '';
@@ -6649,7 +6617,7 @@
       document.getElementById('forgotError').textContent = '';
       setTfaMessage('');
       // Reset to login tab
-      document.querySelector('.login-tabs').style.display = 'flex';
+      document.querySelector('.login-tabs').style.display = EMAIL_ONLY_ACCESS ? 'none' : 'flex';
       loginTabs.forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.login-form').forEach(f => f.classList.add('hidden'));
       loginTabs[0].classList.add('active');
