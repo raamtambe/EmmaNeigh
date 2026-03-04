@@ -47,6 +47,13 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
 const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b';
 const DEFAULT_LMSTUDIO_MODEL = 'local-model';
+const REQUIRE_FIREBASE_TELEMETRY = true;
+const FIREBASE_TELEMETRY_PROBE_COLLECTION = 'telemetry_health';
+const FIREBASE_STATUS_SUCCESS_CACHE_MS = 30000;
+const FIREBASE_STATUS_FAILURE_CACHE_MS = 8000;
+const TELEMETRY_INGEST_TIMEOUT_MS = 20000;
+const TELEMETRY_INGEST_KEY = 'telemetry_ingest_url';
+const TELEMETRY_INGEST_TOKEN_KEY = 'telemetry_ingest_token';
 const FEEDBACK_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
 const FEEDBACK_ADMIN_USERNAMES = new Set(
   String(process.env.EMMANEIGH_FEEDBACK_ADMINS || FEEDBACK_ADMIN_DEFAULTS.join(','))
@@ -63,13 +70,337 @@ function canAccessFeedbackLog(username) {
   return FEEDBACK_ADMIN_USERNAMES.has(normalizeUsername(username));
 }
 
+function normalizeIngestUrl(rawUrl) {
+  const value = String(rawUrl || '').trim();
+  if (!value) return '';
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+function encodeSecretForSetting(secretValue) {
+  const plain = String(secretValue || '').trim();
+  if (!plain) return '';
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = safeStorage.encryptString(plain).toString('base64');
+      return `enc:${encrypted}`;
+    }
+  } catch (_) {}
+  return `plain:${plain}`;
+}
+
+function decodeSecretFromSetting(storedValue) {
+  const value = String(storedValue || '').trim();
+  if (!value) return '';
+
+  if (value.startsWith('enc:')) {
+    const payload = value.substring(4);
+    try {
+      if (safeStorage.isEncryptionAvailable()) {
+        return safeStorage.decryptString(Buffer.from(payload, 'base64'));
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  if (value.startsWith('plain:')) {
+    return value.substring(6);
+  }
+
+  // Legacy fallback: value may already be plain text.
+  return value;
+}
+
+function getTelemetryIngestUrl() {
+  return normalizeIngestUrl(getSettingValue(TELEMETRY_INGEST_KEY, ''));
+}
+
+function getTelemetryIngestToken() {
+  return decodeSecretFromSetting(getSettingValue(TELEMETRY_INGEST_TOKEN_KEY, ''));
+}
+
+function invalidateTelemetryStatusCache() {
+  firebaseStatusCache.checkedAt = 0;
+}
+
+function writeSettingValue(key, value) {
+  if (!db) return false;
+  const settingValue = String(value ?? '');
+  db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${settingValue.replace(/'/g, "''")}')`);
+  return true;
+}
+
+async function sendTelemetryToIngestBackend({
+  eventType,
+  collection,
+  payload,
+  context = 'telemetry_event',
+  urlOverride = '',
+  tokenOverride = ''
+}) {
+  const ingestUrl = normalizeIngestUrl(urlOverride || getTelemetryIngestUrl());
+  if (!ingestUrl) {
+    return { configured: false, success: false, error: 'Telemetry ingest URL is not configured.' };
+  }
+
+  const ingestToken = String(tokenOverride || getTelemetryIngestToken() || '').trim();
+  const requestPayload = {
+    event_id: crypto.randomUUID(),
+    event_type: String(eventType || 'event'),
+    collection: String(collection || ''),
+    source: 'emmaneigh-desktop',
+    app_version: APP_VERSION,
+    machine_id: MACHINE_ID,
+    context,
+    timestamp: new Date().toISOString(),
+    data: payload || {}
+  };
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (ingestToken) {
+    headers.Authorization = `Bearer ${ingestToken}`;
+    headers['x-emmaneigh-ingest-key'] = ingestToken;
+  }
+
+  const response = await requestHttps({
+    baseUrl: ingestUrl,
+    path: '',
+    method: 'POST',
+    headers,
+    body: JSON.stringify(requestPayload),
+    timeoutMs: TELEMETRY_INGEST_TIMEOUT_MS
+  });
+
+  if (response.statusCode >= 200 && response.statusCode < 300) {
+    return { configured: true, success: true, statusCode: response.statusCode };
+  }
+
+  return {
+    configured: true,
+    success: false,
+    statusCode: response.statusCode,
+    error: getErrorDetail(response)
+  };
+}
+
+async function writeTelemetryRecord({ eventType, collection, payload }) {
+  const directWrite = async () => {
+    const initialized = initFirebase();
+    if (!initialized) return false;
+    return logToFirestore(collection, {
+      ...payload,
+      event_type: eventType || null
+    });
+  };
+
+  const ingestUrl = getTelemetryIngestUrl();
+  if (ingestUrl) {
+    const backendResult = await sendTelemetryToIngestBackend({
+      eventType,
+      collection,
+      payload,
+      context: `ingest_${eventType || 'event'}`
+    });
+    if (backendResult.success) return true;
+
+    // Resiliency fallback: if direct Firebase is configured, keep telemetry writes flowing.
+    return directWrite();
+  }
+
+  return directWrite();
+}
+
+let firebaseStatusCache = {
+  checkedAt: 0,
+  status: {
+    required: REQUIRE_FIREBASE_TELEMETRY,
+    configured: false,
+    initialized: false,
+    connected: false,
+    message: 'Firebase telemetry status has not been checked yet.'
+  }
+};
+
+function cacheFirebaseStatus(status) {
+  firebaseStatusCache = {
+    checkedAt: Date.now(),
+    status
+  };
+  return status;
+}
+
+async function getFirebaseTelemetryStatus(options = {}) {
+  const force = !!options.force;
+  const skipProbe = !!options.skipProbe;
+  const context = String(options.context || 'runtime_check');
+  const mode = String(options.mode || 'any').toLowerCase();
+  const now = Date.now();
+  const cacheAge = now - firebaseStatusCache.checkedAt;
+  const cacheTtl = firebaseStatusCache.status.connected
+    ? FIREBASE_STATUS_SUCCESS_CACHE_MS
+    : FIREBASE_STATUS_FAILURE_CACHE_MS;
+
+  if (!force && cacheAge >= 0 && cacheAge < cacheTtl) {
+    return firebaseStatusCache.status;
+  }
+
+  const backendIngestUrl = getTelemetryIngestUrl();
+  if (mode !== 'direct' && backendIngestUrl) {
+    if (skipProbe) {
+      return {
+        required: REQUIRE_FIREBASE_TELEMETRY,
+        configured: true,
+        initialized: true,
+        connected: true,
+        mode: 'backend_ingest',
+        message: `Telemetry ingest backend configured at ${backendIngestUrl}.`
+      };
+    }
+
+    const backendProbe = await sendTelemetryToIngestBackend({
+      eventType: 'telemetry_probe',
+      collection: FIREBASE_TELEMETRY_PROBE_COLLECTION,
+      payload: {
+        mode: 'backend_ingest',
+        probe: true
+      },
+      context
+    });
+
+    if (backendProbe.success) {
+      return cacheFirebaseStatus({
+        required: REQUIRE_FIREBASE_TELEMETRY,
+        configured: true,
+        initialized: true,
+        connected: true,
+        mode: 'backend_ingest',
+        message: 'Telemetry backend ingest is connected.'
+      });
+    }
+
+    // If backend ingest is unavailable, attempt direct Firebase fallback in mixed deployments.
+    if (mode !== 'backend') {
+      const directFallback = await getFirebaseTelemetryStatus({
+        force: true,
+        skipProbe: false,
+        context: `${context}_direct_fallback`,
+        mode: 'direct'
+      });
+      if (directFallback.connected) {
+        return cacheFirebaseStatus({
+          ...directFallback,
+          mode: 'direct_firebase_fallback',
+          message: `Telemetry ingest backend is unavailable (${backendProbe.error || 'unknown error'}). Falling back to direct Firebase telemetry.`
+        });
+      }
+    }
+
+    return cacheFirebaseStatus({
+      required: REQUIRE_FIREBASE_TELEMETRY,
+      configured: true,
+      initialized: true,
+      connected: false,
+      mode: 'backend_ingest',
+      message: `Telemetry backend ingest is configured but unreachable: ${backendProbe.error || 'unknown error'}`
+    });
+  }
+
+  if (mode === 'backend') {
+    return cacheFirebaseStatus({
+      required: REQUIRE_FIREBASE_TELEMETRY,
+      configured: false,
+      initialized: false,
+      connected: false,
+      mode: 'backend_ingest',
+      message: 'Telemetry backend ingest URL is not configured.'
+    });
+  }
+
+  const config = loadFirebaseConfig();
+  if (!config) {
+    return cacheFirebaseStatus({
+      required: REQUIRE_FIREBASE_TELEMETRY,
+      configured: false,
+      initialized: false,
+      connected: false,
+      mode: 'direct_firebase',
+      message: 'Firebase is not configured. Add Firebase config JSON in Settings.'
+    });
+  }
+
+  const initialized = initFirebase();
+  if (!initialized) {
+    return cacheFirebaseStatus({
+      required: REQUIRE_FIREBASE_TELEMETRY,
+      configured: true,
+      initialized: false,
+      connected: false,
+      mode: 'direct_firebase',
+      message: 'Firebase initialization failed. Verify Firebase config JSON.'
+    });
+  }
+
+  if (skipProbe) {
+    return {
+      required: REQUIRE_FIREBASE_TELEMETRY,
+      configured: true,
+      initialized: true,
+      connected: true,
+      mode: 'direct_firebase',
+      message: 'Firebase initialized.'
+    };
+  }
+
+  const probeSuccess = await logToFirestore(FIREBASE_TELEMETRY_PROBE_COLLECTION, {
+    event: 'telemetry_probe',
+    context,
+    app_version: APP_VERSION,
+    machine_id: MACHINE_ID
+  });
+
+  if (!probeSuccess) {
+    return cacheFirebaseStatus({
+      required: REQUIRE_FIREBASE_TELEMETRY,
+      configured: true,
+      initialized: true,
+      connected: false,
+      mode: 'direct_firebase',
+      message: 'Firebase is configured but not reachable for Firestore writes.'
+    });
+  }
+
+  return cacheFirebaseStatus({
+    required: REQUIRE_FIREBASE_TELEMETRY,
+    configured: true,
+    initialized: true,
+    connected: true,
+    mode: 'direct_firebase',
+    message: 'Firebase telemetry is connected.'
+  });
+}
+
+async function requireFirebaseTelemetry(actionLabel) {
+  if (!REQUIRE_FIREBASE_TELEMETRY) return { success: true };
+  const status = await getFirebaseTelemetryStatus({ context: actionLabel || 'required_action' });
+  if (status.connected) return { success: true };
+  return {
+    success: false,
+    error: `Firebase telemetry is required for ${actionLabel || 'this action'}. ${status.message}`
+  };
+}
+
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
 /**
  * Log user activity to Firebase Firestore.
  * Falls back to offline queue if Firestore is unavailable.
  */
-function logUserActivity(username, action) {
+async function logUserActivity(username, action) {
   const entry = {
     timestamp: new Date().toISOString(),
     username: username || 'unknown',
@@ -78,12 +409,10 @@ function logUserActivity(username, action) {
     machine_id: MACHINE_ID
   };
 
-  logToFirestore('activity_logs', entry).then(success => {
-    if (!success) {
-      queuePendingLog('activity_logs', entry);
-    }
-  }).catch(() => {
-    queuePendingLog('activity_logs', entry);
+  return writeTelemetryRecord({
+    eventType: 'user_activity',
+    collection: 'activity_logs',
+    payload: entry
   });
 }
 
@@ -91,7 +420,7 @@ function logUserActivity(username, action) {
  * Log feature usage to Firebase Firestore.
  * Falls back to offline queue if Firestore is unavailable.
  */
-function logUsageToFirestore(data) {
+async function logUsageToFirestore(data) {
   const entry = {
     timestamp: new Date().toISOString(),
     username: data.user_name || 'unknown',
@@ -105,16 +434,14 @@ function logUsageToFirestore(data) {
     machine_id: MACHINE_ID
   };
 
-  logToFirestore('usage_logs', entry).then(success => {
-    if (!success) {
-      queuePendingLog('usage_logs', entry);
-    }
-  }).catch(() => {
-    queuePendingLog('usage_logs', entry);
+  return writeTelemetryRecord({
+    eventType: 'usage',
+    collection: 'usage_logs',
+    payload: entry
   });
 }
 
-function logFeedbackToFirestore(data) {
+async function logFeedbackToFirestore(data) {
   const entry = {
     timestamp: new Date().toISOString(),
     username: String(data.username || 'unknown'),
@@ -123,12 +450,10 @@ function logFeedbackToFirestore(data) {
     machine_id: MACHINE_ID
   };
 
-  logToFirestore('user_feedback', entry).then(success => {
-    if (!success) {
-      queuePendingLog('user_feedback', entry);
-    }
-  }).catch(() => {
-    queuePendingLog('user_feedback', entry);
+  return writeTelemetryRecord({
+    eventType: 'feedback',
+    collection: 'user_feedback',
+    payload: entry
   });
 }
 
@@ -1504,11 +1829,10 @@ app.whenReady().then(async () => {
   // Initialize database first
   await initDatabase();
 
-  // Initialize Firebase for centralized logging
-  const firebaseOk = initFirebase();
-  if (firebaseOk) {
-    // Flush any logs that were queued while offline
-    syncPendingLogs().catch(e => console.error('Pending log sync error:', e.message));
+  // Initialize Firebase for centralized logging (mandatory telemetry mode).
+  const firebaseStatus = await getFirebaseTelemetryStatus({ force: true, context: 'app_startup' });
+  if (!firebaseStatus.connected) {
+    console.error('Firebase telemetry is required but unavailable:', firebaseStatus.message);
   }
 
   createWindow();
@@ -4926,6 +5250,8 @@ ipcMain.handle('get-api-key-value', async () => {
 // Create new user account
 ipcMain.handle('create-user', async (event, { username, password, displayName, email, securityQuestion, securityAnswer }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  const telemetryGate = await requireFirebaseTelemetry('account creation');
+  if (!telemetryGate.success) return telemetryGate;
 
   if (!username || !password) {
     return { success: false, error: 'Username and password are required' };
@@ -4970,6 +5296,8 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
 // Login with username/password
 ipcMain.handle('login-user', async (event, { username, password }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  const telemetryGate = await requireFirebaseTelemetry('login');
+  if (!telemetryGate.success) return telemetryGate;
 
   if (!username || !password) {
     return { success: false, error: 'Username and password are required' };
@@ -4989,9 +5317,13 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
       return { success: false, error: 'Invalid password' };
     }
 
+    const activityLogged = await logUserActivity(uname, 'login');
+    if (!activityLogged) {
+      return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+    }
+
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
     saveDatabase();
-    logUserActivity(uname, 'login');
 
     return {
       success: true,
@@ -5005,6 +5337,8 @@ ipcMain.handle('login-user', async (event, { username, password }) => {
 // Complete login after 2FA verification
 ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  const telemetryGate = await requireFirebaseTelemetry('2FA login');
+  if (!telemetryGate.success) return telemetryGate;
 
   if (!code || code.length !== 6) {
     return { success: false, error: 'Invalid verification code' };
@@ -5045,12 +5379,14 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
 
     const [id, username, displayName, apiKeyEnc] = userResult[0].values[0];
 
+    const activityLogged = await logUserActivity(username, 'login');
+    if (!activityLogged) {
+      return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+    }
+
     // Update last login
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
     saveDatabase();
-
-    // Log to private activity file
-    logUserActivity(username, 'login');
 
     return {
       success: true,
@@ -5163,6 +5499,8 @@ ipcMain.handle('get-user-api-key', async (event, { userId }) => {
 // Get user by ID (for session restore)
 ipcMain.handle('get-user-by-id', async (event, { userId }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  const telemetryGate = await requireFirebaseTelemetry('session restore');
+  if (!telemetryGate.success) return telemetryGate;
 
   try {
     const result = db.exec(`SELECT id, username, display_name, api_key_encrypted FROM users WHERE id = '${userId}'`);
@@ -5573,6 +5911,9 @@ ipcMain.handle('save-setting', async (event, { key, value }) => {
       process.env.AI_PROVIDER = settingValue;
     }
     saveDatabase();
+    if (key === TELEMETRY_INGEST_KEY || key === TELEMETRY_INGEST_TOKEN_KEY) {
+      invalidateTelemetryStatusCache();
+    }
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -5587,6 +5928,92 @@ ipcMain.handle('get-setting', async (event, key) => {
       return { success: true, value: result[0].values[0][0] };
     }
     return { success: true, value: null };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-telemetry-ingest-config', async () => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    const url = getTelemetryIngestUrl();
+    const token = getTelemetryIngestToken();
+    return {
+      success: true,
+      url,
+      hasToken: !!token
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-telemetry-ingest-config', async (event, config = {}) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    const rawUrl = String(config.url || '').trim();
+    const normalizedUrl = normalizeIngestUrl(rawUrl);
+    if (!normalizedUrl) {
+      return { success: false, error: 'Telemetry ingest URL must be a valid http(s) URL.' };
+    }
+
+    const rawToken = typeof config.token === 'string' ? config.token.trim() : '';
+    const keepExistingToken = !!config.keepExistingToken;
+    if (!writeSettingValue(TELEMETRY_INGEST_KEY, normalizedUrl)) {
+      return { success: false, error: 'Failed to save telemetry ingest URL.' };
+    }
+
+    if (rawToken) {
+      if (!writeSettingValue(TELEMETRY_INGEST_TOKEN_KEY, encodeSecretForSetting(rawToken))) {
+        return { success: false, error: 'Failed to save telemetry ingest token.' };
+      }
+    } else if (!keepExistingToken) {
+      if (!writeSettingValue(TELEMETRY_INGEST_TOKEN_KEY, '')) {
+        return { success: false, error: 'Failed to clear telemetry ingest token.' };
+      }
+    }
+
+    saveDatabase();
+    invalidateTelemetryStatusCache();
+
+    const status = await getFirebaseTelemetryStatus({
+      force: true,
+      context: 'save_ingest_config',
+      mode: 'backend'
+    });
+    if (!status.connected) {
+      return { success: false, error: status.message, status };
+    }
+
+    return { success: true, status };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('test-telemetry-ingest-config', async (event, config = {}) => {
+  try {
+    const url = normalizeIngestUrl(config.url || getTelemetryIngestUrl());
+    if (!url) {
+      return { success: false, error: 'Telemetry ingest URL must be set before testing.' };
+    }
+
+    const tokenInput = typeof config.token === 'string' ? config.token.trim() : '';
+    const token = tokenInput || getTelemetryIngestToken();
+    const result = await sendTelemetryToIngestBackend({
+      eventType: 'telemetry_probe',
+      collection: FIREBASE_TELEMETRY_PROBE_COLLECTION,
+      payload: { test: true },
+      context: 'manual_ingest_test',
+      urlOverride: url,
+      tokenOverride: token
+    });
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Telemetry backend test failed.' };
+    }
+
+    return { success: true, message: 'Telemetry backend ingest connection successful.' };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -5747,13 +6174,16 @@ ipcMain.handle('save-firebase-config', async (event, config) => {
   try {
     const saved = saveFirebaseConfig(config);
     if (saved) {
-      // Re-initialize Firebase with the new config
-      const ok = initFirebase();
-      if (ok) {
-        // Sync any pending logs with the new config
-        syncPendingLogs().catch(e => console.error('Pending log sync error:', e.message));
+      invalidateTelemetryStatusCache();
+      const status = await getFirebaseTelemetryStatus({
+        force: true,
+        context: 'save_firebase_config',
+        mode: 'direct'
+      });
+      if (status.connected) {
+        return { success: true, initialized: true, status };
       }
-      return { success: true, initialized: ok };
+      return { success: false, initialized: false, status, error: status.message };
     }
     return { success: false, error: 'Failed to save config file' };
   } catch (e) {
@@ -5764,15 +6194,28 @@ ipcMain.handle('save-firebase-config', async (event, config) => {
 // Get current Firebase config (for settings UI)
 ipcMain.handle('get-firebase-config', async () => {
   const config = loadFirebaseConfig();
-  return { success: true, config: config, configured: !!config };
+  const status = await getFirebaseTelemetryStatus({ skipProbe: true });
+  return { success: true, config: config, configured: !!config, status };
+});
+
+ipcMain.handle('get-firebase-telemetry-status', async (event, options = {}) => {
+  const force = !!options.force;
+  const context = String(options.context || 'status_request');
+  const status = await getFirebaseTelemetryStatus({ force, context });
+  return { success: true, status };
 });
 
 // ========== USAGE HISTORY HANDLERS ==========
 
 // Log usage event — writes to both local SQLite and Firebase Firestore
 ipcMain.handle('log-usage', async (event, data) => {
-  // Write to Firebase Firestore (centralized)
-  logUsageToFirestore(data);
+  const telemetryGate = await requireFirebaseTelemetry('usage logging');
+  if (!telemetryGate.success) return telemetryGate;
+
+  const usageLogged = await logUsageToFirestore(data);
+  if (!usageLogged) {
+    return { success: false, error: 'Firebase telemetry write failed for usage logging.' };
+  }
 
   // Also write to local SQLite (offline backup)
   if (!db) return { success: false, error: 'Database not initialized' };
@@ -5798,6 +6241,9 @@ ipcMain.handle('log-usage', async (event, data) => {
 
 ipcMain.handle('submit-feedback', async (event, data) => {
   try {
+    const telemetryGate = await requireFirebaseTelemetry('feedback logging');
+    if (!telemetryGate.success) return telemetryGate;
+
     const username = String(data?.username || '').trim();
     const request = String(data?.request || '').trim();
     if (!username) {
@@ -5817,7 +6263,10 @@ ipcMain.handle('submit-feedback', async (event, data) => {
     if (!localSaved) {
       return { success: false, error: 'Failed to save feedback log locally.' };
     }
-    logFeedbackToFirestore(entry);
+    const feedbackLogged = await logFeedbackToFirestore(entry);
+    if (!feedbackLogged) {
+      return { success: false, error: 'Firebase telemetry write failed while submitting feedback.' };
+    }
     return { success: true, path: feedbackLogPath };
   } catch (e) {
     return { success: false, error: e.message };

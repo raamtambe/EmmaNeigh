@@ -63,8 +63,8 @@ function initFirebase() {
 
   const firebaseConfig = loadFirebaseConfig();
   if (!firebaseConfig) {
-    console.warn('Firebase config not found — activity logging will be local-only.');
-    console.warn('Go to Settings → Firebase in EmmaNeigh to configure centralized logging.');
+    console.warn('Firebase config not found.');
+    console.warn('Go to Settings → Firebase Telemetry in EmmaNeigh to configure Firestore logging.');
     return false;
   }
 

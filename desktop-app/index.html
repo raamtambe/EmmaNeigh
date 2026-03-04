@@ -3184,6 +3184,8 @@
     <div class="login-box">
       <h2>Welcome to EmmaNeigh</h2>
       <p class="subtitle">Sign in to save your API key and usage history</p>
+      <p class="login-error" id="firebaseLoginStatus" style="margin-bottom: 10px;"></p>
+      <button id="openSettingsFromLoginBtn" style="display: none; width: 100%; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; border: 1px solid #333; background: #151515; color: #ddd; font-size: 12px; cursor: pointer;">Configure Required Firebase Logging</button>
 
       <!-- Tab Toggle -->
       <div class="login-tabs">
@@ -3413,6 +3415,31 @@
           <p style="font-size: 11px; color: #666; margin-top: 4px;">No API key required for local LM Studio.</p>
         </div>
 
+      </div>
+
+      <div class="settings-section">
+        <h3>Firebase Telemetry (Required)</h3>
+        <p style="font-size: 12px; color: #888; margin-bottom: 10px;">
+          Logging is mandatory. Configure either a telemetry ingest backend (recommended) or direct Firebase writes.
+        </p>
+        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Telemetry Ingest URL (Recommended)</label>
+        <input type="text" id="telemetryIngestUrlInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="https://your-ingest-service.example.com/telemetry/ingest">
+        <label style="font-size: 12px; color: #888; display: block; margin: 8px 0 6px;">Telemetry Ingest Token (optional, recommended)</label>
+        <input type="password" id="telemetryIngestTokenInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="Bearer token or shared secret">
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <button class="settings-btn settings-btn-primary" id="saveTelemetryIngestBtn">Save Ingest Config</button>
+          <button class="settings-btn settings-btn-secondary" id="testTelemetryIngestBtn">Test Ingest</button>
+        </div>
+        <div id="telemetryIngestStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
+
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;"></div>
+        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Firebase Config JSON</label>
+        <textarea id="firebaseConfigInput" style="width: 100%; min-height: 120px; resize: vertical; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+        <div id="firebaseConfigStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <button class="settings-btn settings-btn-primary" id="saveFirebaseConfigBtn">Save Firebase Config</button>
+          <button class="settings-btn settings-btn-secondary" id="testFirebaseConfigBtn">Test Firebase</button>
+        </div>
       </div>
 
       <div class="settings-section" id="securitySection" style="display: none;">
@@ -5104,6 +5131,15 @@
     const lmstudioConfigRow = document.getElementById('lmstudioConfigRow');
     const lmstudioBaseUrlInput = document.getElementById('lmstudioBaseUrlInput');
     const lmstudioModelInput = document.getElementById('lmstudioModelInput');
+    const telemetryIngestUrlInput = document.getElementById('telemetryIngestUrlInput');
+    const telemetryIngestTokenInput = document.getElementById('telemetryIngestTokenInput');
+    const saveTelemetryIngestBtn = document.getElementById('saveTelemetryIngestBtn');
+    const testTelemetryIngestBtn = document.getElementById('testTelemetryIngestBtn');
+    const telemetryIngestStatus = document.getElementById('telemetryIngestStatus');
+    const firebaseConfigInput = document.getElementById('firebaseConfigInput');
+    const firebaseConfigStatus = document.getElementById('firebaseConfigStatus');
+    const saveFirebaseConfigBtn = document.getElementById('saveFirebaseConfigBtn');
+    const testFirebaseConfigBtn = document.getElementById('testFirebaseConfigBtn');
 
     const PROVIDER_META = {
       ollama: {
@@ -5257,20 +5293,225 @@
       }
     }
 
+    function setTelemetryIngestStatus(message, tone = 'neutral') {
+      if (!telemetryIngestStatus) return;
+      telemetryIngestStatus.textContent = message || '';
+      if (tone === 'success') {
+        telemetryIngestStatus.style.color = '#22c55e';
+      } else if (tone === 'error') {
+        telemetryIngestStatus.style.color = '#ef4444';
+      } else if (tone === 'warning') {
+        telemetryIngestStatus.style.color = '#f59e0b';
+      } else {
+        telemetryIngestStatus.style.color = '#888';
+      }
+    }
+
+    async function loadTelemetryIngestConfig() {
+      try {
+        const result = await ipcRenderer.invoke('get-telemetry-ingest-config');
+        if (!result || !result.success) {
+          setTelemetryIngestStatus(result?.error || 'Unable to load ingest config.', 'error');
+          return;
+        }
+        telemetryIngestUrlInput.value = result.url || '';
+        telemetryIngestTokenInput.value = '';
+        if (result.url) {
+          setTelemetryIngestStatus(
+            result.hasToken
+              ? 'Telemetry ingest backend configured (token saved).'
+              : 'Telemetry ingest backend configured (no token saved).',
+            result.hasToken ? 'success' : 'warning'
+          );
+        } else {
+          setTelemetryIngestStatus('No telemetry ingest backend configured.', 'neutral');
+        }
+      } catch (e) {
+        setTelemetryIngestStatus(`Failed to load ingest config: ${e.message}`, 'error');
+      }
+    }
+
+    function setFirebaseConfigStatus(message, tone = 'neutral') {
+      if (!firebaseConfigStatus) return;
+      firebaseConfigStatus.textContent = message || '';
+      if (tone === 'success') {
+        firebaseConfigStatus.style.color = '#22c55e';
+      } else if (tone === 'error') {
+        firebaseConfigStatus.style.color = '#ef4444';
+      } else if (tone === 'warning') {
+        firebaseConfigStatus.style.color = '#f59e0b';
+      } else {
+        firebaseConfigStatus.style.color = '#888';
+      }
+    }
+
+    async function refreshFirebaseSettingsStatus(force = false) {
+      try {
+        await loadTelemetryIngestConfig();
+        const configResult = await ipcRenderer.invoke('get-firebase-config');
+        const statusResult = await ipcRenderer.invoke('get-firebase-telemetry-status', {
+          force,
+          context: 'settings_refresh'
+        });
+
+        if (configResult && configResult.success && configResult.config) {
+          firebaseConfigInput.value = JSON.stringify(configResult.config, null, 2);
+        } else if (!firebaseConfigInput.value.trim()) {
+          firebaseConfigInput.value = '';
+        }
+
+        const status = statusResult && statusResult.success ? statusResult.status : null;
+        if (status && status.connected) {
+          if (status.mode === 'backend_ingest') {
+            setFirebaseConfigStatus('Telemetry backend ingest connected. Login and analytics are enabled.', 'success');
+          } else if (status.mode === 'direct_firebase_fallback') {
+            setFirebaseConfigStatus(status.message || 'Telemetry ingest is unavailable. Falling back to direct Firebase telemetry.', 'warning');
+          } else {
+            setFirebaseConfigStatus('Direct Firebase telemetry connected. Login and analytics are enabled.', 'success');
+          }
+        } else if (status && status.message) {
+          setFirebaseConfigStatus(status.message, 'warning');
+        } else {
+          setFirebaseConfigStatus('Unable to determine Firebase telemetry status.', 'error');
+        }
+      } catch (e) {
+        setFirebaseConfigStatus(`Firebase status check failed: ${e.message}`, 'error');
+      }
+    }
+
     settingsBtn.addEventListener('click', async () => {
       settingsModal.classList.add('visible');
       await loadProviderSetting();
       await checkApiKeyStatus();
+      await refreshFirebaseSettingsStatus();
       await updateAgentProviderLabel();
     });
 
     settingsClose.addEventListener('click', () => {
       settingsModal.classList.remove('visible');
+      refreshFirebaseLoginGate();
     });
 
     settingsModal.addEventListener('click', (e) => {
       if (e.target === settingsModal) {
         settingsModal.classList.remove('visible');
+        refreshFirebaseLoginGate();
+      }
+    });
+
+    saveTelemetryIngestBtn.addEventListener('click', async () => {
+      const url = String(telemetryIngestUrlInput.value || '').trim();
+      const token = String(telemetryIngestTokenInput.value || '').trim();
+
+      if (!url) {
+        setTelemetryIngestStatus('Telemetry ingest URL is required.', 'error');
+        return;
+      }
+
+      saveTelemetryIngestBtn.disabled = true;
+      saveTelemetryIngestBtn.textContent = 'Saving...';
+      try {
+        const result = await ipcRenderer.invoke('save-telemetry-ingest-config', {
+          url,
+          token,
+          keepExistingToken: !token
+        });
+        if (!result || !result.success) {
+          setTelemetryIngestStatus(result?.error || 'Failed to save ingest config.', 'error');
+          return;
+        }
+        telemetryIngestTokenInput.value = '';
+        setTelemetryIngestStatus('Telemetry ingest config saved and verified.', 'success');
+        await refreshFirebaseSettingsStatus(true);
+        await refreshFirebaseLoginGate(true);
+      } catch (e) {
+        setTelemetryIngestStatus(`Save failed: ${e.message}`, 'error');
+      } finally {
+        saveTelemetryIngestBtn.disabled = false;
+        saveTelemetryIngestBtn.textContent = 'Save Ingest Config';
+      }
+    });
+
+    testTelemetryIngestBtn.addEventListener('click', async () => {
+      const url = String(telemetryIngestUrlInput.value || '').trim();
+      const token = String(telemetryIngestTokenInput.value || '').trim();
+
+      testTelemetryIngestBtn.disabled = true;
+      testTelemetryIngestBtn.textContent = 'Testing...';
+      setTelemetryIngestStatus('Testing telemetry ingest backend...');
+      try {
+        const result = await ipcRenderer.invoke('test-telemetry-ingest-config', {
+          url,
+          token
+        });
+        if (!result || !result.success) {
+          setTelemetryIngestStatus(result?.error || 'Telemetry ingest test failed.', 'error');
+          return;
+        }
+        setTelemetryIngestStatus(result.message || 'Telemetry ingest backend is reachable.', 'success');
+      } catch (e) {
+        setTelemetryIngestStatus(`Test failed: ${e.message}`, 'error');
+      } finally {
+        testTelemetryIngestBtn.disabled = false;
+        testTelemetryIngestBtn.textContent = 'Test Ingest';
+      }
+    });
+
+    saveFirebaseConfigBtn.addEventListener('click', async () => {
+      const raw = (firebaseConfigInput.value || '').trim();
+      if (!raw) {
+        setFirebaseConfigStatus('Paste Firebase config JSON before saving.', 'error');
+        return;
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        setFirebaseConfigStatus(`Invalid JSON: ${e.message}`, 'error');
+        return;
+      }
+
+      saveFirebaseConfigBtn.disabled = true;
+      saveFirebaseConfigBtn.textContent = 'Saving...';
+      try {
+        const result = await ipcRenderer.invoke('save-firebase-config', parsed);
+        if (!result || !result.success) {
+          setFirebaseConfigStatus(result?.error || 'Failed to save Firebase config.', 'error');
+          return;
+        }
+        setFirebaseConfigStatus('Firebase config saved and verified.', 'success');
+        await refreshFirebaseSettingsStatus(true);
+        await refreshFirebaseLoginGate(true);
+      } catch (e) {
+        setFirebaseConfigStatus(`Save failed: ${e.message}`, 'error');
+      } finally {
+        saveFirebaseConfigBtn.disabled = false;
+        saveFirebaseConfigBtn.textContent = 'Save Firebase Config';
+      }
+    });
+
+    testFirebaseConfigBtn.addEventListener('click', async () => {
+      testFirebaseConfigBtn.disabled = true;
+      testFirebaseConfigBtn.textContent = 'Testing...';
+      setFirebaseConfigStatus('Testing Firebase telemetry connectivity...');
+      try {
+        const result = await ipcRenderer.invoke('get-firebase-telemetry-status', {
+          force: true,
+          context: 'settings_test'
+        });
+        const status = result && result.success ? result.status : null;
+        if (status && status.connected) {
+          setFirebaseConfigStatus(status.message || 'Firebase telemetry connected.', 'success');
+        } else {
+          setFirebaseConfigStatus((status && status.message) || 'Firebase telemetry is not connected.', 'error');
+        }
+        await refreshFirebaseLoginGate();
+      } catch (e) {
+        setFirebaseConfigStatus(`Test failed: ${e.message}`, 'error');
+      } finally {
+        testFirebaseConfigBtn.disabled = false;
+        testFirebaseConfigBtn.textContent = 'Test Firebase';
       }
     });
 
@@ -5730,9 +5971,67 @@
     const userInfo = document.getElementById('userInfo');
     const userName = document.getElementById('userName');
     const loginModal = document.getElementById('loginModal');
+    const firebaseLoginStatus = document.getElementById('firebaseLoginStatus');
+    const openSettingsFromLoginBtn = document.getElementById('openSettingsFromLoginBtn');
+    const loginBtnEl = document.getElementById('loginBtn');
+    const createBtnEl = document.getElementById('createBtn');
 
     // Current user state
     let currentUser = null;  // { id, username, displayName, isGuest }
+
+    async function refreshFirebaseLoginGate(force = false) {
+      try {
+        const result = await ipcRenderer.invoke('get-firebase-telemetry-status', {
+          force,
+          context: 'login_gate'
+        });
+        const status = result && result.success ? result.status : null;
+        const connected = !!(status && status.connected);
+        loginBtnEl.disabled = !connected;
+        createBtnEl.disabled = !connected;
+        const createErrorEl = document.getElementById('createError');
+        const loginErrorEl = document.getElementById('loginError');
+        if (connected) {
+          firebaseLoginStatus.textContent = '';
+          firebaseLoginStatus.style.color = '#22c55e';
+          openSettingsFromLoginBtn.style.display = 'none';
+          if (createErrorEl && String(createErrorEl.textContent || '').toLowerCase().includes('firebase')) {
+            createErrorEl.textContent = '';
+          }
+          if (loginErrorEl && String(loginErrorEl.textContent || '').toLowerCase().includes('firebase')) {
+            loginErrorEl.textContent = '';
+          }
+        } else {
+          const message = status && status.message
+            ? status.message
+            : 'Firebase telemetry is unavailable.';
+          firebaseLoginStatus.textContent = `Login blocked: ${message}`;
+          firebaseLoginStatus.style.color = '#f59e0b';
+          openSettingsFromLoginBtn.style.display = '';
+          if (createErrorEl) {
+            createErrorEl.textContent = `Create Account is blocked until Firebase is configured: ${message}`;
+          }
+        }
+      } catch (e) {
+        loginBtnEl.disabled = true;
+        createBtnEl.disabled = true;
+        firebaseLoginStatus.textContent = `Login blocked: Firebase status check failed (${e.message}).`;
+        firebaseLoginStatus.style.color = '#ef4444';
+        openSettingsFromLoginBtn.style.display = '';
+        const createErrorEl = document.getElementById('createError');
+        if (createErrorEl) {
+          createErrorEl.textContent = `Create Account is blocked: Firebase status check failed (${e.message}).`;
+        }
+      }
+    }
+
+    openSettingsFromLoginBtn.addEventListener('click', async () => {
+      settingsModal.classList.add('visible');
+      await loadProviderSetting();
+      await checkApiKeyStatus();
+      await refreshFirebaseSettingsStatus();
+      await updateAgentProviderLabel();
+    });
 
     // ========== FEEDBACK WIDGET ==========
     const feedbackWidget = document.getElementById('feedbackWidget');
@@ -5915,6 +6214,7 @@
       }
     });
     refreshFeedbackAccess();
+    refreshFirebaseLoginGate();
 
     // Tab switching
     const loginTabs = document.querySelectorAll('.login-tab');
