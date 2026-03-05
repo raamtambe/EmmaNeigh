@@ -3184,19 +3184,20 @@
     <div class="login-box">
       <h2>Welcome to EmmaNeigh</h2>
       <p class="subtitle">Enter your email to continue</p>
-      <p class="login-error" id="firebaseLoginStatus" style="margin-bottom: 10px;"></p>
-      <button id="openSettingsFromLoginBtn" style="display: none; width: 100%; margin-bottom: 12px; padding: 8px 10px; border-radius: 6px; border: 1px solid #333; background: #151515; color: #ddd; font-size: 12px; cursor: pointer;">Configure Required Firebase Logging</button>
+      <!-- Firebase status elements kept as hidden placeholders for backwards compatibility -->
+      <p class="login-error" id="firebaseLoginStatus" style="display: none;"></p>
+      <button id="openSettingsFromLoginBtn" style="display: none;">Configure Required Firebase Logging</button>
 
-      <!-- Tab Toggle -->
+      <!-- Tab Toggle (hidden — email-only login) -->
       <div class="login-tabs" style="display: none;">
         <button class="login-tab active" data-tab="login">Login</button>
         <button class="login-tab" data-tab="create">Create Account</button>
       </div>
 
-      <!-- Login Form -->
+      <!-- Login Form — email only -->
       <div class="login-form" id="loginForm">
-        <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" style="display: none;">
         <input type="email" id="loginEmail" placeholder="Email (required)" autocomplete="email">
+        <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" style="display: none;">
         <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" style="display: none;">
         <p class="login-error" id="loginError"></p>
         <button id="loginBtn">Continue</button>
@@ -6034,64 +6035,10 @@
     // Current user state
     let currentUser = null;  // { id, username, displayName, isGuest }
 
+    // Firebase login gate removed — login always works regardless of Firebase status
     async function refreshFirebaseLoginGate(force = false) {
-      try {
-        const result = await ipcRenderer.invoke('get-firebase-telemetry-status', {
-          force,
-          context: 'login_gate'
-        });
-        const status = result && result.success ? result.status : null;
-        const connected = !!(status && status.connected);
-        const required = !!(status && status.required);
-        const shouldBlock = required && !connected;
-        loginBtnEl.disabled = shouldBlock;
-        createBtnEl.disabled = shouldBlock;
-        const createErrorEl = document.getElementById('createError');
-        const loginErrorEl = document.getElementById('loginError');
-        if (shouldBlock) {
-          const message = status && status.message
-            ? status.message
-            : 'Firebase telemetry is unavailable.';
-          firebaseLoginStatus.textContent = `Login blocked: ${message}`;
-          firebaseLoginStatus.style.color = '#f59e0b';
-          openSettingsFromLoginBtn.style.display = '';
-          if (createErrorEl) {
-            createErrorEl.textContent = `Create Account is blocked until Firebase is configured: ${message}`;
-          }
-          return;
-        }
-
-        if (connected) {
-          firebaseLoginStatus.textContent = '';
-          firebaseLoginStatus.style.color = '#22c55e';
-          openSettingsFromLoginBtn.style.display = 'none';
-          if (createErrorEl && String(createErrorEl.textContent || '').toLowerCase().includes('firebase')) {
-            createErrorEl.textContent = '';
-          }
-          if (loginErrorEl && String(loginErrorEl.textContent || '').toLowerCase().includes('firebase')) {
-            loginErrorEl.textContent = '';
-          }
-        } else {
-          firebaseLoginStatus.textContent = 'Login is available. Telemetry setup is managed by admin.';
-          firebaseLoginStatus.style.color = '#888';
-          openSettingsFromLoginBtn.style.display = 'none';
-        }
-      } catch (e) {
-        loginBtnEl.disabled = false;
-        createBtnEl.disabled = false;
-        firebaseLoginStatus.textContent = 'Login is available. Telemetry status check failed; admin can configure in Settings.';
-        firebaseLoginStatus.style.color = '#888';
-        openSettingsFromLoginBtn.style.display = 'none';
-      }
+      // No-op: login buttons are never disabled by Firebase
     }
-
-    openSettingsFromLoginBtn.addEventListener('click', async () => {
-      settingsModal.classList.add('visible');
-      await loadProviderSetting();
-      await checkApiKeyStatus();
-      await refreshFirebaseSettingsStatus();
-      await updateAgentProviderLabel();
-    });
 
     // ========== FEEDBACK WIDGET ==========
     const feedbackWidget = document.getElementById('feedbackWidget');

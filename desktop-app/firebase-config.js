@@ -1,13 +1,10 @@
 /**
  * Firebase Firestore Configuration for EmmaNeigh
  *
- * The Firebase config is loaded from a local file on each machine:
- *   [userData]/firebase_config.json
- *
- * This keeps credentials out of source control. To set up:
- *   1. Go to Settings → Firebase in EmmaNeigh
- *   2. Paste your Firebase config JSON
- *   3. Click Save — the config is stored locally and never committed to git
+ * Firebase config is embedded in the app for automatic centralized telemetry.
+ * A local override file at [userData]/firebase_config.json is checked first,
+ * but if not present, the embedded config is used automatically.
+ * No user configuration is needed — usage data flows to Firestore silently.
  */
 
 const { app } = require('electron');
@@ -16,7 +13,18 @@ const fs = require('fs');
 const { initializeApp } = require('firebase/app');
 const { getFirestore, collection, addDoc, writeBatch, doc } = require('firebase/firestore');
 
-// Firebase config is stored in a local JSON file, NOT in source code
+// Embedded Firebase config — always available, no user setup required
+const EMBEDDED_FIREBASE_CONFIG = {
+  apiKey: "AQ.Ab8RN6JvZM2ZdGpUk4WAW0mq-wNAS-OwPn14Rm56UgHuu5IdLQ",
+  authDomain: "emmaneigh-7f845.firebaseapp.com",
+  projectId: "emmaneigh-7f845",
+  storageBucket: "emmaneigh-7f845.firebasestorage.app",
+  messagingSenderId: "383420892084",
+  appId: "1:383420892084:web:cd78a7a242c2c514b9a8e1",
+  measurementId: "G-DZLTQM7B23"
+};
+
+// Optional local override (checked first, falls back to embedded)
 const firebaseConfigPath = path.join(app.getPath('userData'), 'firebase_config.json');
 
 let firebaseApp = null;
@@ -24,10 +32,11 @@ let firestoreDb = null;
 let firebaseReady = false;
 
 /**
- * Read Firebase config from the local file.
- * Returns the config object or null if not found.
+ * Read Firebase config. Checks local override file first, then uses embedded config.
+ * Always returns a valid config — never null.
  */
 function loadFirebaseConfig() {
+  // Try local override first
   try {
     if (fs.existsSync(firebaseConfigPath)) {
       const raw = fs.readFileSync(firebaseConfigPath, 'utf8');
@@ -37,9 +46,10 @@ function loadFirebaseConfig() {
       }
     }
   } catch (e) {
-    console.error('Failed to read Firebase config:', e.message);
+    console.error('Failed to read local Firebase config override:', e.message);
   }
-  return null;
+  // Fall back to embedded config (always available)
+  return EMBEDDED_FIREBASE_CONFIG;
 }
 
 /**
@@ -62,11 +72,6 @@ function initFirebase() {
   if (firebaseReady) return true;
 
   const firebaseConfig = loadFirebaseConfig();
-  if (!firebaseConfig) {
-    console.warn('Firebase config not found.');
-    console.warn('Go to Settings → Firebase Telemetry in EmmaNeigh to configure Firestore logging.');
-    return false;
-  }
 
   try {
     firebaseApp = initializeApp(firebaseConfig);

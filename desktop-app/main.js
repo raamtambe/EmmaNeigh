@@ -623,17 +623,17 @@ async function logUserActivity(username, action, metadata = {}) {
     machine_id: MACHINE_ID
   };
 
-  // Failsafe: always record login/activity locally, even when telemetry backend is unavailable.
+  // Always record locally (never fails except on DB issues)
   const localSaved = writeLocalActivityRecord(entry);
 
+  // Best-effort Firebase write — never blocks the caller
   const telemetrySaved = await writeTelemetryRecord({
     eventType: 'user_activity',
     collection: 'activity_logs',
     payload: entry
   });
-  if (telemetrySaved) return true;
-  if (!telemetryWriteIsMandatory()) return localSaved;
-  return false;
+
+  return localSaved || telemetrySaved;
 }
 
 /**
@@ -702,25 +702,16 @@ function writeLocalUsageRecord(data = {}) {
 }
 
 async function recordUsageEvent(data = {}) {
-  const telemetryGate = await requireFirebaseTelemetry('usage logging');
-  if (!telemetryGate.success) return telemetryGate;
-
   const entry = normalizeUsageEventData(data);
 
-  // Failsafe: write locally first so analytics remain available offline or if telemetry fails.
+  // Always write locally first (never fails except on DB issues)
   const localSaved = writeLocalUsageRecord(entry);
+
+  // Best-effort Firebase write — never blocks or fails the caller
   const telemetrySaved = await logUsageToFirestore(entry);
 
-  if (!telemetrySaved && telemetryWriteIsMandatory()) {
-    return { success: false, error: 'Firebase telemetry write failed for usage logging.' };
-  }
-
-  if (!localSaved && !telemetrySaved) {
-    return { success: false, error: 'Usage event could not be stored locally or remotely.' };
-  }
-
   return {
-    success: true,
+    success: localSaved || telemetrySaved,
     localLogged: localSaved,
     telemetryLogged: telemetrySaved
   };
@@ -6221,8 +6212,6 @@ ipcMain.handle('get-api-key-value', async () => {
 // Email-only login (mandatory email identity)
 ipcMain.handle('email-login', async (event, { email, displayName }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
-  const telemetryGate = await requireFirebaseTelemetry('email login');
-  if (!telemetryGate.success) return telemetryGate;
 
   const normalizedEmail = normalizeEmail(email);
   if (!isValidEmail(normalizedEmail)) {
@@ -6231,7 +6220,6 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
 
   const safeEmail = normalizedEmail.replace(/'/g, "''");
   let isNewUser = false;
-  let createdUserId = null;
 
   try {
     const existing = db.exec(`
@@ -6253,7 +6241,6 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
     } else {
       isNewUser = true;
       id = crypto.randomUUID();
-      createdUserId = id;
       const usernameSeed = buildUsernameFromEmail(normalizedEmail);
       username = getAvailableUsername(usernameSeed);
       storedDisplayName = resolvedDisplayName || usernameSeed;
@@ -6280,36 +6267,10 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
       WHERE id = '${id}'
     `);
 
-    const loginLogged = await logUserActivity(username, 'login', {
-      email: normalizedEmail,
-      displayName: finalDisplayName
-    });
-    if (!loginLogged) {
-      if (isNewUser && createdUserId && telemetryWriteIsMandatory()) {
-        db.run(`DELETE FROM users WHERE id = '${createdUserId}'`);
-      }
-      if (telemetryWriteIsMandatory()) {
-        saveDatabase();
-        return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
-      }
-      console.warn('Telemetry write failed during email-login; continuing because telemetry is not mandatory.');
-    }
-
+    // Log activity (best-effort — never blocks login)
+    logUserActivity(username, 'login', { email: normalizedEmail, displayName: finalDisplayName }).catch(() => {});
     if (isNewUser) {
-      const createdLogged = await logUserActivity(username, 'account_created', {
-        email: normalizedEmail,
-        displayName: finalDisplayName
-      });
-      if (!createdLogged) {
-        if (createdUserId && telemetryWriteIsMandatory()) {
-          db.run(`DELETE FROM users WHERE id = '${createdUserId}'`);
-        }
-        if (telemetryWriteIsMandatory()) {
-          saveDatabase();
-          return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
-        }
-        console.warn('Telemetry write failed during account_created event; continuing because telemetry is not mandatory.');
-      }
+      logUserActivity(username, 'account_created', { email: normalizedEmail, displayName: finalDisplayName }).catch(() => {});
     }
 
     saveDatabase();
@@ -6333,8 +6294,6 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
 // Create new user account
 ipcMain.handle('create-user', async (event, { username, password, displayName, email, securityQuestion, securityAnswer }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
-  const telemetryGate = await requireFirebaseTelemetry('account creation');
-  if (!telemetryGate.success) return telemetryGate;
 
   if (!username || !password) {
     return { success: false, error: 'Username and password are required' };
@@ -6397,8 +6356,6 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
 // Login with username/password
 ipcMain.handle('login-user', async (event, { username, password, email }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
-  const telemetryGate = await requireFirebaseTelemetry('login');
-  if (!telemetryGate.success) return telemetryGate;
 
   if (!username || !password || !email) {
     return { success: false, error: 'Username, password, and email are required' };
@@ -6697,8 +6654,6 @@ ipcMain.handle('get-user-api-key', async (event, { userId }) => {
 // Get user by ID (for session restore)
 ipcMain.handle('get-user-by-id', async (event, { userId }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
-  const telemetryGate = await requireFirebaseTelemetry('session restore');
-  if (!telemetryGate.success) return telemetryGate;
 
   try {
     const result = db.exec(`SELECT id, username, display_name, api_key_encrypted, email FROM users WHERE id = '${userId}'`);
