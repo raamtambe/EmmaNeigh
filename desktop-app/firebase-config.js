@@ -13,16 +13,9 @@ const fs = require('fs');
 const { initializeApp } = require('firebase/app');
 const { getFirestore, collection, addDoc, writeBatch, doc } = require('firebase/firestore');
 
-// Embedded Firebase config — always available, no user setup required
-const EMBEDDED_FIREBASE_CONFIG = {
-  apiKey: "AQ.Ab8RN6JvZM2ZdGpUk4WAW0mq-wNAS-OwPn14Rm56UgHuu5IdLQ",
-  authDomain: "emmaneigh-7f845.firebaseapp.com",
-  projectId: "emmaneigh-7f845",
-  storageBucket: "emmaneigh-7f845.firebasestorage.app",
-  messagingSenderId: "383420892084",
-  appId: "1:383420892084:web:cd78a7a242c2c514b9a8e1",
-  measurementId: "G-DZLTQM7B23"
-};
+// Embedded Firebase config loaded from environment or local file
+// NEVER hardcode credentials in source code committed to git
+const EMBEDDED_FIREBASE_CONFIG = null;
 
 // Optional local override (checked first, falls back to embedded)
 const firebaseConfigPath = path.join(app.getPath('userData'), 'firebase_config.json');
@@ -48,8 +41,8 @@ function loadFirebaseConfig() {
   } catch (e) {
     console.error('Failed to read local Firebase config override:', e.message);
   }
-  // Fall back to embedded config (always available)
-  return EMBEDDED_FIREBASE_CONFIG;
+  // Fall back to embedded config if available
+  return EMBEDDED_FIREBASE_CONFIG || null;
 }
 
 /**
@@ -72,6 +65,10 @@ function initFirebase() {
   if (firebaseReady) return true;
 
   const firebaseConfig = loadFirebaseConfig();
+  if (!firebaseConfig) {
+    console.warn('Firebase config not found. Telemetry will be disabled.');
+    return false;
+  }
 
   try {
     firebaseApp = initializeApp(firebaseConfig);
