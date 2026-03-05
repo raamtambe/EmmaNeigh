@@ -43,6 +43,7 @@ jobs:
             --hidden-import=email_nl_search ^
             --hidden-import=packet_shell_generator ^
             --hidden-import=document_redline ^
+            --hidden-import=checklist_docname_extractor ^
             --paths=. ^
             emna_processor.py
         shell: cmd
@@ -124,6 +125,7 @@ jobs:
             --hidden-import=email_nl_search \
             --hidden-import=packet_shell_generator \
             --hidden-import=document_redline \
+            --hidden-import=checklist_docname_extractor \
             --paths=. \
             emna_processor.py
 

@@ -3136,7 +3136,8 @@ const COMMAND_TOOLS = [
       type: 'object',
       properties: {
         profile_id: { type: 'string', description: 'The iManage profile ID to check out' },
-        checkout_path: { type: 'string', description: 'Local folder path to check out to. If omitted, uses default checkout location.' }
+        checkout_path: { type: 'string', description: 'Local folder path to check out to. If omitted, uses default checkout location.' },
+        version: { type: 'string', description: 'Optional version number to check out (for example "1" for precedent V1).' }
       },
       required: ['profile_id']
     }
@@ -3174,6 +3175,17 @@ const COMMAND_TOOLS = [
         engine: { type: 'string', enum: ['auto', 'litera', 'emmaneigh'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to EmmaNeigh).' }
       },
       required: ['original', 'modified']
+    }
+  },
+  {
+    name: 'run_checklist_precedent_redlines',
+    description: 'For an uploaded checklist, find each document in iManage, retrieve precedent V1 and latest, then run Litera full-document redlines in batch.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        checklist_path: { type: 'string', description: 'Path to checklist DOCX. If omitted, uses attached DOCX in Agent Mode.' },
+        max_items: { type: 'integer', description: 'Optional cap for number of checklist items to process in one run. Default 40.' }
+      }
     }
   },
   {
@@ -3236,16 +3248,42 @@ function Get-IManageWorkObjectFactory {
   throw ('Unable to create iManage COM object. ' + ($errors -join ' | '))
 }
 
-function Test-IManageInstalled($wof) {
-  try { return [bool]$wof.IsInstalled } catch { return $true }
-}
-
 function Ensure-IManageLogin($wof) {
   try {
     $hasLogin = [bool]$wof.HasLogin
-    if (-not $hasLogin) { $wof.LogIn() }
+    if (-not $hasLogin) {
+      $wof.LogIn()
+      Start-Sleep -Milliseconds 150
+    }
   } catch {
-    try { $wof.LogIn() } catch { }
+    try {
+      $wof.LogIn()
+      Start-Sleep -Milliseconds 150
+    } catch {
+      throw ("iManage login failed: " + $_.Exception.Message)
+    }
+  }
+
+  try {
+    if (-not [bool]$wof.HasLogin) {
+      throw "iManage login is required but no active login session was found."
+    }
+  } catch {
+    if ($_.Exception -and $_.Exception.Message) {
+      throw $_.Exception.Message
+    }
+    throw "iManage login is required but no active login session was found."
+  }
+}
+
+function New-IManageQueryFile($queryText) {
+  $trimmed = [string]$queryText
+  return New-Object PSObject -Property @{
+    Number = $trimmed
+    Name = $trimmed
+    Description = $trimmed
+    Author = $trimmed
+    __EmmaNeighQuery = $true
   }
 }
 `;
@@ -3276,42 +3314,52 @@ function getIManagePowerShellHosts() {
 }
 
 function parseIManagePowerShellOutput(stdout, stderr, code, host) {
-  if (code !== 0) {
+  const stdoutText = String(stdout || '').trim();
+  const stderrText = String(stderr || '').trim();
+  const matches = Array.from(stdoutText.matchAll(/###JSON_START###([\s\S]*?)###JSON_END###/g));
+  const jsonMatch = matches.length ? matches[matches.length - 1] : null;
+
+  if (jsonMatch) {
+    const rawPayload = String(jsonMatch[1] || '').replace(/^\uFEFF/, '').trim();
+    const parseCandidates = [rawPayload];
+    const firstJsonToken = rawPayload.search(/[{[]/);
+    if (firstJsonToken > 0) {
+      parseCandidates.push(rawPayload.slice(firstJsonToken).trim());
+    }
+
+    for (const candidate of parseCandidates) {
+      if (!candidate) continue;
+      try {
+        const parsed = JSON.parse(candidate);
+        return {
+          success: code === 0,
+          data: parsed,
+          stdout: stdoutText,
+          stderr: stderrText,
+          host
+        };
+      } catch (_) {}
+    }
+
     return {
       success: false,
-      error: stderr.trim() || `PowerShell exited with code ${code}`,
-      stdout: stdout.trim(),
+      error: 'Failed to parse iManage response payload.',
+      stdout: stdoutText,
+      stderr: stderrText,
+      rawPayload,
       host
     };
   }
 
-  const matches = Array.from(stdout.matchAll(/###JSON_START###([\s\S]*?)###JSON_END###/g));
-  const jsonMatch = matches.length ? matches[matches.length - 1] : null;
-  if (!jsonMatch) {
-    return { success: true, data: null, stdout: stdout.trim(), host };
-  }
-
-  const rawPayload = String(jsonMatch[1] || '').replace(/^\uFEFF/, '').trim();
-  const parseCandidates = [rawPayload];
-  const firstJsonToken = rawPayload.search(/[{[]/);
-  if (firstJsonToken > 0) {
-    parseCandidates.push(rawPayload.slice(firstJsonToken).trim());
-  }
-
-  for (const candidate of parseCandidates) {
-    if (!candidate) continue;
-    try {
-      const parsed = JSON.parse(candidate);
-      return { success: true, data: parsed, host };
-    } catch (_) {}
+  if (code === 0) {
+    return { success: true, data: null, stdout: stdoutText, stderr: stderrText, host };
   }
 
   return {
     success: false,
-    error: 'Failed to parse iManage response payload.',
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
-    rawPayload,
+    error: stderrText || stdoutText || `PowerShell exited with code ${code}`,
+    stdout: stdoutText,
+    stderr: stderrText,
     host
   };
 }
@@ -3350,16 +3398,196 @@ function normalizeIManageFailure(result) {
     return { success: false, error: 'Unknown iManage error.' };
   }
   if (!result.success) {
+    const dataError = result.data && result.data.error ? String(result.data.error) : '';
     return {
       ...result,
       success: false,
-      error: formatIManageErrorMessage(result.error || result.stderr || result.stdout)
+      error: formatIManageErrorMessage(dataError || result.error || result.stderr || result.stdout)
     };
   }
   if (result.data && result.data.error) {
     return { success: false, error: formatIManageErrorMessage(result.data.error) };
   }
   return null;
+}
+
+function parseIManageVersionNumber(rawValue) {
+  if (rawValue === null || rawValue === undefined) return null;
+  const text = String(rawValue).trim();
+  if (!text) return null;
+  const match = text.match(/\d+/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeIManageProfileId(rawValue) {
+  const text = String(rawValue || '').trim();
+  if (!text) return '';
+  const match = text.match(/\d+/g);
+  if (!match || !match.length) return text;
+  return match.join('');
+}
+
+function normalizeIManageArrayPayload(value, fallbackKey = 'files') {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') {
+    const nested = value[fallbackKey];
+    if (Array.isArray(nested)) return nested;
+    return [value];
+  }
+  return [];
+}
+
+function tokenizeForIManageSearch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function scoreIManageSearchCandidate(query, file = {}) {
+  const queryTokens = tokenizeForIManageSearch(query);
+  const haystack = [
+    file.name,
+    file.description,
+    file.author,
+    file.extension,
+    file.number
+  ]
+    .map((part) => String(part || '').toLowerCase())
+    .join(' ');
+
+  let score = 0;
+  for (const token of queryTokens) {
+    if (haystack.includes(token)) {
+      score += 8;
+    }
+  }
+
+  const lowerQuery = String(query || '').toLowerCase().trim();
+  const lowerName = String(file.name || '').toLowerCase().trim();
+  if (lowerQuery && lowerName) {
+    if (lowerName === lowerQuery) score += 50;
+    else if (lowerName.includes(lowerQuery)) score += 24;
+    else if (lowerQuery.includes(lowerName)) score += 12;
+  }
+
+  const versionNum = parseIManageVersionNumber(file.version);
+  if (versionNum !== null) score += Math.min(versionNum, 20);
+
+  return score;
+}
+
+function pickBestIManageSearchMatch(query, files = []) {
+  if (!Array.isArray(files) || files.length === 0) return null;
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const file of files) {
+    const score = scoreIManageSearchCandidate(query, file);
+    if (score > bestScore) {
+      best = file;
+      bestScore = score;
+    }
+  }
+  return best ? { ...best, _score: bestScore } : null;
+}
+
+function pickIManagePrecedentAndCurrentVersions(versions = []) {
+  if (!Array.isArray(versions) || versions.length === 0) return null;
+  const normalized = versions
+    .map((version) => {
+      const numeric = parseIManageVersionNumber(version && version.version);
+      return numeric === null ? null : { ...version, version_number: numeric };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.version_number - b.version_number);
+
+  if (!normalized.length) return null;
+
+  const v1 = normalized.find((item) => item.version_number === 1) || normalized[0];
+  const latest = normalized[normalized.length - 1];
+  return { precedent: v1, latest };
+}
+
+function sanitizeFileStem(value, fallback = 'document') {
+  const raw = String(value || '').trim();
+  const cleaned = raw
+    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const safe = cleaned
+    .replace(/\./g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return safe || fallback;
+}
+
+function listFilesRecursively(rootDir, depth = 3) {
+  const files = [];
+  const walk = (currentPath, remainingDepth) => {
+    if (!currentPath || !fs.existsSync(currentPath) || remainingDepth < 0) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(currentPath, entry.name);
+      if (entry.isFile()) {
+        files.push(fullPath);
+      } else if (entry.isDirectory()) {
+        walk(fullPath, remainingDepth - 1);
+      }
+    }
+  };
+  walk(rootDir, depth);
+  return files;
+}
+
+function resolveIManageCheckoutFilePath(checkoutResult, checkoutDir = '', preferredName = '') {
+  const candidates = [];
+  const files = Array.isArray(checkoutResult && checkoutResult.files) ? checkoutResult.files : [];
+  const preferredLower = String(preferredName || '').toLowerCase();
+
+  for (const file of files) {
+    const reportedPath = resolveExistingLocalPath(file && file.path);
+    if (reportedPath) candidates.push(reportedPath);
+    if (checkoutDir && file && file.name) {
+      candidates.push(path.join(checkoutDir, String(file.name)));
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      if (!preferredLower) return candidate;
+      const base = path.basename(candidate).toLowerCase();
+      if (base.includes(preferredLower)) return candidate;
+    }
+  }
+
+  if (checkoutDir && fs.existsSync(checkoutDir)) {
+    const discovered = listFilesRecursively(checkoutDir, 4);
+    discovered.sort((a, b) => {
+      try {
+        return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+      } catch (_) {
+        return 0;
+      }
+    });
+    if (preferredLower) {
+      const preferred = discovered.find((filePath) => path.basename(filePath).toLowerCase().includes(preferredLower));
+      if (preferred) return preferred;
+    }
+    return discovered[0] || '';
+  }
+
+  return '';
 }
 
 function imanageRunPowerShell(scriptContent) {
@@ -3370,7 +3598,10 @@ function imanageRunPowerShell(scriptContent) {
     }
 
     const tmpDir = app.getPath('temp');
-    const scriptPath = path.join(tmpDir, `emmaneigh_imanage_${Date.now()}.ps1`);
+    const scriptPath = path.join(
+      tmpDir,
+      `emmaneigh_imanage_${Date.now()}_${Math.floor(Math.random() * 100000)}.ps1`
+    );
     fs.writeFileSync(scriptPath, `${IMANAGE_PS_BOOTSTRAP}\n${scriptContent}`, 'utf8');
 
     const hosts = getIManagePowerShellHosts();
@@ -3443,10 +3674,6 @@ async function imanageBrowseFiles(multiple = false) {
 $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
-  if (-not (Test-IManageInstalled $wof)) {
-    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
-    exit 0
-  }
   Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
   $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
@@ -3473,33 +3700,56 @@ try {
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
-  return { success: true, files: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
+  return { success: true, files: normalizeIManageArrayPayload(result.data, 'files') };
 }
 
 async function imanageSaveDocument(filePath, action = 'new_document', showDialog = true) {
-  const escapedPath = filePath.replace(/'/g, "''");
+  const normalizedAction = String(action || 'new_document').trim().toLowerCase() === 'new_version'
+    ? 'new_version'
+    : 'new_document';
+  const resolvedPath = resolveExistingLocalPath(filePath);
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    return { success: false, error: 'Local file was not found for iManage save.' };
+  }
+
+  const showDialogBool = showDialog !== false;
+  const showDialogPs = showDialogBool ? '$true' : '$false';
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
-  if (-not (Test-IManageInstalled $wof)) {
-    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
-    exit 0
-  }
   Ensure-IManageLogin $wof
-  $sourcePath = '${escapedPath}'
+  $sourcePath = '${resolvedPath.replace(/'/g, "''")}'
   if (-not (Test-Path $sourcePath)) {
     $json = @{ error = "File not found: $sourcePath" } | ConvertTo-Json -Compress
     Write-Output "###JSON_START###$json###JSON_END###"
     exit 0
   }
-  ${action === 'new_version' ? `
+  ${normalizedAction === 'new_version' ? `
   # Save as new version — need profile ID from file path
   $profileId = $wof.GetProfileIdFromFilePath($sourcePath)
   if ($profileId) {
     $files = New-Object System.Collections.Generic.List[System.Object]
-    $wof.SaveAsNewVersion([ref]$files)
-    $json = @{ success = $true; action = "new_version"; profileId = $profileId } | ConvertTo-Json -Compress
+    $entry = New-IManageQueryFile($profileId)
+    $files.Add($entry)
+    try {
+      $wof.SaveAsNewVersion([ref]$files, $sourcePath, ${showDialogPs})
+    } catch {
+      try {
+        $wof.SaveAsNewVersion([ref]$files, $sourcePath)
+      } catch {
+        $wof.SaveAsNewVersion([ref]$files)
+      }
+    }
+    $saved = @()
+    foreach ($f in $files) {
+      $saved += @{
+        name = $f.Name
+        number = $f.Number
+        version = $f.Version
+      }
+    }
+    $json = @{ success = $true; action = "new_version"; profileId = $profileId; files = $saved } | ConvertTo-Json -Compress -Depth 4
     Write-Output "###JSON_START###$json###JSON_END###"
   } else {
     Write-Output '###JSON_START###{"error":"Could not find iManage profile for this file. Try saving as new document instead."}###JSON_END###'
@@ -3507,7 +3757,11 @@ try {
   ` : `
   # Save as new document — use SaveAsFiles with dialog
   $files = New-Object System.Collections.Generic.List[System.Object]
-  $wof.SaveAsFiles([ref]$files, $sourcePath)
+  try {
+    $wof.SaveAsFiles([ref]$files, $sourcePath, ${showDialogPs})
+  } catch {
+    $wof.SaveAsFiles([ref]$files, $sourcePath)
+  }
   $results = @()
   foreach ($f in $files) {
     $results += @{
@@ -3527,27 +3781,46 @@ try {
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
-  return { success: true, ...result.data };
+  const data = result.data && typeof result.data === 'object' ? result.data : {};
+  if (Array.isArray(data.files)) {
+    data.files = normalizeIManageArrayPayload(data.files, 'files');
+  }
+  return { success: true, ...data };
 }
 
 async function imanageGetVersions(profileId) {
-  const escapedId = String(profileId).replace(/'/g, "''");
+  const normalizedProfileId = normalizeIManageProfileId(profileId);
+  if (!normalizedProfileId) {
+    return { success: false, error: 'A valid iManage profile ID is required.' };
+  }
+  const escapedId = String(normalizedProfileId).replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
-  if (-not (Test-IManageInstalled $wof)) {
-    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
-    exit 0
-  }
   Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
-  # Create a file entry with the profile ID
-  $file = New-Object PSObject -Property @{ Number = '${escapedId}' }
-  $files.Add($file)
-  $wof.GetAllVersions([ref]$files)
+  $queryFile = New-IManageQueryFile('${escapedId}')
+  $files.Add($queryFile)
+  try {
+    $wof.FindProfiles([ref]$files)
+  } catch {
+    # Continue with direct profile ID fallback.
+  }
+  if ($files.Count -eq 0) {
+    $files.Add($queryFile)
+  }
+  try {
+    $wof.GetAllVersions([ref]$files)
+  } catch {
+    $files = New-Object System.Collections.Generic.List[System.Object]
+    $fallback = New-Object PSObject -Property @{ Number = '${escapedId}' }
+    $files.Add($fallback)
+    $wof.GetAllVersions([ref]$files)
+  }
   $results = @()
   foreach ($f in $files) {
+    if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
     $results += @{
       name = $f.Name
       number = $f.Number
@@ -3556,6 +3829,9 @@ try {
       date = $f.Date
       description = $f.Description
     }
+  }
+  if ($results.Count -eq 0) {
+    throw "No versions were returned by iManage for profile ${escapedId}."
   }
   $json = $results | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -3567,36 +3843,124 @@ try {
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
-  return { success: true, versions: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
+  return { success: true, versions: normalizeIManageArrayPayload(result.data, 'versions') };
 }
 
-async function imanageCheckout(profileId, checkoutPath) {
-  const escapedId = String(profileId).replace(/'/g, "''");
-  const escapedCheckoutPath = checkoutPath ? checkoutPath.replace(/'/g, "''") : '';
+async function imanageCheckout(profileId, checkoutPath, version = null) {
+  const normalizedProfileId = normalizeIManageProfileId(profileId);
+  if (!normalizedProfileId) {
+    return { success: false, error: 'A valid iManage profile ID is required for checkout.' };
+  }
+
+  const escapedId = String(normalizedProfileId).replace(/'/g, "''");
+  const normalizedCheckoutPath = normalizeLocalPath(checkoutPath || '');
+  const escapedCheckoutPath = normalizedCheckoutPath ? normalizedCheckoutPath.replace(/'/g, "''") : '';
+  const versionNumber = parseIManageVersionNumber(version);
+  const versionBlock = versionNumber !== null
+    ? `Version = ${versionNumber}`
+    : '';
+  const applyVersionBlock = versionNumber !== null
+    ? `
+  foreach ($f in $files) {
+    try { $f.Version = ${versionNumber} } catch { }
+  }`
+    : '';
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
-  if (-not (Test-IManageInstalled $wof)) {
-    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
-    exit 0
-  }
   Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
-  $file = New-Object PSObject -Property @{ Number = '${escapedId}' }
-  $files.Add($file)
+  $queryFile = New-Object PSObject -Property @{
+    Number = '${escapedId}'
+    ${versionBlock}
+  }
+  $files.Add($queryFile)
+  try {
+    $wof.FindProfiles([ref]$files)
+  } catch {
+    # Continue with direct profile object fallback.
+  }
+  if ($files.Count -eq 0) {
+    $files.Add($queryFile)
+  }
+  ${applyVersionBlock}
   $checkoutDir = '${escapedCheckoutPath}'
   if (-not $checkoutDir) { $checkoutDir = [System.IO.Path]::GetTempPath() }
-  $wof.CheckOutFiles([ref]$files, $checkoutDir)
+  try {
+    $wof.CheckOutFiles([ref]$files, $checkoutDir)
+  } catch {
+    $files = New-Object System.Collections.Generic.List[System.Object]
+    $fallback = New-Object PSObject -Property @{
+      Number = '${escapedId}'
+      ${versionBlock}
+    }
+    $files.Add($fallback)
+    $wof.CheckOutFiles([ref]$files, $checkoutDir)
+  }
+  $results = @()
+  foreach ($f in $files) {
+    if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
+    $results += @{
+      name = $f.Name
+      number = $f.Number
+      path = $f.Path
+      version = $f.Version
+    }
+  }
+  if ($results.Count -eq 0) {
+    throw "iManage checkout returned no files for profile ${escapedId}."
+  }
+  $json = @{ success = $true; files = $results; requested_version = ${versionNumber === null ? '""' : versionNumber} } | ConvertTo-Json -Compress -Depth 4
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
+}
+  `;
+  const result = await imanageRunPowerShell(script);
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
+  const data = result.data && typeof result.data === 'object' ? result.data : {};
+  return {
+    success: true,
+    ...data,
+    files: normalizeIManageArrayPayload(data.files, 'files')
+  };
+}
+
+async function imanageCheckin(filePath) {
+  const resolvedPath = resolveExistingLocalPath(filePath);
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    return { success: false, error: 'Local file was not found for iManage check-in.' };
+  }
+  const escapedPath = resolvedPath.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = Get-IManageWorkObjectFactory
+  Ensure-IManageLogin $wof
+  $sourcePath = '${escapedPath}'
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  try {
+    $wof.CheckInFiles([ref]$files, $sourcePath)
+  } catch {
+    try {
+      $wof.CheckInFiles($sourcePath)
+    } catch {
+      throw $_
+    }
+  }
   $results = @()
   foreach ($f in $files) {
     $results += @{
       name = $f.Name
       number = $f.Number
+      version = $f.Version
       path = $f.Path
     }
   }
-  $json = @{ success = $true; files = $results } | ConvertTo-Json -Compress -Depth 3
+  $json = @{ success = $true; message = "File checked in successfully"; files = $results } | ConvertTo-Json -Compress -Depth 4
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
@@ -3606,53 +3970,32 @@ try {
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
-  return { success: true, ...result.data };
-}
-
-async function imanageCheckin(filePath) {
-  const escapedPath = filePath.replace(/'/g, "''");
-  const script = `
-$ErrorActionPreference = 'Stop'
-try {
-  $wof = Get-IManageWorkObjectFactory
-  if (-not (Test-IManageInstalled $wof)) {
-    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
-    exit 0
-  }
-  Ensure-IManageLogin $wof
-  $sourcePath = '${escapedPath}'
-  $files = New-Object System.Collections.Generic.List[System.Object]
-  $wof.CheckInFiles([ref]$files, $sourcePath)
-  $json = @{ success = $true; message = "File checked in successfully" } | ConvertTo-Json -Compress
-  Write-Output "###JSON_START###$json###JSON_END###"
-} catch {
-  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
-  Write-Output "###JSON_START###$json###JSON_END###"
-}
-  `;
-  const result = await imanageRunPowerShell(script);
-  const failure = normalizeIManageFailure(result);
-  if (failure) return failure;
-  return { success: true, message: 'File checked in successfully.' };
+  const data = result.data && typeof result.data === 'object' ? result.data : {};
+  return {
+    success: true,
+    message: data.message || 'File checked in successfully.',
+    files: normalizeIManageArrayPayload(data.files, 'files')
+  };
 }
 
 async function imanageSearch(query) {
-  const escapedQuery = String(query).replace(/'/g, "''");
+  const normalizedQuery = String(query || '').trim();
+  if (!normalizedQuery) {
+    return { success: false, error: 'A search query is required for iManage search.' };
+  }
+  const escapedQuery = normalizedQuery.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
-  if (-not (Test-IManageInstalled $wof)) {
-    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
-    exit 0
-  }
   Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
-  $searchFile = New-Object PSObject -Property @{ Description = '${escapedQuery}' }
+  $searchFile = New-IManageQueryFile('${escapedQuery}')
   $files.Add($searchFile)
   $wof.FindProfiles([ref]$files)
   $results = @()
   foreach ($f in $files) {
+    if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
     $results += @{
       name = $f.Name
       number = $f.Number
@@ -3672,13 +4015,290 @@ try {
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
-  return { success: true, files: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
+  return { success: true, files: normalizeIManageArrayPayload(result.data, 'files') };
+}
+
+async function extractChecklistDocumentNames(checklistPath) {
+  const resolvedChecklistPath = resolveExistingLocalPath(checklistPath);
+  if (!resolvedChecklistPath || !fs.existsSync(resolvedChecklistPath)) {
+    return {
+      success: false,
+      error: 'Checklist file not found. Attach a valid .docx checklist and retry.'
+    };
+  }
+
+  const moduleName = 'checklist_docname_extractor';
+  const processorPath = getProcessorPath(moduleName);
+  const usePackagedProcessor = !!(processorPath && app.isPackaged);
+
+  if (usePackagedProcessor && !fs.existsSync(processorPath)) {
+    return { success: false, error: `Processor not found: ${processorPath}` };
+  }
+
+  return new Promise((resolve) => {
+    const command = usePackagedProcessor
+      ? processorPath
+      : (process.platform === 'win32' ? 'python' : 'python3');
+    const args = usePackagedProcessor
+      ? [moduleName, resolvedChecklistPath]
+      : [path.join(__dirname, 'python', 'checklist_docname_extractor.py'), resolvedChecklistPath];
+
+    const proc = spawnTracked(command, args, { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (code !== 0 && !stdout.trim()) {
+        resolve({
+          success: false,
+          error: String(stderr || `Checklist extractor exited with code ${code}`).trim()
+        });
+        return;
+      }
+
+      const parsed = parseProcessorJsonOutput(stdout);
+      if (!parsed || typeof parsed !== 'object') {
+        resolve({
+          success: false,
+          error: `Failed to parse checklist extraction output.${stderr ? ` ${String(stderr).trim()}` : ''}`
+        });
+        return;
+      }
+
+      if (!parsed.success) {
+        resolve({
+          success: false,
+          error: parsed.error || 'Checklist extractor failed.'
+        });
+        return;
+      }
+
+      const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+      const items = rawItems
+        .map((item) => ({
+          row_id: Number.isFinite(Number(item && item.row_id)) ? Number(item.row_id) : null,
+          document_name: String(item && item.document_name || '').trim(),
+          row_context: String(item && item.row_context || '').trim()
+        }))
+        .filter((item) => item.document_name);
+
+      resolve({
+        success: true,
+        count: items.length,
+        items
+      });
+    });
+
+    proc.on('error', (err) => {
+      resolve({
+        success: false,
+        error: `Failed to launch checklist extractor: ${err.message}`
+      });
+    });
+  });
+}
+
+async function runAgentChecklistPrecedentRedlines(config = {}) {
+  if (process.platform !== 'win32') {
+    return {
+      success: false,
+      error: 'This workflow requires Windows because iManage desktop integration is Windows-only.'
+    };
+  }
+
+  const checklistPath = resolveExistingLocalPath(config.checklistPath || config.checklist_path || '');
+  if (!checklistPath || !fs.existsSync(checklistPath)) {
+    return { success: false, error: 'Checklist file not found. Attach a checklist DOCX and retry.' };
+  }
+
+  const extraction = await extractChecklistDocumentNames(checklistPath);
+  if (!extraction.success) {
+    return { success: false, error: extraction.error || 'Failed to parse checklist document names.' };
+  }
+
+  const rawItems = Array.isArray(extraction.items) ? extraction.items : [];
+  if (!rawItems.length) {
+    return {
+      success: false,
+      error: 'No document names were found in the checklist. Confirm the checklist has a document table.'
+    };
+  }
+
+  const requestedMaxItems = Number(config.maxItems ?? config.max_items ?? 40);
+  const maxItems = Number.isFinite(requestedMaxItems)
+    ? Math.max(1, Math.min(Math.round(requestedMaxItems), 150))
+    : 40;
+  const items = rawItems.slice(0, maxItems);
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const defaultOutputRoot = path.join(
+    app.getPath('downloads'),
+    `EmmaNeigh_Checklist_Redlines_${timestamp}`
+  );
+  const outputRoot = normalizeLocalPath(config.outputFolder || config.output_folder || defaultOutputRoot);
+  fs.mkdirSync(outputRoot, { recursive: true });
+
+  const checkoutRoot = path.join(app.getPath('temp'), `emmaneigh_checklist_imanage_${Date.now()}`);
+  fs.mkdirSync(checkoutRoot, { recursive: true });
+
+  const literaPath = findLiteraInstallation();
+  if (!literaPath) {
+    return {
+      success: false,
+      error: 'Litera Compare is not installed on this machine. This workflow requires Litera for full-document redlines.'
+    };
+  }
+
+  const literaOptions = {
+    output_format: 'pdf',
+    change_pages_only: false
+  };
+
+  const results = [];
+  let successCount = 0;
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    const docName = String(item.document_name || '').trim();
+    const resultBase = {
+      row_id: item.row_id,
+      document_name: docName,
+      index: i + 1
+    };
+
+    if (mainWindow && mainWindow.webContents) {
+      const pct = Math.min(95, 5 + Math.round((i / Math.max(items.length, 1)) * 85));
+      mainWindow.webContents.send('redline-progress', {
+        percent: pct,
+        message: `Checklist redline ${i + 1}/${items.length}: ${docName || 'Document'}`
+      });
+    }
+
+    try {
+      const searchResult = await imanageSearch(docName);
+      if (!searchResult.success) {
+        throw new Error(searchResult.error || 'iManage search failed.');
+      }
+
+      const bestMatch = pickBestIManageSearchMatch(docName, searchResult.files || []);
+      if (!bestMatch || !bestMatch.number) {
+        throw new Error('No matching iManage document was found.');
+      }
+
+      const profileId = String(bestMatch.number).trim();
+      const versionsResult = await imanageGetVersions(profileId);
+      if (!versionsResult.success) {
+        throw new Error(versionsResult.error || `Failed to retrieve versions for ${profileId}.`);
+      }
+
+      const selectedVersions = pickIManagePrecedentAndCurrentVersions(versionsResult.versions || []);
+      if (!selectedVersions || !selectedVersions.precedent || !selectedVersions.latest) {
+        throw new Error(`No usable versions were found for profile ${profileId}.`);
+      }
+
+      if (selectedVersions.precedent.version_number === selectedVersions.latest.version_number) {
+        throw new Error(`Only one version exists for profile ${profileId}; cannot redline against V1.`);
+      }
+
+      const itemFolder = path.join(checkoutRoot, `${String(i + 1).padStart(3, '0')}_${sanitizeFileStem(docName, 'document')}`);
+      const precedentFolder = path.join(itemFolder, 'precedent_v1');
+      const currentFolder = path.join(itemFolder, 'current_latest');
+      fs.mkdirSync(precedentFolder, { recursive: true });
+      fs.mkdirSync(currentFolder, { recursive: true });
+
+      const precedentCheckout = await imanageCheckout(profileId, precedentFolder, selectedVersions.precedent.version_number);
+      if (!precedentCheckout.success) {
+        throw new Error(precedentCheckout.error || `Failed to check out V${selectedVersions.precedent.version_number}.`);
+      }
+
+      const currentCheckout = await imanageCheckout(profileId, currentFolder, selectedVersions.latest.version_number);
+      if (!currentCheckout.success) {
+        throw new Error(currentCheckout.error || `Failed to check out V${selectedVersions.latest.version_number}.`);
+      }
+
+      const precedentPath = resolveIManageCheckoutFilePath(precedentCheckout, precedentFolder, bestMatch.name || docName);
+      const currentPath = resolveIManageCheckoutFilePath(currentCheckout, currentFolder, bestMatch.name || docName);
+      if (!precedentPath || !fs.existsSync(precedentPath)) {
+        throw new Error('Could not locate the checked-out V1 file on disk.');
+      }
+      if (!currentPath || !fs.existsSync(currentPath)) {
+        throw new Error('Could not locate the checked-out latest file on disk.');
+      }
+
+      const outputExt = getLiteraOutputExtension(precedentPath, literaOptions);
+      const outputPath = path.join(
+        outputRoot,
+        buildRedlineOutputFilename(precedentPath, currentPath, outputExt)
+      );
+
+      const redlineResult = await runLiteraComparison(
+        precedentPath,
+        currentPath,
+        outputPath,
+        literaOptions
+      );
+      if (!redlineResult || !redlineResult.success) {
+        throw new Error((redlineResult && redlineResult.error) || 'Litera redline failed.');
+      }
+
+      successCount += 1;
+      results.push({
+        ...resultBase,
+        success: true,
+        profile_id: profileId,
+        profile_name: bestMatch.name || '',
+        precedent_version: selectedVersions.precedent.version_number,
+        current_version: selectedVersions.latest.version_number,
+        output_path: redlineResult.output_path
+      });
+    } catch (err) {
+      results.push({
+        ...resultBase,
+        success: false,
+        error: err.message
+      });
+    }
+  }
+
+  const failedCount = results.length - successCount;
+  const summaryMessage = `Completed checklist precedent redlines: ${successCount}/${results.length} succeeded.`;
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('redline-progress', {
+      percent: 100,
+      message: summaryMessage
+    });
+  }
+
+  return {
+    success: successCount > 0,
+    output_folder: outputRoot,
+    total_items: results.length,
+    successful: successCount,
+    failed: failedCount,
+    results,
+    message: summaryMessage
+  };
 }
 
 // ========== COMMAND TOOL DISPATCHER ==========
 
 function getToolUsageEvent(toolName, input = {}, toolResult = null) {
   const result = toolResult && typeof toolResult === 'object' ? toolResult : {};
+  if (toolName === 'run_checklist_precedent_redlines') {
+    const total = Number(result.total_items || 0);
+    const successful = Number(result.successful || 0);
+    return {
+      feature: 'redline',
+      action: 'agent_checklist_precedent_batch',
+      input_count: total > 0 ? total : 1,
+      output_count: successful > 0 ? successful : 0,
+      engine: 'litera'
+    };
+  }
+
   if (String(toolName || '').startsWith('imanage_')) {
     const action = String(toolName).replace('imanage_', '') || 'action';
     const outputCount = Array.isArray(result.files) ? result.files.length
@@ -3726,11 +4346,19 @@ async function dispatchTool(toolName, input, session = {}) {
     }
 
     case 'imanage_get_versions':
+      if (!safeInput.profile_id) {
+        result = { success: false, error: 'profile_id is required for iManage version lookup.' };
+        break;
+      }
       result = await imanageGetVersions(safeInput.profile_id);
       break;
 
     case 'imanage_checkout':
-      result = await imanageCheckout(safeInput.profile_id, safeInput.checkout_path);
+      if (!safeInput.profile_id) {
+        result = { success: false, error: 'profile_id is required for iManage checkout.' };
+        break;
+      }
+      result = await imanageCheckout(safeInput.profile_id, safeInput.checkout_path, safeInput.version);
       break;
 
     case 'imanage_checkin': {
@@ -3747,6 +4375,10 @@ async function dispatchTool(toolName, input, session = {}) {
     }
 
     case 'imanage_search':
+      if (!safeInput.query || !String(safeInput.query).trim()) {
+        result = { success: false, error: 'query is required for iManage search.' };
+        break;
+      }
       result = await imanageSearch(safeInput.query);
       break;
 
@@ -3773,6 +4405,32 @@ async function dispatchTool(toolName, input, session = {}) {
         mainWindow.webContents.send('trigger-redline', config);
       }
       result = { success: true, message: `Redline started: comparing documents with ${engine} engine.` };
+      break;
+    }
+
+    case 'run_checklist_precedent_redlines': {
+      const checklistPath = resolveToolFilePath(
+        { file_path: safeInput.checklist_path || safeInput.checklistPath || safeInput.path },
+        loadedFiles,
+        0
+      );
+      if (!checklistPath || !fs.existsSync(checklistPath)) {
+        result = {
+          success: false,
+          error: 'Attach a checklist DOCX in Agent Mode (or pass checklist_path) before running batch precedent redlines.'
+        };
+        break;
+      }
+
+      const maxItems = Number(safeInput.max_items || safeInput.maxItems || 40);
+      result = await runAgentChecklistPrecedentRedlines({
+        checklistPath,
+        maxItems: Number.isFinite(maxItems) ? maxItems : 40
+      });
+
+      if (result.success && result.output_folder) {
+        result.message = `${result.message || 'Checklist precedent redlines completed.'} Output: ${result.output_folder}`;
+      }
       break;
     }
 
@@ -6129,11 +6787,47 @@ Current state:
 - Available tabs: Signature Packets, Packet Shell, Execution, Signature Blocks, Time Tracking, Email Search, Update Checklist, Punchlist Generator, Collate Comments, Redline Documents
 
 When the user asks you to perform an action (save to iManage, open a file, navigate, run a redline, etc.), use the appropriate tool.
+You can use tools across multiple steps in one request until the task is complete.
+For checklist-driven precedent workflows, you can use the batch checklist precedent redline tool.
 When they ask a question or want advice, respond with helpful text.
 Keep responses concise and practical.
 ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the user asks for iManage features, let them know.' : ''}`;
 
-    // Call Claude API with tool use
+    const session = context && typeof context === 'object'
+      ? {
+          actor: context.actor || {},
+          loadedFiles: context.loadedFiles || []
+        }
+      : { actor: {}, loadedFiles: [] };
+
+    const formatToolSummary = (toolName, toolResult) => {
+      const toolLabel = String(toolName || 'tool')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+      if (!toolResult || typeof toolResult !== 'object') {
+        return `- ${toolLabel}: no result returned.`;
+      }
+
+      if (!toolResult.success) {
+        return `- ${toolLabel}: failed (${toolResult.error || 'unknown error'}).`;
+      }
+
+      if (toolResult.message) {
+        return `- ${toolLabel}: ${toolResult.message}`;
+      }
+      if (Array.isArray(toolResult.files)) {
+        return `- ${toolLabel}: ${toolResult.files.length} file(s) returned.`;
+      }
+      if (Array.isArray(toolResult.versions)) {
+        return `- ${toolLabel}: ${toolResult.versions.length} version(s) returned.`;
+      }
+      if (toolResult.output_folder) {
+        return `- ${toolLabel}: completed. Output folder: ${toolResult.output_folder}`;
+      }
+      return `- ${toolLabel}: completed.`;
+    };
+
+    // Call Claude API with iterative tool use
     const modelCandidates = [
       getClaudeModel(),
       DEFAULT_CLAUDE_MODEL,
@@ -6141,98 +6835,120 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
     ];
 
     let lastResponse = null;
+    const maxToolTurns = 8;
     for (const modelName of modelCandidates) {
-      const response = await requestHttps({
-        baseUrl: 'https://api.anthropic.com',
-        path: '/v1/messages',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: modelName,
-          max_tokens: 1024,
-          system: systemPrompt,
-          tools: COMMAND_TOOLS,
-          messages: [{ role: 'user', content: prompt }]
-        }),
-        timeoutMs: 30000
-      });
+      let messages = [{ role: 'user', content: prompt }];
+      let lastToolName = null;
+      let lastToolInput = null;
+      let lastToolResult = null;
+      const conversationParts = [];
+      let modelUnavailable = false;
 
-      lastResponse = response;
+      for (let turn = 0; turn < maxToolTurns; turn += 1) {
+        const response = await requestHttps({
+          baseUrl: 'https://api.anthropic.com',
+          path: '/v1/messages',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: modelName,
+            max_tokens: 1200,
+            system: systemPrompt,
+            tools: COMMAND_TOOLS,
+            messages
+          }),
+          timeoutMs: 30000
+        });
 
-      if (response.statusCode !== 200) {
-        if (isLikelyModelError(response)) continue;
-        return {
-          success: false,
-          error: `Claude API error (${response.statusCode}): ${getErrorDetail(response)}`
-        };
-      }
+        lastResponse = response;
 
-      // Parse the response
-      const content = response.jsonBody?.content || [];
-      const toolUse = content.find(c => c.type === 'tool_use');
-      const textBlock = content.find(c => c.type === 'text');
-
-      if (toolUse) {
-        // Dispatch the tool call
-        console.log(`[execute-command] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
-        const session = context && typeof context === 'object'
-          ? {
-              actor: context.actor || {},
-              loadedFiles: context.loadedFiles || []
-            }
-          : { actor: {}, loadedFiles: [] };
-        const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
-
-        // Build a user-friendly response
-        const toolLabel = toolUse.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        let resultMessage = '';
-        if (toolResult.success) {
-          resultMessage = toolResult.message || `✅ ${toolLabel} completed successfully.`;
-          if (toolResult.files && toolResult.files.length > 0) {
-            resultMessage += '\n\nFiles:\n' + toolResult.files.map(f =>
-              `• ${f.name || f.number || 'Unknown'}${f.version ? ` (v${f.version})` : ''}${f.description ? ` — ${f.description}` : ''}`
-            ).join('\n');
+        if (response.statusCode !== 200) {
+          if (isLikelyModelError(response)) {
+            modelUnavailable = true;
+            break;
           }
-          if (toolResult.versions && toolResult.versions.length > 0) {
-            resultMessage += '\n\nVersions:\n' + toolResult.versions.map(v =>
-              `• v${v.version || '?'} by ${v.author || 'Unknown'}${v.date ? ` on ${v.date}` : ''}${v.description ? ` — ${v.description}` : ''}`
-            ).join('\n');
-          }
-        } else {
-          resultMessage = `❌ ${toolLabel} failed: ${toolResult.error || 'Unknown error'}`;
+          return {
+            success: false,
+            error: `Claude API error (${response.statusCode}): ${getErrorDetail(response)}`
+          };
         }
 
-        // If Claude also provided text context, prepend it
-        const claudeText = textBlock ? textBlock.text : '';
+        const content = Array.isArray(response.jsonBody?.content) ? response.jsonBody.content : [];
+        const textBlocks = content.filter((part) => part && part.type === 'text' && part.text);
+        if (textBlocks.length > 0) {
+          const text = textBlocks.map((part) => String(part.text || '').trim()).filter(Boolean).join('\n');
+          if (text) conversationParts.push(text);
+        }
 
-        return {
-          success: true,
-          type: 'tool_result',
-          tool: toolUse.name,
-          input: toolUse.input,
-          toolResult,
-          message: claudeText ? `${claudeText}\n\n${resultMessage}` : resultMessage,
-          modelUsed: modelName
-        };
-      } else if (textBlock) {
-        return {
-          success: true,
-          type: 'text',
-          message: textBlock.text,
-          modelUsed: modelName
-        };
-      } else {
-        return {
-          success: true,
-          type: 'text',
-          message: 'Command received but no actionable response was generated.',
-          modelUsed: modelName
-        };
+        const toolUses = content.filter((part) => part && part.type === 'tool_use' && part.name);
+        if (!toolUses.length) {
+          const finalText = conversationParts.join('\n\n').trim();
+          return {
+            success: true,
+            type: lastToolName ? 'tool_result' : 'text',
+            tool: lastToolName,
+            input: lastToolInput,
+            toolResult: lastToolResult,
+            message: finalText || 'Command received but no actionable response was generated.',
+            modelUsed: modelName
+          };
+        }
+
+        messages.push({ role: 'assistant', content });
+        const toolResultBlocks = [];
+        const toolSummaries = [];
+
+        for (const toolUse of toolUses) {
+          console.log(`[execute-command] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
+          const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
+          lastToolName = toolUse.name;
+          lastToolInput = toolUse.input;
+          lastToolResult = toolResult;
+
+          let serialized = '{}';
+          try {
+            serialized = JSON.stringify(toolResult);
+          } catch (_) {
+            serialized = JSON.stringify({
+              success: false,
+              error: 'Tool result could not be serialized.'
+            });
+          }
+
+          toolResultBlocks.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: serialized,
+            is_error: !toolResult || toolResult.success !== true
+          });
+          toolSummaries.push(formatToolSummary(toolUse.name, toolResult));
+        }
+
+        if (toolSummaries.length > 0) {
+          conversationParts.push(`Executed tools:\n${toolSummaries.join('\n')}`);
+        }
+
+        messages.push({ role: 'user', content: toolResultBlocks });
       }
+
+      if (modelUnavailable) {
+        continue;
+      }
+
+      const fallbackText = conversationParts.join('\n\n').trim() || 'Command ran, but the model reached the tool-step limit before finishing.';
+      return {
+        success: true,
+        type: lastToolName ? 'tool_result' : 'text',
+        tool: lastToolName,
+        input: lastToolInput,
+        toolResult: lastToolResult,
+        message: fallbackText,
+        modelUsed: modelName
+      };
     }
 
     return {
@@ -6242,6 +6958,39 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
   } catch (e) {
     console.error('[execute-command] Error:', e);
     return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('agent-checklist-precedent-redlines', async (event, payload) => {
+  try {
+    const startedAt = Date.now();
+    const actor = payload && typeof payload === 'object' ? (payload.actor || {}) : {};
+    const result = await runAgentChecklistPrecedentRedlines(payload || {});
+
+    try {
+      const usageLogged = await recordUsageEvent({
+        user_name: actor?.username || actor?.name || actor?.displayName || 'unknown',
+        user_email: actor?.email || '',
+        feature: 'redline',
+        action: 'agent_checklist_precedent_batch',
+        input_count: Number(result && result.total_items ? result.total_items : 0),
+        output_count: Number(result && result.successful ? result.successful : 0),
+        duration_ms: Date.now() - startedAt,
+        engine: 'litera'
+      });
+      if (!usageLogged.success) {
+        console.warn(`Batch precedent redline usage logging failed: ${usageLogged.error || 'unknown error'}`);
+      }
+    } catch (logErr) {
+      console.warn(`Batch precedent redline usage logging threw: ${logErr.message}`);
+    }
+
+    return result;
+  } catch (e) {
+    return {
+      success: false,
+      error: e.message
+    };
   }
 });
 

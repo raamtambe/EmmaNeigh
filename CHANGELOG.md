@@ -4,6 +4,20 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 ---
 
+## [5.4.3] - 2026-03-05
+
+### Fixed
+- Hardened iManage COM/PowerShell execution and error parsing to reduce false negatives and JSON parsing failures.
+- Added stricter iManage input validation for profile IDs, search queries, checkout/check-in paths, and save targets.
+- Added iManage method-signature fallbacks for `SaveAsFiles`, `SaveAsNewVersion`, `CheckOutFiles`, and `CheckInFiles` for broader desktop compatibility.
+- Improved iManage search/version/checkout result filtering to avoid returning synthetic query objects as real files.
+
+### Changed
+- Added version-aware checkout support in iManage tool calls for more reliable precedent/latest retrieval.
+- Added `checklist_docname_extractor` to bundled processor imports in release workflows.
+
+---
+
 ## [5.2.0] - 2026-02-19
 
 ### Fixed
@@ -106,6 +120,7 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 5.4.3 | 2026-03-05 | iManage integration hardening: COM fallback handling, validation, checkout/save/check-in compatibility fixes |
 | 5.2.0 | 2026-02-19 | Fixed startup failure by explicitly including `archiver-utils` |
 | 5.0.1 | 2026-02-09 | Format preservation (DOCX in = DOCX out) |
 | 5.0.0 | 2026-02-09 | Major UI redesign, email/time tracking, history |
