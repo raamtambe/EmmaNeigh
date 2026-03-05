@@ -6,6 +6,7 @@ const archiver = require('archiver');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const os = require('os');
+const { fileURLToPath } = require('url');
 let initFirebase = () => false;
 let loadFirebaseConfig = () => null;
 let saveFirebaseConfig = () => false;
@@ -62,6 +63,131 @@ const FEEDBACK_ADMIN_USERNAMES = new Set(
     .map((value) => String(value || '').trim().toLowerCase())
     .filter(Boolean)
 );
+
+const trackedChildProcesses = new Map();
+let trackedProcessCounter = 0;
+const rawSpawn = spawn;
+
+function spawnTracked(command, args = [], options = {}) {
+  const proc = rawSpawn(command, args, options);
+  const id = ++trackedProcessCounter;
+  trackedChildProcesses.set(id, {
+    pid: proc.pid,
+    command: String(command || ''),
+    startedAt: Date.now(),
+    proc
+  });
+  const cleanup = () => trackedChildProcesses.delete(id);
+  proc.once('close', cleanup);
+  proc.once('exit', cleanup);
+  proc.once('error', cleanup);
+  return proc;
+}
+
+function terminateTrackedProcess(entry) {
+  if (!entry || !entry.proc) return false;
+  const target = entry.proc;
+  if (target.killed) return true;
+  try {
+    if (process.platform === 'win32' && entry.pid) {
+      // Kill child tree on Windows to ensure PowerShell/Litera/python descendants are terminated.
+      spawnSync('taskkill', ['/PID', String(entry.pid), '/T', '/F'], { windowsHide: true });
+      return true;
+    }
+    target.kill('SIGKILL');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function normalizeLocalPath(rawValue) {
+  if (rawValue === null || rawValue === undefined) return '';
+  let value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  value = String(value || '').trim();
+  if (!value) return '';
+
+  // Strip wrapping quotes from copy-pasted paths.
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1).trim();
+  }
+
+  if (!value) return '';
+  if (/^file:\/\//i.test(value)) {
+    try {
+      value = fileURLToPath(value);
+    } catch (_) {
+      value = value.replace(/^file:\/+/, '');
+      try {
+        value = decodeURIComponent(value);
+      } catch (_) {}
+    }
+  }
+
+  return path.normalize(value);
+}
+
+function resolveExistingLocalPath(rawValue) {
+  const normalized = normalizeLocalPath(rawValue);
+  if (!normalized) return '';
+  const candidates = [
+    normalized,
+    normalized.replace(/\//g, path.sep),
+    normalized.replace(/\\/g, path.sep)
+  ];
+  try {
+    const decoded = decodeURIComponent(normalized);
+    candidates.push(decoded, decoded.replace(/\//g, path.sep), decoded.replace(/\\/g, path.sep));
+  } catch (_) {}
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const c = String(candidate || '').trim();
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    if (fs.existsSync(c)) return c;
+  }
+
+  return normalized;
+}
+
+function normalizeToolLoadedFiles(loadedFiles = []) {
+  if (!Array.isArray(loadedFiles)) return [];
+  return loadedFiles
+    .map((file) => {
+      const rawPath = resolveExistingLocalPath(file && file.path);
+      const nameFromPath = rawPath ? path.basename(rawPath) : '';
+      const rawName = String((file && file.name) || nameFromPath || '').trim();
+      const name = rawName || nameFromPath;
+      const lowerName = String(name || '').toLowerCase();
+      return rawPath ? {
+        path: rawPath,
+        name,
+        lowerName
+      } : null;
+    })
+    .filter(Boolean);
+}
+
+function resolveToolFilePath(input = {}, loadedFiles = [], preferredIndex = 0) {
+  const explicitPath = resolveExistingLocalPath(input.file_path || input.path || '');
+  if (explicitPath && fs.existsSync(explicitPath)) return explicitPath;
+
+  const normalizedLoaded = normalizeToolLoadedFiles(loadedFiles);
+  const hintedName = String(input.file_name || input.filename || input.name || '').trim().toLowerCase();
+  if (hintedName) {
+    const match = normalizedLoaded.find((item) =>
+      item.lowerName === hintedName || item.lowerName.includes(hintedName) || hintedName.includes(item.lowerName)
+    );
+    if (match) return match.path;
+  }
+
+  if (normalizedLoaded[preferredIndex]) {
+    return normalizedLoaded[preferredIndex].path;
+  }
+
+  return '';
+}
 
 function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
@@ -2308,7 +2434,7 @@ ipcMain.handle('process-folder', async (event, input) => {
       return;
     }
 
-    const proc = spawn(processorPath, [moduleName, ...args]);
+    const proc = spawnTracked(processorPath, [moduleName, ...args]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2465,7 +2591,7 @@ ipcMain.handle('generate-packet-shell', async (event, input) => {
     }));
 
     const args = ['--config', configPath];
-    const proc = spawn(processorPath, [moduleName, ...args]);
+    const proc = spawnTracked(processorPath, [moduleName, ...args]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2575,7 +2701,7 @@ ipcMain.handle('parse-checklist', async (event, checklistPath) => {
       try { fs.chmodSync(processorPath, '755'); } catch (e) {}
     }
 
-    const proc = spawn(processorPath, [moduleName, checklistPath]);
+    const proc = spawnTracked(processorPath, [moduleName, checklistPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2626,7 +2752,7 @@ ipcMain.handle('parse-incumbency', async (event, incPath) => {
       try { fs.chmodSync(processorPath, '755'); } catch (e) {}
     }
 
-    const proc = spawn(processorPath, [moduleName, incPath]);
+    const proc = spawnTracked(processorPath, [moduleName, incPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2679,7 +2805,7 @@ ipcMain.handle('process-sigblocks', async (event, config) => {
     const configPath = path.join(app.getPath('temp'), `sigblock-config-${Date.now()}.json`);
     fs.writeFileSync(configPath, JSON.stringify(config));
 
-    const proc = spawn(processorPath, [moduleName, configPath]);
+    const proc = spawnTracked(processorPath, [moduleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2768,7 +2894,7 @@ ipcMain.handle('process-execution-version', async (event, originalsInput, signed
       return;
     }
 
-    const proc = spawn(processorPath, [moduleName, ...args]);
+    const proc = spawnTracked(processorPath, [moduleName, ...args]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -2859,7 +2985,7 @@ ipcMain.handle('collate-documents', async (event, config) => {
     const configPath = path.join(app.getPath('temp'), `collate-config-${Date.now()}.json`);
     fs.writeFileSync(configPath, JSON.stringify(config));
 
-    const proc = spawn(processorPath, [moduleName, configPath]);
+    const proc = spawnTracked(processorPath, [moduleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -3033,7 +3159,7 @@ function imanageRunPowerShell(scriptContent) {
     const scriptPath = path.join(tmpDir, `emmaneigh_imanage_${Date.now()}.ps1`);
     fs.writeFileSync(scriptPath, scriptContent, 'utf8');
 
-    const proc = spawn('powershell.exe', [
+    const proc = spawnTracked('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath
     ]);
 
@@ -3051,15 +3177,33 @@ function imanageRunPowerShell(scriptContent) {
         return;
       }
 
-      // Try to parse JSON output
-      const jsonMatch = stdout.match(/###JSON_START###([\s\S]*?)###JSON_END###/);
+      // Try to parse JSON output from the last marker pair.
+      const matches = Array.from(stdout.matchAll(/###JSON_START###([\s\S]*?)###JSON_END###/g));
+      const jsonMatch = matches.length ? matches[matches.length - 1] : null;
       if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[1].trim());
-          resolve({ success: true, data: parsed });
-        } catch (e) {
-          resolve({ success: false, error: `Failed to parse iManage response: ${e.message}`, stdout: stdout.trim() });
+        const rawPayload = String(jsonMatch[1] || '').replace(/^\uFEFF/, '').trim();
+        const parseCandidates = [rawPayload];
+        const firstJsonToken = rawPayload.search(/[{[]/);
+        if (firstJsonToken > 0) {
+          parseCandidates.push(rawPayload.slice(firstJsonToken).trim());
         }
+
+        for (const candidate of parseCandidates) {
+          if (!candidate) continue;
+          try {
+            const parsed = JSON.parse(candidate);
+            resolve({ success: true, data: parsed });
+            return;
+          } catch (_) {}
+        }
+
+        resolve({
+          success: false,
+          error: 'Failed to parse iManage response payload.',
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          rawPayload
+        });
       } else {
         resolve({ success: true, data: null, stdout: stdout.trim() });
       }
@@ -3102,8 +3246,8 @@ try {
   $json = $results | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
 }
 `;
   const result = await imanageRunPowerShell(script);
@@ -3127,7 +3271,8 @@ try {
   }
   $sourcePath = '${escapedPath}'
   if (-not (Test-Path $sourcePath)) {
-    Write-Output '###JSON_START###{"error":"File not found: ${escapedPath}"}###JSON_END###'
+    $json = @{ error = "File not found: $sourcePath" } | ConvertTo-Json -Compress
+    Write-Output "###JSON_START###$json###JSON_END###"
     exit 0
   }
   ${action === 'new_version' ? `
@@ -3157,8 +3302,8 @@ try {
   Write-Output "###JSON_START###$json###JSON_END###"
   `}
 } catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
 }
 `;
   const result = await imanageRunPowerShell(script);
@@ -3199,8 +3344,8 @@ try {
   $json = $results | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
 }
 `;
   const result = await imanageRunPowerShell(script);
@@ -3240,8 +3385,8 @@ try {
   $json = @{ success = $true; files = $results } | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
 }
 `;
   const result = await imanageRunPowerShell(script);
@@ -3269,8 +3414,8 @@ try {
   $json = @{ success = $true; message = "File checked in successfully" } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
 }
 `;
   const result = await imanageRunPowerShell(script);
@@ -3310,8 +3455,8 @@ try {
   $json = $results | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
 }
 `;
   const result = await imanageRunPowerShell(script);
@@ -3340,41 +3485,77 @@ function getToolUsageEvent(toolName, input = {}, toolResult = null) {
   return null;
 }
 
-async function dispatchTool(toolName, input, actor = {}) {
+async function dispatchTool(toolName, input, session = {}) {
+  const actor = session && typeof session === 'object' ? (session.actor || {}) : {};
+  const loadedFiles = session && typeof session === 'object'
+    ? normalizeToolLoadedFiles(session.loadedFiles || [])
+    : [];
+  const safeInput = input && typeof input === 'object' ? input : {};
   const startedAt = Date.now();
   let result;
   switch (toolName) {
     case 'imanage_browse':
-      result = await imanageBrowseFiles(input.multiple || false);
+      result = await imanageBrowseFiles(safeInput.multiple || false);
       break;
 
-    case 'imanage_save':
-      result = await imanageSaveDocument(input.file_path, input.action || 'new_document', input.show_dialog !== false);
+    case 'imanage_save': {
+      const filePath = resolveToolFilePath(safeInput, loadedFiles, 0);
+      if (!filePath || !fs.existsSync(filePath)) {
+        result = {
+          success: false,
+          error: 'No local file found to save. Attach a document in Agent Mode and retry.'
+        };
+        break;
+      }
+      result = await imanageSaveDocument(
+        filePath,
+        safeInput.action || 'new_document',
+        safeInput.show_dialog !== false
+      );
       break;
+    }
 
     case 'imanage_get_versions':
-      result = await imanageGetVersions(input.profile_id);
+      result = await imanageGetVersions(safeInput.profile_id);
       break;
 
     case 'imanage_checkout':
-      result = await imanageCheckout(input.profile_id, input.checkout_path);
+      result = await imanageCheckout(safeInput.profile_id, safeInput.checkout_path);
       break;
 
-    case 'imanage_checkin':
-      result = await imanageCheckin(input.file_path);
+    case 'imanage_checkin': {
+      const filePath = resolveToolFilePath(safeInput, loadedFiles, 0);
+      if (!filePath || !fs.existsSync(filePath)) {
+        result = {
+          success: false,
+          error: 'No local file found to check in. Attach a local file in Agent Mode and retry.'
+        };
+        break;
+      }
+      result = await imanageCheckin(filePath);
       break;
+    }
 
     case 'imanage_search':
-      result = await imanageSearch(input.query);
+      result = await imanageSearch(safeInput.query);
       break;
 
     case 'run_redline': {
+      const originalPath = resolveToolFilePath({ file_path: safeInput.original }, loadedFiles, 0);
+      const modifiedPath = resolveToolFilePath({ file_path: safeInput.modified }, loadedFiles, 1);
+      if (!originalPath || !modifiedPath || !fs.existsSync(originalPath) || !fs.existsSync(modifiedPath)) {
+        result = {
+          success: false,
+          error: 'Redline needs two valid local files. Attach both documents in Agent Mode and retry.'
+        };
+        break;
+      }
       // Delegate to existing redline-documents handler
-      const engine = input.engine || 'auto';
+      const engine = safeInput.engine || 'auto';
       const config = {
         engine,
-        originalPath: input.original,
-        modifiedPath: input.modified,
+        originalPath,
+        modifiedPath,
         literaOptions: {}
       };
       // Send to renderer to trigger the redline
@@ -3387,22 +3568,28 @@ async function dispatchTool(toolName, input, actor = {}) {
 
     case 'navigate_tab':
       if (mainWindow && mainWindow.webContents) {
-        mainWindow.webContents.send('navigate-tab', input.tab);
+        mainWindow.webContents.send('navigate-tab', safeInput.tab);
       }
-      result = { success: true, message: `Switched to ${input.tab} tab.` };
+      result = { success: true, message: `Switched to ${safeInput.tab} tab.` };
       break;
 
-    case 'open_folder':
-      shell.openPath(input.path);
-      result = { success: true, message: `Opened ${input.path}` };
+    case 'open_folder': {
+      const chosenPath = resolveToolFilePath(safeInput, loadedFiles, 0) || normalizeLocalPath(safeInput.path);
+      if (!chosenPath) {
+        result = { success: false, error: 'No folder or file path was provided.' };
+        break;
+      }
+      shell.openPath(chosenPath);
+      result = { success: true, message: `Opened ${chosenPath}` };
       break;
+    }
 
     case 'search_emails':
       // Delegate to existing nl-search-emails handler — will be called from renderer with email data
       if (mainWindow && mainWindow.webContents) {
-        mainWindow.webContents.send('trigger-email-search', { query: input.query });
+        mainWindow.webContents.send('trigger-email-search', { query: safeInput.query });
       }
-      result = { success: true, message: `Email search started for: ${input.query}` };
+      result = { success: true, message: `Email search started for: ${safeInput.query}` };
       break;
 
     default:
@@ -4659,7 +4846,7 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOpti
       console.log('  Output:', primaryOutputPath);
       console.log('  Style:', styleLabel);
 
-      const proc = spawn(literaExe.exe, args, {
+      const proc = spawnTracked(literaExe.exe, args, {
         cwd: literaInstallPath,
         windowsHide: true
       });
@@ -4814,8 +5001,57 @@ ipcMain.handle('check-litera-installed', async () => {
 
 // ========== REDLINE DOCUMENTS ==========
 
+function normalizeRedlineConfigPaths(config = {}) {
+  const normalized = { ...(config || {}) };
+  if (!normalized.original && normalized.originalPath) {
+    normalized.original = normalized.originalPath;
+  }
+  if (!normalized.modified && normalized.modifiedPath) {
+    normalized.modified = normalized.modifiedPath;
+  }
+  if (normalized.original) normalized.original = resolveExistingLocalPath(normalized.original);
+  if (normalized.modified) normalized.modified = resolveExistingLocalPath(normalized.modified);
+  if (normalized.output) normalized.output = normalizeLocalPath(normalized.output);
+  if (normalized.output_folder) normalized.output_folder = normalizeLocalPath(normalized.output_folder);
+  if (Array.isArray(normalized.pairs)) {
+    normalized.pairs = normalized.pairs.map((pair) => ({
+      ...(pair || {}),
+      original: resolveExistingLocalPath((pair && (pair.original || pair.originalPath)) || ''),
+      modified: resolveExistingLocalPath((pair && (pair.modified || pair.modifiedPath)) || '')
+    }));
+  }
+  return normalized;
+}
+
+function ensureRedlineInputFilesExist(config = {}) {
+  const missing = [];
+  const pushIfMissing = (filePath, label) => {
+    const resolved = resolveExistingLocalPath(filePath);
+    if (!resolved || !fs.existsSync(resolved)) {
+      missing.push(`${label}: ${filePath || '(empty path)'}`);
+    }
+  };
+
+  if (config.batch && Array.isArray(config.pairs)) {
+    config.pairs.forEach((pair, index) => {
+      pushIfMissing(pair && pair.original, `Pair ${index + 1} original`);
+      pushIfMissing(pair && pair.modified, `Pair ${index + 1} modified`);
+    });
+  } else {
+    pushIfMissing(config.original, 'Original document');
+    pushIfMissing(config.modified, 'Modified document');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Some selected files do not exist on disk.\n${missing.join('\n')}`);
+  }
+}
+
 // Redline documents — routes through Litera Compare when available, falls back to EmmaNeigh table comparison
 ipcMain.handle('redline-documents', async (event, config) => {
+  config = normalizeRedlineConfigPaths(config || {});
+  ensureRedlineInputFilesExist(config);
+
   const engine = config.engine || 'auto'; // 'auto', 'litera', 'emmaneigh'
   const literaOptions = {
     output_format: String(config.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
@@ -4965,7 +5201,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
     const configPath = path.join(app.getPath('temp'), `redline-config-${Date.now()}.json`);
     fs.writeFileSync(configPath, JSON.stringify(config));
 
-    const proc = spawn(processorPath, [moduleName, configPath]);
+    const proc = spawnTracked(processorPath, [moduleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -5179,7 +5415,7 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
   fs.writeFileSync(configPath, JSON.stringify(config));
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(processorPath, [emailModuleName, configPath]);
+    const proc = spawnTracked(processorPath, [emailModuleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -5332,7 +5568,7 @@ Respond ONLY with the JSON object, no other text.`;
       args = [nlModuleName, path.join(__dirname, 'python', 'email_nl_search.py'), configPath];
     }
 
-    const proc = spawn(processorPath, args);
+    const proc = spawnTracked(processorPath, args);
 
     let result = null;
 
@@ -5701,8 +5937,13 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       if (toolUse) {
         // Dispatch the tool call
         console.log(`[execute-command] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
-        const actor = context && typeof context === 'object' ? (context.actor || {}) : {};
-        const toolResult = await dispatchTool(toolUse.name, toolUse.input, actor);
+        const session = context && typeof context === 'object'
+          ? {
+              actor: context.actor || {},
+              loadedFiles: context.loadedFiles || []
+            }
+          : { actor: {}, loadedFiles: [] };
+        const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
 
         // Build a user-friendly response
         const toolLabel = toolUse.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -5931,7 +6172,7 @@ ${JSON.stringify(emailContext, null, 2)}`;
       args = [taskModuleName, path.join(__dirname, 'python', 'task_detector.py'), configPath];
     }
 
-    const proc = spawn(processorPath, args);
+    const proc = spawnTracked(processorPath, args);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -6052,7 +6293,7 @@ ipcMain.handle('generate-time-summary', async (event, config) => {
   fs.writeFileSync(configPath, JSON.stringify(config));
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(processorPath, [timeModuleName, configPath]);
+    const proc = spawnTracked(processorPath, [timeModuleName, configPath]);
     let result = null;
 
     proc.stdout.on('data', (data) => {
@@ -6590,6 +6831,29 @@ ipcMain.handle('open-analytics-storage', async () => {
       path: analyticsDir,
       databasePath: historyDbPath,
       feedbackPath: feedbackLogPath
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cancel-active-operations', async () => {
+  try {
+    const entries = Array.from(trackedChildProcesses.values());
+    let terminated = 0;
+    const commands = [];
+    for (const entry of entries) {
+      if (!entry || !entry.proc) continue;
+      if (terminateTrackedProcess(entry)) {
+        terminated += 1;
+        commands.push(entry.command || 'process');
+      }
+    }
+    return {
+      success: true,
+      terminated,
+      activeBefore: entries.length,
+      commands
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -7685,7 +7949,7 @@ ipcMain.handle('update-checklist', async (event, config) => {
     }
     mainWindow.webContents.send('checklist-progress', { message: `Analyzing checklist and emails with ${providerName}...`, percent: 20 });
 
-    const proc = spawn(processorPath, args);
+    const proc = spawnTracked(processorPath, args);
     let stdout = '';
     let stderr = '';
 
@@ -7796,7 +8060,7 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
     }
     mainWindow.webContents.send('punchlist-progress', { message: `Analyzing checklist with ${providerName}...`, percent: 30 });
 
-    const proc = spawn(processorPath, args);
+    const proc = spawnTracked(processorPath, args);
     let stdout = '';
     let stderr = '';
 

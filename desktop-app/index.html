@@ -157,6 +157,10 @@
       display: flex;
     }
 
+    .processing-stop-actions {
+      margin-top: 14px;
+    }
+
     .horse-container {
       width: 120px;
       height: 70px;
@@ -3420,27 +3424,33 @@
       </div>
 
       <div class="settings-section">
-        <h3>Firebase Telemetry (Admin)</h3>
+        <h3>Login Tracking</h3>
         <p style="font-size: 12px; color: #888; margin-bottom: 10px;">
-          For admin setup only. End users should not need to configure this.
+          Login and usage tracking are managed by your organization backend. Users do not need to enter JSON or Firebase keys.
         </p>
-        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Telemetry Ingest URL (Recommended)</label>
-        <input type="text" id="telemetryIngestUrlInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="https://your-ingest-service.example.com/telemetry/ingest">
-        <label style="font-size: 12px; color: #888; display: block; margin: 8px 0 6px;">Telemetry Ingest Token (optional, recommended)</label>
-        <input type="password" id="telemetryIngestTokenInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="Bearer token or shared secret">
+        <div id="firebaseConfigStatus" style="font-size: 12px; color: #888; margin-top: 8px;">Checking tracking service status...</div>
         <div style="display: flex; gap: 8px; margin-top: 10px;">
-          <button class="settings-btn settings-btn-primary" id="saveTelemetryIngestBtn">Save Ingest Config</button>
-          <button class="settings-btn settings-btn-secondary" id="testTelemetryIngestBtn">Test Ingest</button>
+          <button class="settings-btn settings-btn-secondary" id="testFirebaseConfigBtn">Refresh Status</button>
         </div>
-        <div id="telemetryIngestStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
 
-        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;"></div>
-        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Firebase Config JSON</label>
-        <textarea id="firebaseConfigInput" style="width: 100%; min-height: 120px; resize: vertical; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
-        <div id="firebaseConfigStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
-        <div style="display: flex; gap: 8px; margin-top: 10px;">
-          <button class="settings-btn settings-btn-primary" id="saveFirebaseConfigBtn">Save Firebase Config</button>
-          <button class="settings-btn settings-btn-secondary" id="testFirebaseConfigBtn">Test Firebase</button>
+        <!-- Hidden admin controls retained for backward compatibility -->
+        <div id="telemetryAdminControls" style="display: none;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Telemetry Ingest URL (Recommended)</label>
+          <input type="text" id="telemetryIngestUrlInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="https://your-ingest-service.example.com/telemetry/ingest">
+          <label style="font-size: 12px; color: #888; display: block; margin: 8px 0 6px;">Telemetry Ingest Token (optional, recommended)</label>
+          <input type="password" id="telemetryIngestTokenInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="Bearer token or shared secret">
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <button class="settings-btn settings-btn-primary" id="saveTelemetryIngestBtn">Save Ingest Config</button>
+            <button class="settings-btn settings-btn-secondary" id="testTelemetryIngestBtn">Test Ingest</button>
+          </div>
+          <div id="telemetryIngestStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
+
+          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;"></div>
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Firebase Config JSON</label>
+          <textarea id="firebaseConfigInput" style="width: 100%; min-height: 120px; resize: vertical; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <button class="settings-btn settings-btn-primary" id="saveFirebaseConfigBtn">Save Firebase Config</button>
+          </div>
         </div>
       </div>
 
@@ -3467,40 +3477,6 @@
             <button class="settings-btn settings-btn-primary" id="tfaVerifyEmailBtn" style="margin-left: 8px;">Verify</button>
           </div>
           <div id="tfaVerifyStatus" style="font-size: 12px; margin-top: 4px;"></div>
-        </div>
-      </div>
-
-      <div class="settings-section" id="smtpSection" style="display: none;">
-        <h3>📧 SMTP Email Settings</h3>
-        <p style="font-size: 12px; color: #888; margin-bottom: 12px;">Configure SMTP to send 2FA verification codes via email</p>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-          <div>
-            <label style="font-size: 11px; color: #888;">SMTP Host</label>
-            <input type="text" id="smtpHost" class="settings-input" placeholder="smtp.gmail.com" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
-          </div>
-          <div>
-            <label style="font-size: 11px; color: #888;">Port</label>
-            <input type="text" id="smtpPort" class="settings-input" placeholder="587" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
-          </div>
-        </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-          <div>
-            <label style="font-size: 11px; color: #888;">Username / Email</label>
-            <input type="text" id="smtpUser" class="settings-input" placeholder="you@gmail.com" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
-          </div>
-          <div>
-            <label style="font-size: 11px; color: #888;">Password / App Password</label>
-            <input type="password" id="smtpPass" class="settings-input" placeholder="••••••••" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
-          </div>
-        </div>
-        <div style="margin-bottom: 8px;">
-          <label style="font-size: 11px; color: #888;">From Address (optional)</label>
-          <input type="text" id="smtpFrom" class="settings-input" placeholder="EmmaNeigh <noreply@yourdomain.com>" style="width: 100%; padding: 6px 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 13px;">
-        </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <button class="settings-btn settings-btn-secondary" id="testSmtpBtn">Test Connection</button>
-          <button class="settings-btn" id="saveSmtpBtn">Save SMTP</button>
-          <span id="smtpStatus" style="font-size: 12px; color: #888;"></span>
         </div>
       </div>
 
@@ -5377,19 +5353,17 @@
         const status = statusResult && statusResult.success ? statusResult.status : null;
         if (status && status.connected) {
           if (status.mode === 'backend_ingest') {
-            setFirebaseConfigStatus('Telemetry backend ingest connected. Login and analytics are enabled.', 'success');
+            setFirebaseConfigStatus('Login tracking is connected.', 'success');
           } else if (status.mode === 'direct_firebase_fallback') {
-            setFirebaseConfigStatus(status.message || 'Telemetry ingest is unavailable. Falling back to direct Firebase telemetry.', 'warning');
+            setFirebaseConfigStatus('Login tracking is connected (fallback mode).', 'warning');
           } else {
-            setFirebaseConfigStatus('Direct Firebase telemetry connected. Login and analytics are enabled.', 'success');
+            setFirebaseConfigStatus('Login tracking is connected.', 'success');
           }
-        } else if (status && status.message) {
-          setFirebaseConfigStatus(status.message, 'warning');
         } else {
-          setFirebaseConfigStatus('Unable to determine Firebase telemetry status.', 'error');
+          setFirebaseConfigStatus('Login tracking service is unavailable. Contact your administrator.', 'error');
         }
       } catch (e) {
-        setFirebaseConfigStatus(`Firebase status check failed: ${e.message}`, 'error');
+        setFirebaseConfigStatus('Unable to check login tracking service right now.', 'error');
       }
     }
 
@@ -5511,25 +5485,16 @@
 
     testFirebaseConfigBtn.addEventListener('click', async () => {
       testFirebaseConfigBtn.disabled = true;
-      testFirebaseConfigBtn.textContent = 'Testing...';
-      setFirebaseConfigStatus('Testing Firebase telemetry connectivity...');
+      testFirebaseConfigBtn.textContent = 'Refreshing...';
+      setFirebaseConfigStatus('Refreshing login tracking status...');
       try {
-        const result = await ipcRenderer.invoke('get-firebase-telemetry-status', {
-          force: true,
-          context: 'settings_test'
-        });
-        const status = result && result.success ? result.status : null;
-        if (status && status.connected) {
-          setFirebaseConfigStatus(status.message || 'Firebase telemetry connected.', 'success');
-        } else {
-          setFirebaseConfigStatus((status && status.message) || 'Firebase telemetry is not connected.', 'error');
-        }
+        await refreshFirebaseSettingsStatus(true);
         await refreshFirebaseLoginGate();
       } catch (e) {
-        setFirebaseConfigStatus(`Test failed: ${e.message}`, 'error');
+        setFirebaseConfigStatus('Unable to refresh login tracking status right now.', 'error');
       } finally {
         testFirebaseConfigBtn.disabled = false;
-        testFirebaseConfigBtn.textContent = 'Test Firebase';
+        testFirebaseConfigBtn.textContent = 'Refresh Status';
       }
     });
 
@@ -5731,11 +5696,9 @@
     const tfaVerifyEmailBtn = document.getElementById('tfaVerifyEmailBtn');
     const tfaVerifyStatus = document.getElementById('tfaVerifyStatus');
     const securitySection = document.getElementById('securitySection');
-    const smtpSection = document.getElementById('smtpSection');
 
     if (!ENABLE_EMAIL_2FA) {
       if (securitySection) securitySection.style.display = 'none';
-      if (smtpSection) smtpSection.style.display = 'none';
     }
 
     // Load 2FA status when settings opens
@@ -5869,89 +5832,6 @@
     // Load 2FA status when settings modal opens
     settingsBtn.addEventListener('click', async () => {
       await load2FAStatus();
-    });
-
-    // ========== SMTP SETTINGS ==========
-    const smtpHost = document.getElementById('smtpHost');
-    const smtpPort = document.getElementById('smtpPort');
-    const smtpUser = document.getElementById('smtpUser');
-    const smtpPass = document.getElementById('smtpPass');
-    const smtpFrom = document.getElementById('smtpFrom');
-    const saveSmtpBtn = document.getElementById('saveSmtpBtn');
-    const testSmtpBtn = document.getElementById('testSmtpBtn');
-    const smtpStatus = document.getElementById('smtpStatus');
-
-    // Load SMTP settings when settings opens
-    async function loadSmtpSettings() {
-      try {
-        const result = await ipcRenderer.invoke('get-smtp-settings');
-        if (result.success) {
-          smtpHost.value = result.host || '';
-          smtpPort.value = result.port || '587';
-          smtpUser.value = result.user || '';
-          smtpFrom.value = result.from || '';
-          smtpPass.placeholder = result.hasPassword ? '••••••••' : 'Enter password';
-        }
-      } catch (e) {
-        console.error('Error loading SMTP settings:', e);
-      }
-    }
-
-    // Load on settings open
-    settingsBtn.addEventListener('click', async () => {
-      await loadSmtpSettings();
-    });
-
-    // Save SMTP settings
-    saveSmtpBtn.addEventListener('click', async () => {
-      smtpStatus.textContent = 'Saving...';
-      smtpStatus.style.color = '#888';
-      try {
-        const result = await ipcRenderer.invoke('save-smtp-settings', {
-          host: smtpHost.value.trim(),
-          port: smtpPort.value.trim() || '587',
-          user: smtpUser.value.trim(),
-          pass: smtpPass.value || null, // null = don't update password
-          from: smtpFrom.value.trim()
-        });
-        if (result.success) {
-          smtpStatus.textContent = '✓ Saved';
-          smtpStatus.style.color = '#22c55e';
-          smtpPass.value = '';
-          smtpPass.placeholder = '••••••••';
-        } else {
-          smtpStatus.textContent = result.error || 'Save failed';
-          smtpStatus.style.color = '#ef4444';
-        }
-      } catch (e) {
-        smtpStatus.textContent = 'Error: ' + e.message;
-        smtpStatus.style.color = '#ef4444';
-      }
-    });
-
-    // Test SMTP connection
-    testSmtpBtn.addEventListener('click', async () => {
-      smtpStatus.textContent = 'Testing...';
-      smtpStatus.style.color = '#888';
-      try {
-        const result = await ipcRenderer.invoke('test-smtp', {
-          host: smtpHost.value.trim(),
-          port: smtpPort.value.trim() || '587',
-          user: smtpUser.value.trim(),
-          pass: smtpPass.value,
-          from: smtpFrom.value.trim()
-        });
-        if (result.success) {
-          smtpStatus.textContent = '✓ Connection successful!';
-          smtpStatus.style.color = '#22c55e';
-        } else {
-          smtpStatus.textContent = result.error || 'Test failed';
-          smtpStatus.style.color = '#ef4444';
-        }
-      } catch (e) {
-        smtpStatus.textContent = 'Error: ' + e.message;
-        smtpStatus.style.color = '#ef4444';
-      }
     });
 
     // ========== UPDATE CHECK ==========
@@ -7350,21 +7230,16 @@
       if (currentZipPath) await ipcRenderer.invoke('save-zip', currentZipPath, 'EmmaNeigh-Signature-Packets.zip');
     });
 
-    resetBtn.addEventListener('click', () => {
+    function resetPacketsState() {
       currentResult = null;
       currentZipPath = null;
       packetsPaths = [];
       packetsFileCount.textContent = '';
       showState('idle');
-    });
+    }
 
-    retryBtn.addEventListener('click', () => {
-      currentResult = null;
-      currentZipPath = null;
-      packetsPaths = [];
-      packetsFileCount.textContent = '';
-      showState('idle');
-    });
+    resetBtn.addEventListener('click', resetPacketsState);
+    retryBtn.addEventListener('click', resetPacketsState);
 
     // ========== PACKET SHELL TAB ==========
     const shellDropZone = document.getElementById('shellDropZone');
@@ -7473,19 +7348,16 @@
       if (shellZipPath) await ipcRenderer.invoke('save-zip', shellZipPath, 'EmmaNeigh-Packet-Shell.zip');
     });
 
-    shellResetBtn.addEventListener('click', () => {
+    function resetShellState() {
       shellResult = null;
       shellZipPath = null;
       shellPaths = [];
       shellFileCount.textContent = '';
       showShellState('idle');
-    });
+    }
 
-    shellRetryBtn.addEventListener('click', () => {
-      shellPaths = [];
-      shellFileCount.textContent = '';
-      showShellState('idle');
-    });
+    shellResetBtn.addEventListener('click', resetShellState);
+    shellRetryBtn.addEventListener('click', resetShellState);
 
     // ========== EXECUTION VERSION TAB ==========
     const originalsInput = document.getElementById('originalsInput');
@@ -9358,7 +9230,7 @@
       }
     });
 
-    emailRetryBtn.addEventListener('click', () => {
+    function resetEmailState() {
       emailData = [];
       emailCsvPath = null;
       emailCsvSelected.textContent = '';
@@ -9379,7 +9251,9 @@
       aiSearchMode.classList.remove('active');
       clearEmailFilters();
       showEmailState('idle');
-    });
+    }
+
+    emailRetryBtn.addEventListener('click', resetEmailState);
 
     // Clear filters function
     function clearEmailFilters() {
@@ -10248,6 +10122,65 @@
       punchlistProgressText.textContent = data.message;
       punchlistProgressFill.style.width = data.percent + '%';
     });
+
+    // ========== GLOBAL STOP BUTTONS ==========
+    const processingResetHandlers = {
+      processing: resetPacketsState,
+      shellProcessing: resetShellState,
+      execProcessing: resetExecState,
+      sigblocksProcessing: resetSigblocksState,
+      collateProcessing: resetCollateState,
+      redlineProcessing: resetRedlineState,
+      emailProcessing: resetEmailState,
+      timetrackProcessing: resetTimetrackState,
+      checklistProcessing: resetChecklistState,
+      punchlistProcessing: resetPunchlistState
+    };
+
+    async function stopProcessingWorkflow(processingId, buttonEl) {
+      const resetHandler = processingResetHandlers[processingId];
+      const originalText = buttonEl ? buttonEl.textContent : '';
+      if (buttonEl) {
+        buttonEl.disabled = true;
+        buttonEl.textContent = 'Stopping...';
+      }
+      try {
+        await ipcRenderer.invoke('cancel-active-operations');
+      } catch (err) {
+        console.warn(`[Stop] Failed to cancel active operations for ${processingId}:`, err);
+      } finally {
+        if (typeof resetHandler === 'function') {
+          resetHandler();
+        }
+        if (buttonEl) {
+          buttonEl.disabled = false;
+          buttonEl.textContent = originalText || 'Stop';
+        }
+      }
+    }
+
+    function installProcessingStopButtons() {
+      Object.keys(processingResetHandlers).forEach((processingId) => {
+        const panel = document.getElementById(processingId);
+        if (!panel) return;
+        if (panel.querySelector(`button[data-stop-id="${processingId}"]`)) return;
+
+        const actions = document.createElement('div');
+        actions.className = 'processing-stop-actions';
+
+        const stopBtn = document.createElement('button');
+        stopBtn.type = 'button';
+        stopBtn.className = 'btn btn-secondary';
+        stopBtn.dataset.stopId = processingId;
+        stopBtn.textContent = 'Stop';
+        stopBtn.addEventListener('click', () => stopProcessingWorkflow(processingId, stopBtn));
+
+        actions.appendChild(stopBtn);
+        panel.appendChild(actions);
+      });
+    }
+
+    installProcessingStopButtons();
   </script>
 </body>
 </html>
