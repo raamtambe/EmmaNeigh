@@ -2652,6 +2652,489 @@ ipcMain.handle('collate-documents', async (event, config) => {
   });
 });
 
+// ========== NATURAL LANGUAGE COMMAND TOOLS (Claude Tool Use) ==========
+
+const COMMAND_TOOLS = [
+  {
+    name: 'imanage_browse',
+    description: 'Open iManage file picker to browse and select documents from the document management system (DMS). Use when the user wants to open, find, or browse files in iManage.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        multiple: { type: 'boolean', description: 'Allow selecting multiple files. Default false.' }
+      }
+    }
+  },
+  {
+    name: 'imanage_save',
+    description: 'Save or file a document to iManage. Can save as a new document or as a new version of an existing document. Opens the iManage save dialog for folder selection.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Local file path of the document to save to iManage' },
+        action: { type: 'string', enum: ['new_document', 'new_version'], description: 'Whether to save as a new document or as a new version of an existing document. Default: new_document' },
+        show_dialog: { type: 'boolean', description: 'Show iManage save dialog for folder/profile selection. Default true.' }
+      },
+      required: ['file_path']
+    }
+  },
+  {
+    name: 'imanage_get_versions',
+    description: 'Get the version history for a document in iManage by its profile ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        profile_id: { type: 'string', description: 'The iManage profile ID (document number) to look up versions for' }
+      },
+      required: ['profile_id']
+    }
+  },
+  {
+    name: 'imanage_checkout',
+    description: 'Check out a document from iManage to work on it locally.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        profile_id: { type: 'string', description: 'The iManage profile ID to check out' },
+        checkout_path: { type: 'string', description: 'Local folder path to check out to. If omitted, uses default checkout location.' }
+      },
+      required: ['profile_id']
+    }
+  },
+  {
+    name: 'imanage_checkin',
+    description: 'Check in a document back to iManage after editing.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Local file path to check in' }
+      },
+      required: ['file_path']
+    }
+  },
+  {
+    name: 'imanage_search',
+    description: 'Search for documents in iManage by criteria like matter number, document name, or author.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query — can be a matter number, document name, author, or description' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'run_redline',
+    description: 'Compare two documents to produce a redline showing differences. Supports Word, PDF, Excel, and PowerPoint.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        original: { type: 'string', description: 'File path of the original document' },
+        modified: { type: 'string', description: 'File path of the modified/revised document' },
+        engine: { type: 'string', enum: ['auto', 'litera', 'emmaneigh'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to EmmaNeigh).' }
+      },
+      required: ['original', 'modified']
+    }
+  },
+  {
+    name: 'navigate_tab',
+    description: 'Switch to a specific tab/feature in EmmaNeigh.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tab: {
+          type: 'string',
+          enum: ['packets', 'packetshell', 'execution', 'sigblocks', 'timetrack', 'email', 'updatechecklist', 'punchlist', 'collate', 'redline'],
+          description: 'The tab to navigate to. packets=Signature Packets, packetshell=Packet Shell, execution=Execution, sigblocks=Signature Blocks, timetrack=Time Tracking, email=Email Search, updatechecklist=Update Checklist, punchlist=Punchlist Generator, collate=Collate Comments, redline=Redline Documents'
+        }
+      },
+      required: ['tab']
+    }
+  },
+  {
+    name: 'open_folder',
+    description: 'Open a folder or file location in the system file explorer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The folder or file path to open in explorer' }
+      },
+      required: ['path']
+    }
+  },
+  {
+    name: 'search_emails',
+    description: 'Search loaded emails using a natural language query.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Natural language search query for emails' }
+      },
+      required: ['query']
+    }
+  }
+];
+
+// ========== iMANAGE COM INTEGRATION ==========
+
+function imanageRunPowerShell(scriptContent) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve({ success: false, error: 'iManage is only available on Windows.' });
+      return;
+    }
+
+    const tmpDir = app.getPath('temp');
+    const scriptPath = path.join(tmpDir, `emmaneigh_imanage_${Date.now()}.ps1`);
+    fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+
+    const proc = spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath
+    ]);
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      try { fs.unlinkSync(scriptPath); } catch (_) {}
+
+      if (code !== 0) {
+        resolve({ success: false, error: stderr.trim() || `PowerShell exited with code ${code}`, stdout: stdout.trim() });
+        return;
+      }
+
+      // Try to parse JSON output
+      const jsonMatch = stdout.match(/###JSON_START###([\s\S]*?)###JSON_END###/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1].trim());
+          resolve({ success: true, data: parsed });
+        } catch (e) {
+          resolve({ success: false, error: `Failed to parse iManage response: ${e.message}`, stdout: stdout.trim() });
+        }
+      } else {
+        resolve({ success: true, data: null, stdout: stdout.trim() });
+      }
+    });
+
+    proc.on('error', (err) => {
+      try { fs.unlinkSync(scriptPath); } catch (_) {}
+      resolve({ success: false, error: `Failed to launch PowerShell: ${err.message}` });
+    });
+  });
+}
+
+async function imanageBrowseFiles(multiple = false) {
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
+  if (-not $wof.IsInstalled) {
+    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
+    exit 0
+  }
+  if (-not $wof.HasLogin) {
+    $wof.LogIn()
+  }
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
+  $results = @()
+  foreach ($f in $files) {
+    $info = @{
+      name = $f.Name
+      number = $f.Number
+      version = $f.Version
+      extension = $f.Extension
+      author = $f.Author
+      description = $f.Description
+      path = $f.Path
+    }
+    $results += $info
+  }
+  $json = $results | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}
+`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, files: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
+}
+
+async function imanageSaveDocument(filePath, action = 'new_document', showDialog = true) {
+  const escapedPath = filePath.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
+  if (-not $wof.IsInstalled) {
+    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
+    exit 0
+  }
+  if (-not $wof.HasLogin) {
+    $wof.LogIn()
+  }
+  $sourcePath = '${escapedPath}'
+  if (-not (Test-Path $sourcePath)) {
+    Write-Output '###JSON_START###{"error":"File not found: ${escapedPath}"}###JSON_END###'
+    exit 0
+  }
+  ${action === 'new_version' ? `
+  # Save as new version — need profile ID from file path
+  $profileId = $wof.GetProfileIdFromFilePath($sourcePath)
+  if ($profileId) {
+    $files = New-Object System.Collections.Generic.List[System.Object]
+    $wof.SaveAsNewVersion([ref]$files)
+    $json = @{ success = $true; action = "new_version"; profileId = $profileId } | ConvertTo-Json -Compress
+    Write-Output "###JSON_START###$json###JSON_END###"
+  } else {
+    Write-Output '###JSON_START###{"error":"Could not find iManage profile for this file. Try saving as new document instead."}###JSON_END###'
+  }
+  ` : `
+  # Save as new document — use SaveAsFiles with dialog
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  $wof.SaveAsFiles([ref]$files, $sourcePath)
+  $results = @()
+  foreach ($f in $files) {
+    $results += @{
+      name = $f.Name
+      number = $f.Number
+      version = $f.Version
+    }
+  }
+  $json = @{ success = $true; action = "new_document"; files = $results } | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+  `}
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}
+`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, ...result.data };
+}
+
+async function imanageGetVersions(profileId) {
+  const escapedId = String(profileId).replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
+  if (-not $wof.IsInstalled) {
+    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
+    exit 0
+  }
+  if (-not $wof.HasLogin) {
+    $wof.LogIn()
+  }
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  # Create a file entry with the profile ID
+  $file = New-Object PSObject -Property @{ Number = '${escapedId}' }
+  $files.Add($file)
+  $wof.GetAllVersions([ref]$files)
+  $results = @()
+  foreach ($f in $files) {
+    $results += @{
+      name = $f.Name
+      number = $f.Number
+      version = $f.Version
+      author = $f.Author
+      date = $f.Date
+      description = $f.Description
+    }
+  }
+  $json = $results | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}
+`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, versions: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
+}
+
+async function imanageCheckout(profileId, checkoutPath) {
+  const escapedId = String(profileId).replace(/'/g, "''");
+  const escapedCheckoutPath = checkoutPath ? checkoutPath.replace(/'/g, "''") : '';
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
+  if (-not $wof.IsInstalled) {
+    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
+    exit 0
+  }
+  if (-not $wof.HasLogin) {
+    $wof.LogIn()
+  }
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  $file = New-Object PSObject -Property @{ Number = '${escapedId}' }
+  $files.Add($file)
+  $checkoutDir = '${escapedCheckoutPath}'
+  if (-not $checkoutDir) { $checkoutDir = [System.IO.Path]::GetTempPath() }
+  $wof.CheckOutFiles([ref]$files, $checkoutDir)
+  $results = @()
+  foreach ($f in $files) {
+    $results += @{
+      name = $f.Name
+      number = $f.Number
+      path = $f.Path
+    }
+  }
+  $json = @{ success = $true; files = $results } | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}
+`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, ...result.data };
+}
+
+async function imanageCheckin(filePath) {
+  const escapedPath = filePath.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
+  if (-not $wof.IsInstalled) {
+    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
+    exit 0
+  }
+  if (-not $wof.HasLogin) {
+    $wof.LogIn()
+  }
+  $sourcePath = '${escapedPath}'
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  $wof.CheckInFiles([ref]$files, $sourcePath)
+  $json = @{ success = $true; message = "File checked in successfully" } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}
+`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, message: 'File checked in successfully.' };
+}
+
+async function imanageSearch(query) {
+  const escapedQuery = String(query).replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
+  if (-not $wof.IsInstalled) {
+    Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
+    exit 0
+  }
+  if (-not $wof.HasLogin) {
+    $wof.LogIn()
+  }
+  $files = New-Object System.Collections.Generic.List[System.Object]
+  $searchFile = New-Object PSObject -Property @{ Description = '${escapedQuery}' }
+  $files.Add($searchFile)
+  $wof.FindProfiles([ref]$files)
+  $results = @()
+  foreach ($f in $files) {
+    $results += @{
+      name = $f.Name
+      number = $f.Number
+      version = $f.Version
+      extension = $f.Extension
+      author = $f.Author
+      description = $f.Description
+    }
+  }
+  $json = $results | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}
+`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, files: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
+}
+
+// ========== COMMAND TOOL DISPATCHER ==========
+
+async function dispatchTool(toolName, input) {
+  switch (toolName) {
+    case 'imanage_browse':
+      return await imanageBrowseFiles(input.multiple || false);
+
+    case 'imanage_save':
+      return await imanageSaveDocument(input.file_path, input.action || 'new_document', input.show_dialog !== false);
+
+    case 'imanage_get_versions':
+      return await imanageGetVersions(input.profile_id);
+
+    case 'imanage_checkout':
+      return await imanageCheckout(input.profile_id, input.checkout_path);
+
+    case 'imanage_checkin':
+      return await imanageCheckin(input.file_path);
+
+    case 'imanage_search':
+      return await imanageSearch(input.query);
+
+    case 'run_redline': {
+      // Delegate to existing redline-documents handler
+      const engine = input.engine || 'auto';
+      const config = {
+        engine,
+        originalPath: input.original,
+        modifiedPath: input.modified,
+        literaOptions: {}
+      };
+      // Send to renderer to trigger the redline
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('trigger-redline', config);
+      }
+      return { success: true, message: `Redline started: comparing documents with ${engine} engine.` };
+    }
+
+    case 'navigate_tab':
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('navigate-tab', input.tab);
+      }
+      return { success: true, message: `Switched to ${input.tab} tab.` };
+
+    case 'open_folder':
+      shell.openPath(input.path);
+      return { success: true, message: `Opened ${input.path}` };
+
+    case 'search_emails':
+      // Delegate to existing nl-search-emails handler — will be called from renderer with email data
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('trigger-email-search', { query: input.query });
+      }
+      return { success: true, message: `Email search started for: ${input.query}` };
+
+    default:
+      return { success: false, error: `Unknown tool: ${toolName}` };
+  }
+}
+
 // ========== LITERA COMPARE INTEGRATION ==========
 
 // Known Litera Compare installation paths (checked in order)
@@ -4842,6 +5325,139 @@ ${prompt}`;
       text: String(aiResult.text || '').trim()
     };
   } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// ========== EXECUTE-COMMAND: Natural Language Tool Use ==========
+ipcMain.handle('execute-command', async (event, { prompt, context }) => {
+  try {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      return { success: false, error: 'No Anthropic API key configured. Add your API key in Settings to use natural language commands.' };
+    }
+
+    // Build context-aware system prompt
+    const activeTab = context?.activeTab || 'unknown';
+    const loadedFiles = context?.loadedFiles || [];
+    const isWindows = process.platform === 'win32';
+
+    const systemPrompt = `You are EmmaNeigh, a legal document processing assistant for Kirkland & Ellis.
+You help users manage documents, navigate the application, and interact with iManage (the document management system).
+
+Current state:
+- Active tab: ${activeTab}
+- Loaded files: ${loadedFiles.length > 0 ? loadedFiles.map(f => f.name || f).join(', ') : 'None'}
+- Platform: ${process.platform} (${isWindows ? 'iManage available' : 'iManage not available — Windows only'})
+- Available tabs: Signature Packets, Packet Shell, Execution, Signature Blocks, Time Tracking, Email Search, Update Checklist, Punchlist Generator, Collate Comments, Redline Documents
+
+When the user asks you to perform an action (save to iManage, open a file, navigate, run a redline, etc.), use the appropriate tool.
+When they ask a question or want advice, respond with helpful text.
+Keep responses concise and practical.
+${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the user asks for iManage features, let them know.' : ''}`;
+
+    // Call Claude API with tool use
+    const modelCandidates = [
+      getClaudeModel(),
+      DEFAULT_CLAUDE_MODEL,
+      'claude-3-5-sonnet-20241022'
+    ];
+
+    let lastResponse = null;
+    for (const modelName of modelCandidates) {
+      const response = await requestHttps({
+        baseUrl: 'https://api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: modelName,
+          max_tokens: 1024,
+          system: systemPrompt,
+          tools: COMMAND_TOOLS,
+          messages: [{ role: 'user', content: prompt }]
+        }),
+        timeoutMs: 30000
+      });
+
+      lastResponse = response;
+
+      if (response.statusCode !== 200) {
+        if (isLikelyModelError(response)) continue;
+        return {
+          success: false,
+          error: `Claude API error (${response.statusCode}): ${getErrorDetail(response)}`
+        };
+      }
+
+      // Parse the response
+      const content = response.jsonBody?.content || [];
+      const toolUse = content.find(c => c.type === 'tool_use');
+      const textBlock = content.find(c => c.type === 'text');
+
+      if (toolUse) {
+        // Dispatch the tool call
+        console.log(`[execute-command] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
+        const toolResult = await dispatchTool(toolUse.name, toolUse.input);
+
+        // Build a user-friendly response
+        const toolLabel = toolUse.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        let resultMessage = '';
+        if (toolResult.success) {
+          resultMessage = toolResult.message || `✅ ${toolLabel} completed successfully.`;
+          if (toolResult.files && toolResult.files.length > 0) {
+            resultMessage += '\n\nFiles:\n' + toolResult.files.map(f =>
+              `• ${f.name || f.number || 'Unknown'}${f.version ? ` (v${f.version})` : ''}${f.description ? ` — ${f.description}` : ''}`
+            ).join('\n');
+          }
+          if (toolResult.versions && toolResult.versions.length > 0) {
+            resultMessage += '\n\nVersions:\n' + toolResult.versions.map(v =>
+              `• v${v.version || '?'} by ${v.author || 'Unknown'}${v.date ? ` on ${v.date}` : ''}${v.description ? ` — ${v.description}` : ''}`
+            ).join('\n');
+          }
+        } else {
+          resultMessage = `❌ ${toolLabel} failed: ${toolResult.error || 'Unknown error'}`;
+        }
+
+        // If Claude also provided text context, prepend it
+        const claudeText = textBlock ? textBlock.text : '';
+
+        return {
+          success: true,
+          type: 'tool_result',
+          tool: toolUse.name,
+          input: toolUse.input,
+          toolResult,
+          message: claudeText ? `${claudeText}\n\n${resultMessage}` : resultMessage,
+          modelUsed: modelName
+        };
+      } else if (textBlock) {
+        return {
+          success: true,
+          type: 'text',
+          message: textBlock.text,
+          modelUsed: modelName
+        };
+      } else {
+        return {
+          success: true,
+          type: 'text',
+          message: 'Command received but no actionable response was generated.',
+          modelUsed: modelName
+        };
+      }
+    }
+
+    return {
+      success: false,
+      error: `No supported Claude model available. Last error: ${getErrorDetail(lastResponse)}`
+    };
+  } catch (e) {
+    console.error('[execute-command] Error:', e);
     return { success: false, error: e.message };
   }
 });

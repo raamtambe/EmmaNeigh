@@ -418,6 +418,7 @@
       min-width: 0;
       min-height: 0;
       display: flex;
+      overflow: hidden;
     }
 
     .main-layout {
@@ -436,9 +437,8 @@
       overflow-x: hidden;
       padding-right: 4px;
       padding-bottom: 16px;
-      height: 100%;
+      align-self: stretch;
       min-height: 0;
-      max-height: 100%;
     }
 
     .nav-sidebar::-webkit-scrollbar {
@@ -4876,7 +4876,7 @@
         </div>
 
         <div class="agent-input-wrap">
-          <textarea id="agentPromptInput" class="agent-prompt-input" rows="3" placeholder='Try: "generate sig packet from these files"'></textarea>
+          <textarea id="agentPromptInput" class="agent-prompt-input" rows="3" placeholder='Try: "save this to iManage" or "go to redline" or "compare these two docs"'></textarea>
           <button class="btn btn-primary" id="agentRunBtn" style="margin-top: 8px;">Run</button>
         </div>
       </aside>
@@ -7045,6 +7045,48 @@
       return { message: plan && plan.user_message ? plan.user_message : 'Command routed.' };
     }
 
+    // Gather current context for execute-command
+    function getAgentContext() {
+      const activeTab = document.querySelector('.tab-panel.active')?.id?.replace('Tab', '') || 'unknown';
+      const loadedFiles = agentAttachments.map(f => ({ name: f.name, path: f.path }));
+      return { activeTab, loadedFiles };
+    }
+
+    // Listen for tool-dispatched events from main process
+    ipcRenderer.on('navigate-tab', (event, tabName) => {
+      if (tabName && typeof switchTab === 'function') {
+        switchTab(tabName);
+      }
+    });
+
+    ipcRenderer.on('trigger-redline', (event, config) => {
+      if (config && config.originalPath && config.modifiedPath) {
+        switchTab('redline');
+        setTimeout(() => {
+          if (typeof setRedlineOriginalFile === 'function') setRedlineOriginalFile(config.originalPath);
+          if (typeof setRedlineModifiedFile === 'function') setRedlineModifiedFile(config.modifiedPath);
+          const engineSel = document.getElementById('redlineEngineSelect');
+          if (engineSel && config.engine) engineSel.value = config.engine;
+          const btn = document.getElementById('redlineBtn');
+          if (btn) btn.click();
+        }, 300);
+      }
+    });
+
+    ipcRenderer.on('trigger-email-search', (event, data) => {
+      if (data && data.query) {
+        switchTab('email');
+        setTimeout(() => {
+          const searchInput = document.getElementById('emailAiInput') || document.getElementById('nlSearchInput');
+          if (searchInput) {
+            searchInput.value = data.query;
+            const searchBtn = document.getElementById('emailAiBtn') || document.getElementById('nlSearchBtn');
+            if (searchBtn) searchBtn.click();
+          }
+        }, 300);
+      }
+    });
+
     async function runAgentCommand() {
       if (agentBusy) return;
       const prompt = agentPromptInput.value.trim();
@@ -7058,39 +7100,58 @@
       agentBusy = true;
       agentRunBtn.disabled = true;
       agentRunBtn.textContent = 'Running...';
-      setAgentStatus('Analyzing command...');
+      setAgentStatus('Processing command...');
 
       try {
-        const result = await ipcRenderer.invoke('agent-plan', {
+        // First try execute-command (Claude tool use — requires Anthropic API key)
+        const context = getAgentContext();
+        const cmdResult = await ipcRenderer.invoke('execute-command', {
           prompt,
-          attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
+          context
         });
 
-        if (!result || !result.success) {
-          throw new Error((result && result.error) || 'Agent planner request failed.');
-        }
+        if (cmdResult && cmdResult.success) {
+          // Tool use or text response succeeded
+          addAgentMessage('assistant', cmdResult.message || 'Done.');
+          const modelInfo = cmdResult.modelUsed ? ` (${cmdResult.modelUsed})` : '';
+          const toolInfo = cmdResult.tool ? ` • Tool: ${cmdResult.tool.replace(/_/g, ' ')}` : '';
+          setAgentStatus(`Claude${modelInfo}${toolInfo}`);
+        } else {
+          // execute-command failed (no API key, etc.) — fall back to agent-plan
+          console.log('[Agent] execute-command unavailable, falling back to agent-plan:', cmdResult?.error);
+          setAgentStatus('Routing via agent planner...');
 
-        const plan = result.plan || {};
-        const execution = await executeAgentPlan(plan, prompt);
-        const responseParts = [];
-        if (execution && execution.message) responseParts.push(execution.message);
-        if (plan.user_message && plan.user_message !== execution.message) responseParts.push(plan.user_message);
-        if (Array.isArray(plan.missing_requirements) && plan.missing_requirements.length > 0) {
-          responseParts.push(`Missing requirements: ${plan.missing_requirements.join(' ')}`);
-        }
-        if (result.warning) {
-          responseParts.push(`Note: ${result.warning}`);
-        }
-        if (responseParts.length === 0) {
-          responseParts.push('Command received. I routed it to the closest workflow.');
-        }
+          const result = await ipcRenderer.invoke('agent-plan', {
+            prompt,
+            attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
+          });
 
-        addAgentMessage('assistant', responseParts.join('\n'));
+          if (!result || !result.success) {
+            throw new Error((result && result.error) || 'Agent planner request failed.');
+          }
 
-        const providerDetails = `${result.providerName || 'AI'}${result.modelUsed ? ` (${result.modelUsed})` : ''}`;
-        const sourceSuffix = result.source === 'rules' ? ' - fallback routing' : '';
-        setAgentStatus(`Agent planner: ${providerDetails}${sourceSuffix}${result.warning ? ` • ${result.warning}` : ''}`, !!result.warning);
-        renderAgentConnectionSummary(result.diagnostics || null);
+          const plan = result.plan || {};
+          const execution = await executeAgentPlan(plan, prompt);
+          const responseParts = [];
+          if (execution && execution.message) responseParts.push(execution.message);
+          if (plan.user_message && plan.user_message !== execution.message) responseParts.push(plan.user_message);
+          if (Array.isArray(plan.missing_requirements) && plan.missing_requirements.length > 0) {
+            responseParts.push(`Missing requirements: ${plan.missing_requirements.join(' ')}`);
+          }
+          if (result.warning) {
+            responseParts.push(`Note: ${result.warning}`);
+          }
+          if (responseParts.length === 0) {
+            responseParts.push('Command received. I routed it to the closest workflow.');
+          }
+
+          addAgentMessage('assistant', responseParts.join('\n'));
+
+          const providerDetails = `${result.providerName || 'AI'}${result.modelUsed ? ` (${result.modelUsed})` : ''}`;
+          const sourceSuffix = result.source === 'rules' ? ' - fallback routing' : '';
+          setAgentStatus(`Agent planner: ${providerDetails}${sourceSuffix}${result.warning ? ` • ${result.warning}` : ''}`, !!result.warning);
+          renderAgentConnectionSummary(result.diagnostics || null);
+        }
       } catch (e) {
         addAgentMessage('assistant', `Error: ${e.message}`);
         setAgentStatus(e.message || 'Agent command failed.', true);
