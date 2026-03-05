@@ -57,8 +57,19 @@ const TELEMETRY_INGEST_KEY = 'telemetry_ingest_url';
 const TELEMETRY_INGEST_TOKEN_KEY = 'telemetry_ingest_token';
 const TELEMETRY_CONFIG_FILENAME = 'telemetry-config.json';
 const FEEDBACK_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
+const ANALYTICS_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
 const FEEDBACK_ADMIN_USERNAMES = new Set(
   String(process.env.EMMANEIGH_FEEDBACK_ADMINS || FEEDBACK_ADMIN_DEFAULTS.join(','))
+    .split(',')
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+);
+const ANALYTICS_ADMIN_IDENTIFIERS = new Set(
+  String(
+    process.env.EMMANEIGH_ANALYTICS_ADMINS ||
+    process.env.EMMANEIGH_FEEDBACK_ADMINS ||
+    ANALYTICS_ADMIN_DEFAULTS.join(',')
+  )
     .split(',')
     .map((value) => String(value || '').trim().toLowerCase())
     .filter(Boolean)
@@ -256,6 +267,64 @@ function categorizeFeatureLabel(featureName) {
 
 function canAccessFeedbackLog(username) {
   return FEEDBACK_ADMIN_USERNAMES.has(normalizeUsername(username));
+}
+
+function canAccessAnalyticsDashboard(identity = {}) {
+  const username = normalizeUsername(identity.username || '');
+  const email = normalizeEmail(identity.email || '');
+  const localPart = email.includes('@') ? email.split('@')[0] : '';
+  return (
+    (!!username && ANALYTICS_ADMIN_IDENTIFIERS.has(username)) ||
+    (!!email && ANALYTICS_ADMIN_IDENTIFIERS.has(email)) ||
+    (!!localPart && ANALYTICS_ADMIN_IDENTIFIERS.has(localPart))
+  );
+}
+
+function resolveRequesterIdentity(requester = {}) {
+  const fallback = {
+    username: String(requester.username || '').trim(),
+    email: String(requester.email || '').trim()
+  };
+  if (!db) return fallback;
+
+  const userId = String(requester.userId || '').trim();
+  if (!userId) return fallback;
+
+  try {
+    const escapedUserId = userId.replace(/'/g, "''");
+    const result = db.exec(`
+      SELECT username, email
+      FROM users
+      WHERE id = '${escapedUserId}'
+      LIMIT 1
+    `);
+    if (result.length > 0 && result[0].values.length > 0) {
+      const [username, email] = result[0].values[0];
+      return {
+        username: String(username || '').trim(),
+        email: String(email || '').trim()
+      };
+    }
+  } catch (_) {}
+
+  return fallback;
+}
+
+function canRequesterAccessAnalytics(requester = {}) {
+  const identity = resolveRequesterIdentity(requester);
+  return canAccessAnalyticsDashboard(identity);
+}
+
+function buildSessionUserPayload({ id, username, displayName, email, apiKeyEnc }) {
+  const normalizedEmail = normalizeEmail(email || '');
+  return {
+    id,
+    username,
+    displayName: displayName || username,
+    email: normalizedEmail || null,
+    hasApiKey: !!apiKeyEnc,
+    isAdmin: canAccessAnalyticsDashboard({ username, email: normalizedEmail })
+  };
 }
 
 function normalizeIngestUrl(rawUrl) {
@@ -3148,6 +3217,151 @@ const COMMAND_TOOLS = [
 
 // ========== iMANAGE COM INTEGRATION ==========
 
+const IMANAGE_PS_BOOTSTRAP = `
+function Get-IManageWorkObjectFactory {
+  $progIds = @(
+    'iManage.iwComWrapper.WorkObjectFactory',
+    'iManage.WorkSiteObjects.iwComWrapper.WorkObjectFactory',
+    'iManage.WorkSiteObjects.WorkObjectFactory'
+  )
+  $errors = @()
+  foreach ($progId in $progIds) {
+    try {
+      $obj = New-Object -ComObject $progId
+      if ($null -ne $obj) { return $obj }
+    } catch {
+      $errors += ($progId + ': ' + $_.Exception.Message)
+    }
+  }
+  throw ('Unable to create iManage COM object. ' + ($errors -join ' | '))
+}
+
+function Test-IManageInstalled($wof) {
+  try { return [bool]$wof.IsInstalled } catch { return $true }
+}
+
+function Ensure-IManageLogin($wof) {
+  try {
+    $hasLogin = [bool]$wof.HasLogin
+    if (-not $hasLogin) { $wof.LogIn() }
+  } catch {
+    try { $wof.LogIn() } catch { }
+  }
+}
+`;
+
+function getIManagePowerShellHosts() {
+  const hosts = [];
+  if (process.platform !== 'win32') return hosts;
+
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const preferred = [
+    path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    path.join(systemRoot, 'SysWOW64', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    'powershell.exe'
+  ];
+
+  const seen = new Set();
+  for (const candidate of preferred) {
+    const key = String(candidate || '').toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (candidate.includes(path.sep)) {
+      if (fs.existsSync(candidate)) hosts.push(candidate);
+      continue;
+    }
+    hosts.push(candidate);
+  }
+  return hosts.length > 0 ? hosts : ['powershell.exe'];
+}
+
+function parseIManagePowerShellOutput(stdout, stderr, code, host) {
+  if (code !== 0) {
+    return {
+      success: false,
+      error: stderr.trim() || `PowerShell exited with code ${code}`,
+      stdout: stdout.trim(),
+      host
+    };
+  }
+
+  const matches = Array.from(stdout.matchAll(/###JSON_START###([\s\S]*?)###JSON_END###/g));
+  const jsonMatch = matches.length ? matches[matches.length - 1] : null;
+  if (!jsonMatch) {
+    return { success: true, data: null, stdout: stdout.trim(), host };
+  }
+
+  const rawPayload = String(jsonMatch[1] || '').replace(/^\uFEFF/, '').trim();
+  const parseCandidates = [rawPayload];
+  const firstJsonToken = rawPayload.search(/[{[]/);
+  if (firstJsonToken > 0) {
+    parseCandidates.push(rawPayload.slice(firstJsonToken).trim());
+  }
+
+  for (const candidate of parseCandidates) {
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      return { success: true, data: parsed, host };
+    } catch (_) {}
+  }
+
+  return {
+    success: false,
+    error: 'Failed to parse iManage response payload.',
+    stdout: stdout.trim(),
+    stderr: stderr.trim(),
+    rawPayload,
+    host
+  };
+}
+
+function isIManageComFactoryError(result = {}) {
+  const blobs = [
+    result.error,
+    result.stderr,
+    result.stdout,
+    result.rawPayload,
+    result && result.data && result.data.error
+  ]
+    .map((part) => String(part || '').toLowerCase())
+    .join('\n');
+  if (!blobs) return false;
+  return (
+    blobs.includes('retrieving the com class factory') ||
+    blobs.includes('class not registered') ||
+    blobs.includes('0x80040154') ||
+    blobs.includes('80040154') ||
+    blobs.includes('invalid class string') ||
+    blobs.includes('activex') ||
+    blobs.includes('unable to create imanage com object')
+  );
+}
+
+function formatIManageErrorMessage(message) {
+  const text = String(message || '').trim();
+  if (!text) return 'Unknown iManage error.';
+  if (!isIManageComFactoryError({ error: text })) return text;
+  return `iManage COM could not be loaded (CLSID/class-factory issue). EmmaNeigh attempted both 64-bit and 32-bit PowerShell hosts. Please repair or reinstall iManage Work Desktop for this Windows user, then restart and retry. Details: ${text}`;
+}
+
+function normalizeIManageFailure(result) {
+  if (!result || typeof result !== 'object') {
+    return { success: false, error: 'Unknown iManage error.' };
+  }
+  if (!result.success) {
+    return {
+      ...result,
+      success: false,
+      error: formatIManageErrorMessage(result.error || result.stderr || result.stdout)
+    };
+  }
+  if (result.data && result.data.error) {
+    return { success: false, error: formatIManageErrorMessage(result.data.error) };
+  }
+  return null;
+}
+
 function imanageRunPowerShell(scriptContent) {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
@@ -3157,62 +3371,70 @@ function imanageRunPowerShell(scriptContent) {
 
     const tmpDir = app.getPath('temp');
     const scriptPath = path.join(tmpDir, `emmaneigh_imanage_${Date.now()}.ps1`);
-    fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+    fs.writeFileSync(scriptPath, `${IMANAGE_PS_BOOTSTRAP}\n${scriptContent}`, 'utf8');
 
-    const proc = spawnTracked('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath
-    ]);
+    const hosts = getIManagePowerShellHosts();
+    let attemptIndex = 0;
+    let lastResult = null;
 
-    let stdout = '';
-    let stderr = '';
+    const runAttempt = () => {
+      const host = hosts[attemptIndex];
+      const proc = spawnTracked(host, [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Sta',
+        '-File',
+        scriptPath
+      ], { windowsHide: true });
 
-    proc.stdout.on('data', (data) => { stdout += data.toString(); });
-    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+      let stdout = '';
+      let stderr = '';
 
-    proc.on('close', (code) => {
-      try { fs.unlinkSync(scriptPath); } catch (_) {}
+      proc.stdout.on('data', (data) => { stdout += data.toString(); });
+      proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
-      if (code !== 0) {
-        resolve({ success: false, error: stderr.trim() || `PowerShell exited with code ${code}`, stdout: stdout.trim() });
-        return;
-      }
+      proc.on('close', (code) => {
+        const parsed = parseIManagePowerShellOutput(stdout, stderr, code, host);
+        lastResult = parsed;
 
-      // Try to parse JSON output from the last marker pair.
-      const matches = Array.from(stdout.matchAll(/###JSON_START###([\s\S]*?)###JSON_END###/g));
-      const jsonMatch = matches.length ? matches[matches.length - 1] : null;
-      if (jsonMatch) {
-        const rawPayload = String(jsonMatch[1] || '').replace(/^\uFEFF/, '').trim();
-        const parseCandidates = [rawPayload];
-        const firstJsonToken = rawPayload.search(/[{[]/);
-        if (firstJsonToken > 0) {
-          parseCandidates.push(rawPayload.slice(firstJsonToken).trim());
+        const shouldRetry = isIManageComFactoryError(parsed);
+        if (shouldRetry && attemptIndex < hosts.length - 1) {
+          attemptIndex += 1;
+          runAttempt();
+          return;
         }
 
-        for (const candidate of parseCandidates) {
-          if (!candidate) continue;
-          try {
-            const parsed = JSON.parse(candidate);
-            resolve({ success: true, data: parsed });
-            return;
-          } catch (_) {}
-        }
+        try { fs.unlinkSync(scriptPath); } catch (_) {}
 
-        resolve({
+        if (hosts.length > 1) {
+          if (!parsed.success) {
+            parsed.error = `${parsed.error} (PowerShell hosts tried: ${hosts.join(', ')})`;
+          } else if (parsed.data && parsed.data.error && isIManageComFactoryError(parsed)) {
+            parsed.data.error = `${parsed.data.error} (PowerShell hosts tried: ${hosts.join(', ')})`;
+          }
+        }
+        resolve(parsed);
+      });
+
+      proc.on('error', (err) => {
+        lastResult = {
           success: false,
-          error: 'Failed to parse iManage response payload.',
-          stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          rawPayload
-        });
-      } else {
-        resolve({ success: true, data: null, stdout: stdout.trim() });
-      }
-    });
+          error: `Failed to launch PowerShell (${host}): ${err.message}`,
+          host
+        };
+        if (attemptIndex < hosts.length - 1) {
+          attemptIndex += 1;
+          runAttempt();
+          return;
+        }
+        try { fs.unlinkSync(scriptPath); } catch (_) {}
+        resolve(lastResult);
+      });
+    };
 
-    proc.on('error', (err) => {
-      try { fs.unlinkSync(scriptPath); } catch (_) {}
-      resolve({ success: false, error: `Failed to launch PowerShell: ${err.message}` });
-    });
+    runAttempt();
   });
 }
 
@@ -3220,14 +3442,12 @@ async function imanageBrowseFiles(multiple = false) {
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
-  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
-  if (-not $wof.IsInstalled) {
+  $wof = Get-IManageWorkObjectFactory
+  if (-not (Test-IManageInstalled $wof)) {
     Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
     exit 0
   }
-  if (-not $wof.HasLogin) {
-    $wof.LogIn()
-  }
+  Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
   $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
   $results = @()
@@ -3249,10 +3469,10 @@ try {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 }
-`;
+  `;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
   return { success: true, files: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
 }
 
@@ -3261,14 +3481,12 @@ async function imanageSaveDocument(filePath, action = 'new_document', showDialog
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
-  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
-  if (-not $wof.IsInstalled) {
+  $wof = Get-IManageWorkObjectFactory
+  if (-not (Test-IManageInstalled $wof)) {
     Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
     exit 0
   }
-  if (-not $wof.HasLogin) {
-    $wof.LogIn()
-  }
+  Ensure-IManageLogin $wof
   $sourcePath = '${escapedPath}'
   if (-not (Test-Path $sourcePath)) {
     $json = @{ error = "File not found: $sourcePath" } | ConvertTo-Json -Compress
@@ -3305,10 +3523,10 @@ try {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 }
-`;
+  `;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
   return { success: true, ...result.data };
 }
 
@@ -3317,14 +3535,12 @@ async function imanageGetVersions(profileId) {
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
-  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
-  if (-not $wof.IsInstalled) {
+  $wof = Get-IManageWorkObjectFactory
+  if (-not (Test-IManageInstalled $wof)) {
     Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
     exit 0
   }
-  if (-not $wof.HasLogin) {
-    $wof.LogIn()
-  }
+  Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
   # Create a file entry with the profile ID
   $file = New-Object PSObject -Property @{ Number = '${escapedId}' }
@@ -3347,10 +3563,10 @@ try {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 }
-`;
+  `;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
   return { success: true, versions: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
 }
 
@@ -3360,14 +3576,12 @@ async function imanageCheckout(profileId, checkoutPath) {
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
-  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
-  if (-not $wof.IsInstalled) {
+  $wof = Get-IManageWorkObjectFactory
+  if (-not (Test-IManageInstalled $wof)) {
     Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
     exit 0
   }
-  if (-not $wof.HasLogin) {
-    $wof.LogIn()
-  }
+  Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
   $file = New-Object PSObject -Property @{ Number = '${escapedId}' }
   $files.Add($file)
@@ -3388,10 +3602,10 @@ try {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 }
-`;
+  `;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
   return { success: true, ...result.data };
 }
 
@@ -3400,14 +3614,12 @@ async function imanageCheckin(filePath) {
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
-  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
-  if (-not $wof.IsInstalled) {
+  $wof = Get-IManageWorkObjectFactory
+  if (-not (Test-IManageInstalled $wof)) {
     Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
     exit 0
   }
-  if (-not $wof.HasLogin) {
-    $wof.LogIn()
-  }
+  Ensure-IManageLogin $wof
   $sourcePath = '${escapedPath}'
   $files = New-Object System.Collections.Generic.List[System.Object]
   $wof.CheckInFiles([ref]$files, $sourcePath)
@@ -3417,10 +3629,10 @@ try {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 }
-`;
+  `;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
   return { success: true, message: 'File checked in successfully.' };
 }
 
@@ -3429,14 +3641,12 @@ async function imanageSearch(query) {
   const script = `
 $ErrorActionPreference = 'Stop'
 try {
-  $wof = New-Object -ComObject "iManage.iwComWrapper.WorkObjectFactory"
-  if (-not $wof.IsInstalled) {
+  $wof = Get-IManageWorkObjectFactory
+  if (-not (Test-IManageInstalled $wof)) {
     Write-Output '###JSON_START###{"error":"iManage is not installed or configured"}###JSON_END###'
     exit 0
   }
-  if (-not $wof.HasLogin) {
-    $wof.LogIn()
-  }
+  Ensure-IManageLogin $wof
   $files = New-Object System.Collections.Generic.List[System.Object]
   $searchFile = New-Object PSObject -Property @{ Description = '${escapedQuery}' }
   $files.Add($searchFile)
@@ -3458,10 +3668,10 @@ try {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
 }
-`;
+  `;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
   return { success: true, files: Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []) };
 }
 
@@ -4172,13 +4382,23 @@ function getLiteraOutputExtension(originalPath, compareOptions = {}) {
     return '.pdf';
   }
 
-  const outputFormat = String((compareOptions && compareOptions.output_format) || 'native').toLowerCase();
+  const outputFormat = String((compareOptions && compareOptions.output_format) || 'pdf').toLowerCase();
+  const literaType = getLiteraTypeForExtension(path.extname(originalPath || ''));
+  const originalExt = path.extname(originalPath || '') || '.docx';
+
   if (outputFormat === 'pdf') {
+    if (literaType && !['word', 'pdf'].includes(literaType)) {
+      return originalExt;
+    }
     return '.pdf';
   }
 
-  const originalExt = path.extname(originalPath || '');
-  return originalExt || '.docx';
+  if (outputFormat === 'docx') {
+    if (literaType === 'word') return '.docx';
+    return originalExt;
+  }
+
+  return originalExt;
 }
 
 function sanitizeFilenameSegment(name, fallback) {
@@ -4612,11 +4832,29 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOpti
     const origExt = path.extname(originalPath);
     const originalBaseName = path.parse(originalPath || '').name.toLowerCase();
     const modifiedBaseName = path.parse(modifiedPath || '').name.toLowerCase();
+    const requestedOutputFormat = String(compareOptions.output_format || 'pdf').toLowerCase();
+    const normalizedOutputFormat = requestedOutputFormat === 'docx'
+      ? 'docx'
+      : requestedOutputFormat === 'pdf'
+        ? 'pdf'
+        : 'native';
     const normalizedOptions = {
-      output_format: String(compareOptions.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
+      output_format: normalizedOutputFormat,
       change_pages_only: !!compareOptions.change_pages_only
     };
     const literaType = getLiteraTypeForExtension(origExt);
+    let outputFormatWarning = null;
+
+    if (!normalizedOptions.change_pages_only) {
+      if (normalizedOptions.output_format === 'pdf' && literaType && !['word', 'pdf'].includes(literaType)) {
+        normalizedOptions.output_format = 'native';
+        outputFormatWarning = 'PDF output is unavailable for this file type; generated Litera native output instead.';
+      } else if (normalizedOptions.output_format === 'docx' && literaType && literaType !== 'word') {
+        normalizedOptions.output_format = 'native';
+        outputFormatWarning = 'DOCX output is available only for Word comparisons; generated Litera native output instead.';
+      }
+    }
+
     const prefersPerAppForStyles = ['word', 'powerpoint', 'excel'].includes(literaType || '');
     const literaExe = getLiteraExecutable(origExt, {
       preferPerApp: normalizedOptions.change_pages_only || prefersPerAppForStyles
@@ -4668,11 +4906,6 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOpti
         files: customizationHints.stylePaths.slice(0, 5).map(value => path.basename(String(value))),
         dirs: customizationHints.styleDirs.slice(0, 5)
       });
-    }
-
-    if (normalizedOptions.output_format === 'pdf' && !normalizedOptions.change_pages_only && literaType && !['word', 'pdf'].includes(literaType)) {
-      reject(new Error('PDF output is currently supported only for Word/PDF comparisons.'));
-      return;
     }
 
     function hasOutputFile(filePath) {
@@ -4866,7 +5099,10 @@ function runLiteraComparison(originalPath, modifiedPath, outputPath, compareOpti
 
       proc.on('close', (code) => {
         let resolvedOutputPath = primaryOutputPath;
-        let resolvedWarning = warning || null;
+        let resolvedWarning = warning || outputFormatWarning || null;
+        if (warning && outputFormatWarning) {
+          resolvedWarning = `${outputFormatWarning} ${warning}`;
+        }
         let usedChangePagesFallback = false;
         const styleRejectedPattern = /(style).*(not found|missing|unable|cannot|can't|invalid)/i;
         const styleRejected = !!styleValue && styleRejectedPattern.test(`${stdout}\n${stderr}`);
@@ -5053,12 +5289,18 @@ ipcMain.handle('redline-documents', async (event, config) => {
   ensureRedlineInputFilesExist(config);
 
   const engine = config.engine || 'auto'; // 'auto', 'litera', 'emmaneigh'
+  const requestedOutputFormat = String(config.output_format || 'pdf').toLowerCase();
+  const normalizedOutputFormat = requestedOutputFormat === 'docx'
+    ? 'docx'
+    : requestedOutputFormat === 'pdf'
+      ? 'pdf'
+      : 'native';
   const literaOptions = {
-    output_format: String(config.output_format || 'native').toLowerCase() === 'pdf' ? 'pdf' : 'native',
+    output_format: normalizedOutputFormat,
     change_pages_only: !!config.change_pages_only
   };
   const requiresStrictLitera =
-    literaOptions.change_pages_only || literaOptions.output_format === 'pdf';
+    literaOptions.change_pages_only || literaOptions.output_format === 'pdf' || literaOptions.output_format === 'docx';
 
   // Determine if we should use Litera
   let useLitera = false;
@@ -6519,13 +6761,13 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
     return {
       success: true,
       isNewUser,
-      user: {
+      user: buildSessionUserPayload({
         id,
         username,
         displayName: finalDisplayName,
         email: normalizedEmail,
-        hasApiKey: !!apiKeyEnc
-      }
+        apiKeyEnc
+      })
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -6646,7 +6888,13 @@ ipcMain.handle('login-user', async (event, { username, password, email }) => {
 
     return {
       success: true,
-      user: { id, username: uname, displayName: displayName || uname, email: normalizedEmail, hasApiKey: !!apiKeyEnc }
+      user: buildSessionUserPayload({
+        id,
+        username: uname,
+        displayName: displayName || uname,
+        email: normalizedEmail,
+        apiKeyEnc
+      })
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -6716,7 +6964,13 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
 
     return {
       success: true,
-      user: { id, username, displayName: displayName || username, email: normalizedEmail || null, hasApiKey: !!apiKeyEnc }
+      user: buildSessionUserPayload({
+        id,
+        username,
+        displayName: displayName || username,
+        email: normalizedEmail || null,
+        apiKeyEnc
+      })
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -6724,8 +6978,15 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
 });
 
 // Get user statistics (for admin tracking)
-ipcMain.handle('get-user-stats', async () => {
+ipcMain.handle('can-access-user-stats', async (event, requester = {}) => {
+  return { success: true, allowed: canRequesterAccessAnalytics(requester) };
+});
+
+ipcMain.handle('get-user-stats', async (event, requester = {}) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  if (!canRequesterAccessAnalytics(requester)) {
+    return { success: false, error: 'Not authorized to view user analytics.' };
+  }
 
   try {
     const usersResult = db.exec(`
@@ -6816,8 +7077,11 @@ ipcMain.handle('get-activity-log-path', async () => {
   return { success: true, path: pendingLogsPath, note: 'Activity logs are centralized via Firebase Firestore' };
 });
 
-ipcMain.handle('open-analytics-storage', async () => {
+ipcMain.handle('open-analytics-storage', async (event, requester = {}) => {
   try {
+    if (!canRequesterAccessAnalytics(requester)) {
+      return { success: false, error: 'Not authorized to open analytics storage.' };
+    }
     const analyticsDir = path.dirname(historyDbPath);
     if (!fs.existsSync(analyticsDir)) {
       fs.mkdirSync(analyticsDir, { recursive: true });
@@ -6932,7 +7196,13 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
 
     return {
       success: true,
-      user: { id, username: uname, displayName: displayName || uname, email: normalizedEmail || null, hasApiKey: !!apiKeyEnc }
+      user: buildSessionUserPayload({
+        id,
+        username: uname,
+        displayName: displayName || uname,
+        email: normalizedEmail || null,
+        apiKeyEnc
+      })
     };
   } catch (e) {
     return { success: false, error: e.message };

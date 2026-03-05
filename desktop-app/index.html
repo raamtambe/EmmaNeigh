@@ -4201,8 +4201,9 @@
         <div class="output-format-row" style="margin-bottom: 8px;">
           <label for="redlineOutputFormat">Litera output</label>
           <select id="redlineOutputFormat" class="output-format-select">
+            <option value="pdf" selected>PDF (full document)</option>
+            <option value="docx">DOCX (full document)</option>
             <option value="native">Same as source</option>
-            <option value="pdf">PDF</option>
           </select>
           <label style="display: flex; align-items: center; gap: 6px; margin-left: auto; color: #ccc;">
             <input type="checkbox" id="redlineChangePagesOnly">
@@ -4210,7 +4211,7 @@
           </label>
         </div>
         <p style="font-size: 11px; color: #666; margin-bottom: 12px;">
-          Litera-only options. "Change pages only" uses Litera's changed-pages PDF output.
+          Litera-only options. Default is full-document PDF; choose DOCX or "Change pages only" when needed.
         </p>
 
         <!-- Document Pair Input -->
@@ -5619,10 +5620,37 @@
     });
 
     // ========== USER STATS ==========
+    const userStatsSection = document.getElementById('userStatsSection');
+    function getUserStatsRequester() {
+      if (!currentUser || currentUser.isGuest) return {};
+      return {
+        userId: currentUser.id || '',
+        username: currentUser.username || '',
+        email: currentUser.email || ''
+      };
+    }
+
+    function canCurrentUserViewUserStats() {
+      return !!(currentUser && !currentUser.isGuest && currentUser.isAdmin);
+    }
+
+    function applyUserStatsVisibility() {
+      if (!userStatsSection) return;
+      const allowed = canCurrentUserViewUserStats();
+      userStatsSection.style.display = allowed ? '' : 'none';
+    }
+
     async function loadUserStats() {
+      if (!canCurrentUserViewUserStats()) return;
       try {
-        const stats = await ipcRenderer.invoke('get-user-stats');
-        if (!stats.success) return;
+        const stats = await ipcRenderer.invoke('get-user-stats', getUserStatsRequester());
+        if (!stats.success) {
+          if (String(stats.error || '').toLowerCase().includes('not authorized')) {
+            if (currentUser) currentUser.isAdmin = false;
+            applyUserStatsVisibility();
+          }
+          return;
+        }
 
         document.getElementById('statTotalUsers').textContent = stats.totalUsers;
         document.getElementById('statTotalLogins').textContent = stats.totalLoginEvents || 0;
@@ -5661,14 +5689,18 @@
       } catch (e) {}
     }
 
-    document.getElementById('refreshUserStatsBtn').addEventListener('click', loadUserStats);
+    document.getElementById('refreshUserStatsBtn').addEventListener('click', async () => {
+      if (!canCurrentUserViewUserStats()) return;
+      await loadUserStats();
+    });
     const openAnalyticsStorageBtn = document.getElementById('openAnalyticsStorageBtn');
     const analyticsStorageStatus = document.getElementById('analyticsStorageStatus');
     if (openAnalyticsStorageBtn) {
       openAnalyticsStorageBtn.addEventListener('click', async () => {
+        if (!canCurrentUserViewUserStats()) return;
         if (analyticsStorageStatus) analyticsStorageStatus.textContent = 'Opening analytics storage folder...';
         try {
-          const result = await ipcRenderer.invoke('open-analytics-storage');
+          const result = await ipcRenderer.invoke('open-analytics-storage', getUserStatsRequester());
           if (result && result.success) {
             if (analyticsStorageStatus) analyticsStorageStatus.textContent = `Storage: ${result.path}`;
           } else if (analyticsStorageStatus) {
@@ -5683,7 +5715,10 @@
     // Load when settings opens
     settingsBtn.addEventListener('click', async () => {
       await loadModelSetting();
-      await loadUserStats();
+      applyUserStatsVisibility();
+      if (canCurrentUserViewUserStats()) {
+        await loadUserStats();
+      }
     });
 
     // ========== 2FA SETTINGS ==========
@@ -5914,6 +5949,7 @@
 
     // Current user state
     let currentUser = null;  // { id, username, displayName, isGuest }
+    applyUserStatsVisibility();
 
     // Firebase login gate removed — login always works regardless of Firebase status
     async function refreshFirebaseLoginGate(force = false) {
@@ -6170,6 +6206,7 @@
           }));
           userName.textContent = result.user.displayName || result.user.username;
           loginModal.classList.add('hidden');
+          applyUserStatsVisibility();
           refreshFeedbackAccess();
           // Load user's API key
           loadUserApiKey();
@@ -6207,6 +6244,7 @@
           }));
           userName.textContent = result.user.displayName || result.user.username;
           loginModal.classList.add('hidden');
+          applyUserStatsVisibility();
           refreshFeedbackAccess();
           pending2FAUserId = null;
           pending2FAEmail = null;
@@ -6297,6 +6335,7 @@
           }));
           userName.textContent = result.user.displayName || result.user.username;
           loginModal.classList.add('hidden');
+          applyUserStatsVisibility();
           refreshFeedbackAccess();
           loadUserApiKey();
         } else {
@@ -6347,6 +6386,7 @@
             }));
             userName.textContent = result.user.displayName || result.user.username;
             loginModal.classList.add('hidden');
+            applyUserStatsVisibility();
             refreshFeedbackAccess();
             loadUserApiKey();
             return;
@@ -6359,6 +6399,7 @@
       }
       // No valid session - show login modal
       userName.textContent = 'Sign In Required';
+      applyUserStatsVisibility();
       refreshFeedbackAccess();
     }
 
@@ -6371,6 +6412,7 @@
       localStorage.removeItem('emmaneigh_session');
       localStorage.removeItem('emmaneigh_user');
       currentUser = null;
+      applyUserStatsVisibility();
       refreshFeedbackAccess();
       loginModal.classList.remove('hidden');
       // Reset forms
@@ -8285,6 +8327,9 @@
         redlineOutputFormat.value = 'pdf';
         redlineOutputFormat.disabled = true;
       } else {
+        if (!redlineOutputFormat.value) {
+          redlineOutputFormat.value = 'pdf';
+        }
         redlineOutputFormat.disabled = false;
       }
     }
@@ -8531,8 +8576,12 @@
 
       const startTime = Date.now();
       const selectedEngine = redlineEngineSelect.value; // 'auto', 'litera', 'emmaneigh'
+      const requestedOutputFormat = redlineOutputFormat.value || 'pdf';
+      const effectiveOutputFormat = (!redlineChangePagesOnly.checked && (!literaInstalled || selectedEngine === 'emmaneigh'))
+        ? 'native'
+        : requestedOutputFormat;
       const redlineCompareOptions = {
-        output_format: redlineOutputFormat.value,
+        output_format: effectiveOutputFormat,
         change_pages_only: redlineChangePagesOnly.checked
       };
 
@@ -8772,7 +8821,7 @@
       redlineRowsDeleted.textContent = '0';
       redlineRowsModified.textContent = '0';
       redlineTableChanges.textContent = '0';
-      redlineOutputFormat.value = 'native';
+      redlineOutputFormat.value = 'pdf';
       redlineChangePagesOnly.checked = false;
       redlineDownloadZipBtn.textContent = 'Download Output';
       syncRedlineOptions();
