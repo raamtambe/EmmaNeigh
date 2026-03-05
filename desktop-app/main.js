@@ -47,13 +47,14 @@ const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
 const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b';
 const DEFAULT_LMSTUDIO_MODEL = 'local-model';
-const REQUIRE_FIREBASE_TELEMETRY = true;
+const REQUIRE_FIREBASE_TELEMETRY = false;
 const FIREBASE_TELEMETRY_PROBE_COLLECTION = 'telemetry_health';
 const FIREBASE_STATUS_SUCCESS_CACHE_MS = 30000;
 const FIREBASE_STATUS_FAILURE_CACHE_MS = 8000;
 const TELEMETRY_INGEST_TIMEOUT_MS = 20000;
 const TELEMETRY_INGEST_KEY = 'telemetry_ingest_url';
 const TELEMETRY_INGEST_TOKEN_KEY = 'telemetry_ingest_token';
+const TELEMETRY_CONFIG_FILENAME = 'telemetry-config.json';
 const FEEDBACK_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
 const FEEDBACK_ADMIN_USERNAMES = new Set(
   String(process.env.EMMANEIGH_FEEDBACK_ADMINS || FEEDBACK_ADMIN_DEFAULTS.join(','))
@@ -109,6 +110,24 @@ function parseSqliteDate(value) {
   return parsed;
 }
 
+function categorizeFeatureLabel(featureName) {
+  const key = String(featureName || '').trim().toLowerCase();
+  if (!key) return 'Other';
+  if (key.startsWith('imanage')) return 'iManage';
+  if (key.includes('redline')) return 'Redlines';
+  if (key === 'email') return 'Email Search';
+  if (key === 'collate') return 'Collate';
+  if (key === 'timetrack') return 'Time Tracking';
+  if (key === 'update_checklist') return 'Checklist Updates';
+  if (key === 'generate_punchlist' || key === 'punchlist') return 'Punchlists';
+  if (key === 'signature_packets' || key === 'packet_shell' || key === 'execution_version' || key === 'sigblocks') {
+    return 'Signature Workflows';
+  }
+  return key
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function canAccessFeedbackLog(username) {
   return FEEDBACK_ADMIN_USERNAMES.has(normalizeUsername(username));
 }
@@ -159,12 +178,70 @@ function decodeSecretFromSetting(storedValue) {
   return value;
 }
 
+let bundledTelemetryConfigCache = null;
+let bundledTelemetryConfigLoaded = false;
+
+function loadBundledTelemetryConfig() {
+  if (bundledTelemetryConfigLoaded) {
+    return bundledTelemetryConfigCache;
+  }
+
+  bundledTelemetryConfigLoaded = true;
+  const candidatePaths = [
+    String(process.env.EMMANEIGH_TELEMETRY_CONFIG_PATH || '').trim(),
+    path.join(process.resourcesPath || '', TELEMETRY_CONFIG_FILENAME),
+    path.join(__dirname, TELEMETRY_CONFIG_FILENAME)
+  ].filter(Boolean);
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      if (!fs.existsSync(candidatePath)) continue;
+      const raw = fs.readFileSync(candidatePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        bundledTelemetryConfigCache = parsed;
+        return bundledTelemetryConfigCache;
+      }
+    } catch (_) {}
+  }
+
+  bundledTelemetryConfigCache = null;
+  return null;
+}
+
 function getTelemetryIngestUrl() {
-  return normalizeIngestUrl(getSettingValue(TELEMETRY_INGEST_KEY, ''));
+  const fromSetting = normalizeIngestUrl(getSettingValue(TELEMETRY_INGEST_KEY, ''));
+  if (fromSetting) return fromSetting;
+
+  const fromEnv = normalizeIngestUrl(process.env.EMMANEIGH_TELEMETRY_INGEST_URL || '');
+  if (fromEnv) return fromEnv;
+
+  const bundled = loadBundledTelemetryConfig();
+  if (!bundled) return '';
+  return normalizeIngestUrl(
+    bundled.telemetryIngestUrl ||
+    bundled.ingestUrl ||
+    bundled.url ||
+    ''
+  );
 }
 
 function getTelemetryIngestToken() {
-  return decodeSecretFromSetting(getSettingValue(TELEMETRY_INGEST_TOKEN_KEY, ''));
+  const fromSetting = decodeSecretFromSetting(getSettingValue(TELEMETRY_INGEST_TOKEN_KEY, ''));
+  if (fromSetting) return fromSetting;
+
+  const fromEnv = String(process.env.EMMANEIGH_TELEMETRY_INGEST_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+
+  const bundled = loadBundledTelemetryConfig();
+  if (!bundled) return '';
+  return String(
+    bundled.telemetryIngestToken ||
+    bundled.ingestToken ||
+    bundled.token ||
+    bundled.apiKey ||
+    ''
+  ).trim();
 }
 
 function invalidateTelemetryStatusCache() {
@@ -437,6 +514,98 @@ async function requireFirebaseTelemetry(actionLabel) {
   };
 }
 
+function telemetryWriteIsMandatory() {
+  return REQUIRE_FIREBASE_TELEMETRY;
+}
+
+function writeLocalActivityRecord(entry) {
+  if (!db) return false;
+  try {
+    db.run(`
+      INSERT INTO user_activity_history (username, email, action, app_version, machine_id)
+      VALUES (?, ?, ?, ?, ?)
+    `, [
+      String(entry.username || 'unknown'),
+      entry.email ? String(entry.email) : null,
+      String(entry.action || 'activity'),
+      String(entry.app_version || APP_VERSION),
+      String(entry.machine_id || MACHINE_ID)
+    ]);
+    saveDatabase();
+    return true;
+  } catch (e) {
+    console.error('Failed to write local activity history:', e.message);
+    return false;
+  }
+}
+
+function getUsageHistoryColumns() {
+  if (!db) return new Set();
+  try {
+    const info = db.exec('PRAGMA table_info(usage_history)');
+    if (info.length === 0) return new Set();
+    return new Set(
+      info[0].values.map((row) => String(row[1] || '').trim().toLowerCase()).filter(Boolean)
+    );
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function ensureUsageHistorySchema() {
+  if (!db) return;
+  try {
+    const columns = getUsageHistoryColumns();
+    if (columns.size === 0) return;
+
+    const addColumnIfMissing = (name, definition) => {
+      const normalized = String(name || '').trim().toLowerCase();
+      if (!normalized || columns.has(normalized)) return;
+      db.run(`ALTER TABLE usage_history ADD COLUMN ${normalized} ${definition}`);
+      columns.add(normalized);
+    };
+
+    addColumnIfMissing('user_name', 'TEXT');
+    addColumnIfMissing('user_email', 'TEXT');
+    addColumnIfMissing('feature', 'TEXT');
+    addColumnIfMissing('action', 'TEXT');
+    addColumnIfMissing('input_count', 'INTEGER DEFAULT 0');
+    addColumnIfMissing('output_count', 'INTEGER DEFAULT 0');
+    addColumnIfMissing('duration_ms', 'INTEGER DEFAULT 0');
+    addColumnIfMissing('timestamp', 'DATETIME');
+
+    if (columns.has('user_id') && columns.has('user_name')) {
+      db.run(`
+        UPDATE usage_history
+        SET user_name = COALESCE(
+          NULLIF(TRIM(user_name), ''),
+          (SELECT username FROM users WHERE users.id = usage_history.user_id LIMIT 1),
+          'unknown'
+        )
+        WHERE user_name IS NULL OR TRIM(user_name) = ''
+      `);
+    }
+
+    if (columns.has('user_id') && columns.has('user_email')) {
+      db.run(`
+        UPDATE usage_history
+        SET user_email = COALESCE(
+          NULLIF(TRIM(user_email), ''),
+          (SELECT email FROM users WHERE users.id = usage_history.user_id LIMIT 1),
+          ''
+        )
+        WHERE user_email IS NULL OR TRIM(user_email) = ''
+      `);
+    }
+
+    db.run(`CREATE INDEX IF NOT EXISTS idx_usage_history_timestamp ON usage_history(timestamp)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_usage_history_feature ON usage_history(feature)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_usage_history_user_email ON usage_history(user_email)`);
+  } catch (e) {
+    console.error('Failed to migrate usage_history schema:', e.message);
+  }
+}
+
 // ========== CENTRALIZED ACTIVITY LOGGING (Firebase Firestore) ==========
 
 /**
@@ -454,11 +623,17 @@ async function logUserActivity(username, action, metadata = {}) {
     machine_id: MACHINE_ID
   };
 
-  return writeTelemetryRecord({
+  // Failsafe: always record login/activity locally, even when telemetry backend is unavailable.
+  const localSaved = writeLocalActivityRecord(entry);
+
+  const telemetrySaved = await writeTelemetryRecord({
     eventType: 'user_activity',
     collection: 'activity_logs',
     payload: entry
   });
+  if (telemetrySaved) return true;
+  if (!telemetryWriteIsMandatory()) return localSaved;
+  return false;
 }
 
 /**
@@ -485,6 +660,70 @@ async function logUsageToFirestore(data) {
     collection: 'usage_logs',
     payload: entry
   });
+}
+
+function normalizeUsageEventData(data = {}) {
+  const normalizedFeature = String(data.feature || 'unknown').trim().toLowerCase() || 'unknown';
+  const normalizedAction = String(data.action || 'process').trim().toLowerCase() || 'process';
+  return {
+    user_name: String(data.user_name || data.username || 'unknown').trim() || 'unknown',
+    user_email: normalizeEmail(data.user_email || data.email || ''),
+    feature: normalizedFeature,
+    action: normalizedAction,
+    engine: data.engine ? String(data.engine).trim().toLowerCase() : null,
+    input_count: Number.isFinite(Number(data.input_count)) ? Math.max(0, Number(data.input_count)) : 0,
+    output_count: Number.isFinite(Number(data.output_count)) ? Math.max(0, Number(data.output_count)) : 0,
+    duration_ms: Number.isFinite(Number(data.duration_ms)) ? Math.max(0, Math.round(Number(data.duration_ms))) : 0
+  };
+}
+
+function writeLocalUsageRecord(data = {}) {
+  if (!db) return false;
+  try {
+    const entry = normalizeUsageEventData(data);
+    db.run(`
+      INSERT INTO usage_history (user_name, user_email, feature, action, input_count, output_count, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      entry.user_name,
+      entry.user_email || null,
+      entry.feature,
+      entry.action,
+      entry.input_count,
+      entry.output_count,
+      entry.duration_ms
+    ]);
+    saveDatabase();
+    return true;
+  } catch (e) {
+    console.error('Failed to write local usage history:', e.message);
+    return false;
+  }
+}
+
+async function recordUsageEvent(data = {}) {
+  const telemetryGate = await requireFirebaseTelemetry('usage logging');
+  if (!telemetryGate.success) return telemetryGate;
+
+  const entry = normalizeUsageEventData(data);
+
+  // Failsafe: write locally first so analytics remain available offline or if telemetry fails.
+  const localSaved = writeLocalUsageRecord(entry);
+  const telemetrySaved = await logUsageToFirestore(entry);
+
+  if (!telemetrySaved && telemetryWriteIsMandatory()) {
+    return { success: false, error: 'Firebase telemetry write failed for usage logging.' };
+  }
+
+  if (!localSaved && !telemetrySaved) {
+    return { success: false, error: 'Usage event could not be stored locally or remotely.' };
+  }
+
+  return {
+    success: true,
+    localLogged: localSaved,
+    telemetryLogged: telemetrySaved
+  };
 }
 
 async function logFeedbackToFirestore(data) {
@@ -669,15 +908,29 @@ async function initDatabase() {
       CREATE TABLE IF NOT EXISTS usage_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        user_id TEXT,
+        user_name TEXT,
+        user_email TEXT,
         feature TEXT,
         action TEXT,
         input_count INTEGER DEFAULT 0,
         output_count INTEGER DEFAULT 0,
-        duration_ms INTEGER DEFAULT 0,
-        FOREIGN KEY (user_id) REFERENCES users(id)
+        duration_ms INTEGER DEFAULT 0
       )
     `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_activity_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        username TEXT,
+        email TEXT,
+        action TEXT,
+        app_version TEXT,
+        machine_id TEXT
+      )
+    `);
+
+    ensureUsageHistorySchema();
 
     saveDatabase();
     console.log('Database initialized at:', historyDbPath);
@@ -1875,10 +2128,11 @@ app.whenReady().then(async () => {
   // Initialize database first
   await initDatabase();
 
-  // Initialize Firebase for centralized logging (mandatory telemetry mode).
+  // Initialize Firebase telemetry status on startup.
   const firebaseStatus = await getFirebaseTelemetryStatus({ force: true, context: 'app_startup' });
   if (!firebaseStatus.connected) {
-    console.error('Firebase telemetry is required but unavailable:', firebaseStatus.message);
+    const level = REQUIRE_FIREBASE_TELEMETRY ? 'error' : 'warn';
+    console[level](`Firebase telemetry unavailable on startup: ${firebaseStatus.message}`);
   }
 
   createWindow();
@@ -3077,25 +3331,51 @@ try {
 
 // ========== COMMAND TOOL DISPATCHER ==========
 
-async function dispatchTool(toolName, input) {
+function getToolUsageEvent(toolName, input = {}, toolResult = null) {
+  const result = toolResult && typeof toolResult === 'object' ? toolResult : {};
+  if (String(toolName || '').startsWith('imanage_')) {
+    const action = String(toolName).replace('imanage_', '') || 'action';
+    const outputCount = Array.isArray(result.files) ? result.files.length
+      : Array.isArray(result.versions) ? result.versions.length
+      : result.success ? 1 : 0;
+    return {
+      feature: 'imanage',
+      action: `agent_${action}`,
+      input_count: 1,
+      output_count: outputCount
+    };
+  }
+
+  return null;
+}
+
+async function dispatchTool(toolName, input, actor = {}) {
+  const startedAt = Date.now();
+  let result;
   switch (toolName) {
     case 'imanage_browse':
-      return await imanageBrowseFiles(input.multiple || false);
+      result = await imanageBrowseFiles(input.multiple || false);
+      break;
 
     case 'imanage_save':
-      return await imanageSaveDocument(input.file_path, input.action || 'new_document', input.show_dialog !== false);
+      result = await imanageSaveDocument(input.file_path, input.action || 'new_document', input.show_dialog !== false);
+      break;
 
     case 'imanage_get_versions':
-      return await imanageGetVersions(input.profile_id);
+      result = await imanageGetVersions(input.profile_id);
+      break;
 
     case 'imanage_checkout':
-      return await imanageCheckout(input.profile_id, input.checkout_path);
+      result = await imanageCheckout(input.profile_id, input.checkout_path);
+      break;
 
     case 'imanage_checkin':
-      return await imanageCheckin(input.file_path);
+      result = await imanageCheckin(input.file_path);
+      break;
 
     case 'imanage_search':
-      return await imanageSearch(input.query);
+      result = await imanageSearch(input.query);
+      break;
 
     case 'run_redline': {
       // Delegate to existing redline-documents handler
@@ -3110,29 +3390,57 @@ async function dispatchTool(toolName, input) {
       if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('trigger-redline', config);
       }
-      return { success: true, message: `Redline started: comparing documents with ${engine} engine.` };
+      result = { success: true, message: `Redline started: comparing documents with ${engine} engine.` };
+      break;
     }
 
     case 'navigate_tab':
       if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('navigate-tab', input.tab);
       }
-      return { success: true, message: `Switched to ${input.tab} tab.` };
+      result = { success: true, message: `Switched to ${input.tab} tab.` };
+      break;
 
     case 'open_folder':
       shell.openPath(input.path);
-      return { success: true, message: `Opened ${input.path}` };
+      result = { success: true, message: `Opened ${input.path}` };
+      break;
 
     case 'search_emails':
       // Delegate to existing nl-search-emails handler — will be called from renderer with email data
       if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('trigger-email-search', { query: input.query });
       }
-      return { success: true, message: `Email search started for: ${input.query}` };
+      result = { success: true, message: `Email search started for: ${input.query}` };
+      break;
 
     default:
-      return { success: false, error: `Unknown tool: ${toolName}` };
+      result = { success: false, error: `Unknown tool: ${toolName}` };
+      break;
   }
+
+  const usageEvent = getToolUsageEvent(toolName, input, result);
+  if (usageEvent) {
+    try {
+      const usageLogged = await recordUsageEvent({
+        user_name: actor?.username || actor?.name || actor?.displayName || 'unknown',
+        user_email: actor?.email || '',
+        feature: usageEvent.feature,
+        action: usageEvent.action,
+        input_count: usageEvent.input_count,
+        output_count: usageEvent.output_count,
+        duration_ms: Date.now() - startedAt,
+        engine: usageEvent.engine || null
+      });
+      if (!usageLogged.success) {
+        console.warn(`Tool usage logging failed for ${toolName}: ${usageLogged.error || 'unknown error'}`);
+      }
+    } catch (e) {
+      console.warn(`Tool usage logging threw for ${toolName}: ${e.message}`);
+    }
+  }
+
+  return result;
 }
 
 // ========== LITERA COMPARE INTEGRATION ==========
@@ -5402,7 +5710,8 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       if (toolUse) {
         // Dispatch the tool call
         console.log(`[execute-command] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
-        const toolResult = await dispatchTool(toolUse.name, toolUse.input);
+        const actor = context && typeof context === 'object' ? (context.actor || {}) : {};
+        const toolResult = await dispatchTool(toolUse.name, toolUse.input, actor);
 
         // Build a user-friendly response
         const toolLabel = toolUse.name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -5976,11 +6285,14 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
       displayName: finalDisplayName
     });
     if (!loginLogged) {
-      if (isNewUser && createdUserId) {
+      if (isNewUser && createdUserId && telemetryWriteIsMandatory()) {
         db.run(`DELETE FROM users WHERE id = '${createdUserId}'`);
       }
-      saveDatabase();
-      return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+      if (telemetryWriteIsMandatory()) {
+        saveDatabase();
+        return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+      }
+      console.warn('Telemetry write failed during email-login; continuing because telemetry is not mandatory.');
     }
 
     if (isNewUser) {
@@ -5989,11 +6301,14 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
         displayName: finalDisplayName
       });
       if (!createdLogged) {
-        if (createdUserId) {
+        if (createdUserId && telemetryWriteIsMandatory()) {
           db.run(`DELETE FROM users WHERE id = '${createdUserId}'`);
         }
-        saveDatabase();
-        return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
+        if (telemetryWriteIsMandatory()) {
+          saveDatabase();
+          return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
+        }
+        console.warn('Telemetry write failed during account_created event; continuing because telemetry is not mandatory.');
       }
     }
 
@@ -6062,9 +6377,12 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
       displayName: displayName || username
     });
     if (!activityLogged) {
-      db.run(`DELETE FROM users WHERE id = '${id}'`);
-      saveDatabase();
-      return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
+      if (telemetryWriteIsMandatory()) {
+        db.run(`DELETE FROM users WHERE id = '${id}'`);
+        saveDatabase();
+        return { success: false, error: 'Firebase telemetry write failed during account creation. Please retry.' };
+      }
+      console.warn('Telemetry write failed during account creation; continuing because telemetry is not mandatory.');
     }
 
     return { success: true, userId: id };
@@ -6119,7 +6437,10 @@ ipcMain.handle('login-user', async (event, { username, password, email }) => {
       displayName: displayName || uname
     });
     if (!activityLogged) {
-      return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+      if (telemetryWriteIsMandatory()) {
+        return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+      }
+      console.warn('Telemetry write failed during login; continuing because telemetry is not mandatory.');
     }
 
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
@@ -6185,7 +6506,10 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
       displayName: displayName || username
     });
     if (!activityLogged) {
-      return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+      if (telemetryWriteIsMandatory()) {
+        return { success: false, error: 'Firebase telemetry write failed during login. Please retry.' };
+      }
+      console.warn('Telemetry write failed during 2FA login; continuing because telemetry is not mandatory.');
     }
 
     // Update last login
@@ -6248,12 +6572,41 @@ ipcMain.handle('get-user-stats', async () => {
       createdAt: user.createdAt
     }));
 
+    const featuresResult = db.exec(`
+      SELECT feature, COUNT(*) as usage_count
+      FROM usage_history
+      WHERE feature IS NOT NULL AND TRIM(feature) != ''
+      GROUP BY feature
+      ORDER BY usage_count DESC
+    `);
+    const aggregatedFeatureUsage = new Map();
+    if (featuresResult.length > 0) {
+      for (const row of featuresResult[0].values) {
+        const label = categorizeFeatureLabel(row[0]);
+        const count = Number(row[1] || 0);
+        aggregatedFeatureUsage.set(label, (aggregatedFeatureUsage.get(label) || 0) + count);
+      }
+    }
+    const featureUsage = Array.from(aggregatedFeatureUsage.entries())
+      .map(([feature, count]) => ({ feature, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12);
+
+    const loginResult = db.exec(`
+      SELECT COUNT(*)
+      FROM user_activity_history
+      WHERE action = 'login'
+    `);
+    const totalLoginEvents = loginResult.length > 0 ? Number(loginResult[0].values[0][0] || 0) : 0;
+
     return {
       success: true,
       totalUsers: uniqueUsers.length,
       activeUsers,
       weeklyActive,
-      users
+      users,
+      featureUsage,
+      totalLoginEvents
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -6263,6 +6616,27 @@ ipcMain.handle('get-user-stats', async () => {
 // Get path to pending logs (for debugging)
 ipcMain.handle('get-activity-log-path', async () => {
   return { success: true, path: pendingLogsPath, note: 'Activity logs are centralized via Firebase Firestore' };
+});
+
+ipcMain.handle('open-analytics-storage', async () => {
+  try {
+    const analyticsDir = path.dirname(historyDbPath);
+    if (!fs.existsSync(analyticsDir)) {
+      fs.mkdirSync(analyticsDir, { recursive: true });
+    }
+    const openResult = await shell.openPath(analyticsDir);
+    if (openResult) {
+      return { success: false, error: openResult, path: analyticsDir };
+    }
+    return {
+      success: true,
+      path: analyticsDir,
+      databasePath: historyDbPath,
+      feedbackPath: feedbackLogPath
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // Save API key for logged-in user
@@ -6817,7 +7191,11 @@ ipcMain.handle('save-telemetry-ingest-config', async (event, config = {}) => {
       mode: 'backend'
     });
     if (!status.connected) {
-      return { success: false, error: status.message, status };
+      return {
+        success: true,
+        status,
+        warning: status.message || 'Ingest config saved, but connectivity test failed.'
+      };
     }
 
     return { success: true, status };
@@ -7043,35 +7421,14 @@ ipcMain.handle('get-firebase-telemetry-status', async (event, options = {}) => {
 // ========== USAGE HISTORY HANDLERS ==========
 
 // Log usage event — writes to both local SQLite and Firebase Firestore
-ipcMain.handle('log-usage', async (event, data) => {
-  const telemetryGate = await requireFirebaseTelemetry('usage logging');
-  if (!telemetryGate.success) return telemetryGate;
-
-  const usageLogged = await logUsageToFirestore(data);
-  if (!usageLogged) {
-    return { success: false, error: 'Firebase telemetry write failed for usage logging.' };
-  }
-
-  // Also write to local SQLite (offline backup)
-  if (!db) return { success: false, error: 'Database not initialized' };
-
-  try {
-    db.run(`
-      INSERT INTO usage_history (user_name, feature, action, input_count, output_count, duration_ms)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [
-      data.user_name || 'unknown',
-      data.feature || 'unknown',
-      data.action || 'process',
-      data.input_count || 0,
-      data.output_count || 0,
-      data.duration_ms || 0
-    ]);
-    saveDatabase();
-    return { success: true };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
+ipcMain.handle('log-usage', async (event, data = {}) => {
+  const result = await recordUsageEvent(data);
+  if (!result.success) return result;
+  return {
+    success: true,
+    localLogged: !!result.localLogged,
+    telemetryLogged: !!result.telemetryLogged
+  };
 });
 
 ipcMain.handle('submit-feedback', async (event, data) => {
@@ -7099,10 +7456,12 @@ ipcMain.handle('submit-feedback', async (event, data) => {
       return { success: false, error: 'Failed to save feedback log locally.' };
     }
     const feedbackLogged = await logFeedbackToFirestore(entry);
-    if (!feedbackLogged) {
+    if (!feedbackLogged && telemetryWriteIsMandatory()) {
       return { success: false, error: 'Firebase telemetry write failed while submitting feedback.' };
+    } else if (!feedbackLogged) {
+      console.warn('Telemetry write failed for feedback; continuing because telemetry is not mandatory.');
     }
-    return { success: true, path: feedbackLogPath };
+    return { success: true, path: feedbackLogPath, telemetryLogged: !!feedbackLogged };
   } catch (e) {
     return { success: false, error: e.message };
   }

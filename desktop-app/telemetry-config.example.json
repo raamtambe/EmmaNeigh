@@ -1,0 +1,4 @@
+{
+  "telemetryIngestUrl": "https://your-ingest-service.example.com/telemetry/ingest",
+  "telemetryIngestToken": "replace-with-shared-secret-token"
+}
