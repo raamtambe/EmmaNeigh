@@ -3402,6 +3402,8 @@ const COMMAND_TOOLS = [
 const IMANAGE_PS_BOOTSTRAP = `
 function Get-IManageWorkObjectFactory {
   $progIds = @(
+    'Com.iManage.Work.WorkObjectFactory',
+    'iManage.Work.WorkObjectFactory',
     'iManage.iwComWrapper.WorkObjectFactory',
     'iManage.WorkSiteObjects.iwComWrapper.WorkObjectFactory',
     'iManage.WorkSiteObjects.WorkObjectFactory'
@@ -3418,31 +3420,70 @@ function Get-IManageWorkObjectFactory {
   throw ('Unable to create iManage COM object. ' + ($errors -join ' | '))
 }
 
-function Ensure-IManageLogin($wof) {
+function Invoke-IManageLogin($wof) {
+  $methodNames = @('LogIn', 'Login', 'ShowLoginDialog', 'ShowLogInDialog')
+  foreach ($methodName in $methodNames) {
+    try {
+      $method = $wof.PSObject.Methods[$methodName]
+      if ($null -eq $method) { continue }
+      $wof.$methodName()
+      Start-Sleep -Milliseconds 200
+      return $true
+    } catch {
+      # Try next available login method.
+    }
+  }
+  return $false
+}
+
+function Get-IManageHasLogin($wof, [ref]$hasMember, [ref]$hasLogin) {
+  $hasMember.Value = $false
+  $hasLogin.Value = $false
+
   try {
-    $hasLogin = [bool]$wof.HasLogin
-    if (-not $hasLogin) {
-      $wof.LogIn()
-      Start-Sleep -Milliseconds 150
+    $prop = $wof.PSObject.Properties['HasLogin']
+    if ($null -ne $prop) {
+      $hasMember.Value = $true
+      $hasLogin.Value = [bool]$wof.HasLogin
+      return
     }
   } catch {
-    try {
-      $wof.LogIn()
-      Start-Sleep -Milliseconds 150
-    } catch {
-      throw ("iManage login failed: " + $_.Exception.Message)
-    }
+    # Continue to method fallback.
   }
 
   try {
-    if (-not [bool]$wof.HasLogin) {
-      throw "iManage login is required but no active login session was found."
+    $method = $wof.PSObject.Methods['HasLogin']
+    if ($null -ne $method) {
+      $hasMember.Value = $true
+      $hasLogin.Value = [bool]($wof.HasLogin())
+      return
     }
   } catch {
-    if ($_.Exception -and $_.Exception.Message) {
-      throw $_.Exception.Message
+    # No HasLogin member available.
+  }
+}
+
+function Ensure-IManageLogin($wof) {
+  $hasLoginMember = $false
+  $hasLogin = $false
+  Get-IManageHasLogin $wof ([ref]$hasLoginMember) ([ref]$hasLogin)
+
+  if ($hasLoginMember -and -not $hasLogin) {
+    $loginAttempted = Invoke-IManageLogin $wof
+    Get-IManageHasLogin $wof ([ref]$hasLoginMember) ([ref]$hasLogin)
+    if ($hasLoginMember -and -not $hasLogin) {
+      if ($loginAttempted) {
+        throw "iManage login failed. Please sign in to iManage Work Desktop and retry."
+      }
+      throw "iManage login required, but this iManage COM object does not expose an interactive login method. Please sign in to iManage Work Desktop and retry."
     }
-    throw "iManage login is required but no active login session was found."
+    return
+  }
+
+  if (-not $hasLoginMember) {
+    # Some COM variants do not expose HasLogin/LogIn methods.
+    # Best effort only; downstream calls will return concrete API errors if session is unavailable.
+    [void](Invoke-IManageLogin $wof)
   }
 }
 
@@ -3513,7 +3554,7 @@ function parseIManagePowerShellOutput(stdout, stderr, code, host) {
 
     return {
       success: false,
-      error: 'Failed to parse iManage response payload.',
+      error: 'Failed to parse PowerShell response payload.',
       stdout: stdoutText,
       stderr: stderrText,
       rawPayload,
@@ -3534,7 +3575,7 @@ function parseIManagePowerShellOutput(stdout, stderr, code, host) {
   };
 }
 
-function isIManageComFactoryError(result = {}) {
+function isComClassFactoryError(result = {}) {
   const blobs = [
     result.error,
     result.stderr,
@@ -3551,9 +3592,22 @@ function isIManageComFactoryError(result = {}) {
     blobs.includes('0x80040154') ||
     blobs.includes('80040154') ||
     blobs.includes('invalid class string') ||
-    blobs.includes('activex') ||
-    blobs.includes('unable to create imanage com object')
+    blobs.includes('activex')
   );
+}
+
+function isIManageComFactoryError(result = {}) {
+  if (isComClassFactoryError(result)) return true;
+  const blobs = [
+    result.error,
+    result.stderr,
+    result.stdout,
+    result.rawPayload,
+    result && result.data && result.data.error
+  ]
+    .map((part) => String(part || '').toLowerCase())
+    .join('\n');
+  return blobs.includes('unable to create imanage com object');
 }
 
 function formatIManageErrorMessage(message) {
@@ -3561,6 +3615,31 @@ function formatIManageErrorMessage(message) {
   if (!text) return 'Unknown iManage error.';
   if (!isIManageComFactoryError({ error: text })) return text;
   return `iManage COM could not be loaded (CLSID/class-factory issue). EmmaNeigh attempted both 64-bit and 32-bit PowerShell hosts. Please repair or reinstall iManage Work Desktop for this Windows user, then restart and retry. Details: ${text}`;
+}
+
+function formatOfficeComErrorMessage(componentLabel, message) {
+  const text = String(message || '').trim();
+  if (!text) return `${componentLabel} COM error.`;
+  if (!isComClassFactoryError({ error: text })) return text;
+  return `${componentLabel} COM could not be loaded (CLSID/class-factory issue). EmmaNeigh attempted both 64-bit and 32-bit PowerShell hosts. Please repair or reinstall Microsoft ${componentLabel} for this Windows user, then restart and retry. Details: ${text}`;
+}
+
+function normalizeOfficeComFailure(result, componentLabel = 'Office') {
+  if (!result || typeof result !== 'object') {
+    return { success: false, error: `${componentLabel} COM error.` };
+  }
+  if (!result.success) {
+    const dataError = result.data && result.data.error ? String(result.data.error) : '';
+    return {
+      ...result,
+      success: false,
+      error: formatOfficeComErrorMessage(componentLabel, dataError || result.error || result.stderr || result.stdout)
+    };
+  }
+  if (result.data && result.data.error) {
+    return { success: false, error: formatOfficeComErrorMessage(componentLabel, result.data.error) };
+  }
+  return null;
 }
 
 function normalizeIManageFailure(result) {
@@ -3800,7 +3879,7 @@ function imanageRunPowerShell(scriptContent) {
         const parsed = parseIManagePowerShellOutput(stdout, stderr, code, host);
         lastResult = parsed;
 
-        const shouldRetry = isIManageComFactoryError(parsed);
+        const shouldRetry = isComClassFactoryError(parsed);
         if (shouldRetry && attemptIndex < hosts.length - 1) {
           attemptIndex += 1;
           runAttempt();
@@ -3812,7 +3891,7 @@ function imanageRunPowerShell(scriptContent) {
         if (hosts.length > 1) {
           if (!parsed.success) {
             parsed.error = `${parsed.error} (PowerShell hosts tried: ${hosts.join(', ')})`;
-          } else if (parsed.data && parsed.data.error && isIManageComFactoryError(parsed)) {
+          } else if (parsed.data && parsed.data.error && isComClassFactoryError(parsed)) {
             parsed.data.error = `${parsed.data.error} (PowerShell hosts tried: ${hosts.join(', ')})`;
           }
         }
@@ -4457,92 +4536,125 @@ async function runAgentChecklistPrecedentRedlines(config = {}) {
 
 async function wordSaveAsPdf(filePath, outputPath) {
   if (process.platform !== 'win32') return { success: false, error: 'Word COM is only available on Windows.' };
-  if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
-  const pdfPath = outputPath || filePath.replace(/\.(docx?|rtf)$/i, '.pdf');
-  const escapedInput = filePath.replace(/'/g, "''");
+  const resolvedInputPath = resolveExistingLocalPath(filePath);
+  if (!resolvedInputPath || !fs.existsSync(resolvedInputPath)) return { success: false, error: `File not found: ${filePath}` };
+  const defaultPdfPath = resolvedInputPath.replace(/\.(docx?|rtf)$/i, '.pdf');
+  const pdfPath = normalizeLocalPath(outputPath || defaultPdfPath);
+  const escapedInput = resolvedInputPath.replace(/'/g, "''");
   const escapedOutput = pdfPath.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
+$word = $null
+$doc = $null
 try {
   $word = New-Object -ComObject "Word.Application"
   $word.Visible = $false
-  $doc = $word.Documents.Open('${escapedInput}')
-  $doc.SaveAs2('${escapedOutput}', 17) # 17 = wdFormatPDF
-  $doc.Close($false)
-  $word.Quit()
-  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+  $doc = $word.Documents.Open('${escapedInput}', $false, $false)
+  try {
+    $doc.SaveAs2('${escapedOutput}', 17) # 17 = wdFormatPDF
+  } catch {
+    # Fallback for older Word versions.
+    $doc.SaveAs('${escapedOutput}', 17)
+  }
   Write-Output '###JSON_START###{"success":true,"output":"${escapedOutput.replace(/\\/g, '\\\\')}"}###JSON_END###'
 } catch {
-  try { $word.Quit() } catch {}
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($doc -ne $null) { $doc.Close($false) } } catch {}
+  try { if ($word -ne $null) { $word.Quit() } } catch {}
+  try { if ($doc -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null } } catch {}
+  try { if ($word -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeOfficeComFailure(result, 'Word');
+  if (failure) return failure;
   return { success: true, message: `Saved PDF: ${pdfPath}`, output_path: pdfPath };
 }
 
 async function wordFindReplace(filePath, findText, replaceText, save = true) {
   if (process.platform !== 'win32') return { success: false, error: 'Word COM is only available on Windows.' };
-  if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
-  const escapedPath = filePath.replace(/'/g, "''");
-  const escapedFind = findText.replace(/'/g, "''");
-  const escapedReplace = replaceText.replace(/'/g, "''");
+  const resolvedInputPath = resolveExistingLocalPath(filePath);
+  if (!resolvedInputPath || !fs.existsSync(resolvedInputPath)) return { success: false, error: `File not found: ${filePath}` };
+  const normalizedFind = String(findText || '').trim();
+  if (!normalizedFind) return { success: false, error: 'find_text is required for Word find/replace.' };
+  const escapedPath = resolvedInputPath.replace(/'/g, "''");
+  const escapedFind = normalizedFind.replace(/'/g, "''");
+  const escapedReplace = String(replaceText || '').replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
+$word = $null
+$doc = $null
 try {
   $word = New-Object -ComObject "Word.Application"
   $word.Visible = $false
-  $doc = $word.Documents.Open('${escapedPath}')
+  $doc = $word.Documents.Open('${escapedPath}', $false, $false)
   $range = $doc.Content
   $find = $range.Find
+  $find.ClearFormatting()
+  $find.Replacement.ClearFormatting()
   $find.Text = '${escapedFind}'
   $find.Replacement.Text = '${escapedReplace}'
   $find.Forward = $true
-  $find.Wrap = 1  # wdFindContinue
+  $find.Wrap = 0  # wdFindStop
+  $find.Format = $false
+  $find.MatchCase = $false
+  $find.MatchWholeWord = $false
   $count = 0
-  while ($find.Execute($false, $false, $false, $false, $false, $false, $true, 0, $false, $null, 2)) { $count++ }
+  while ($find.Execute()) {
+    $range.Text = '${escapedReplace}'
+    $count++
+    $range.SetRange($range.End, $doc.Content.End)
+    $find = $range.Find
+    $find.Text = '${escapedFind}'
+    $find.Forward = $true
+    $find.Wrap = 0
+  }
   ${save ? '$doc.Save()' : ''}
-  $doc.Close($false)
-  $word.Quit()
-  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
   Write-Output "###JSON_START###{\\"success\\":true,\\"replacements\\":$count}###JSON_END###"
 } catch {
-  try { $word.Quit() } catch {}
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($doc -ne $null) { $doc.Close($false) } } catch {}
+  try { if ($word -ne $null) { $word.Quit() } } catch {}
+  try { if ($doc -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null } } catch {}
+  try { if ($word -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeOfficeComFailure(result, 'Word');
+  if (failure) return failure;
   return { success: true, message: `Replaced ${result.data?.replacements || 0} occurrence(s).`, replacements: result.data?.replacements || 0 };
 }
 
 async function wordExtractText(filePath) {
   if (process.platform !== 'win32') return { success: false, error: 'Word COM is only available on Windows.' };
-  if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
-  const escapedPath = filePath.replace(/'/g, "''");
+  const resolvedInputPath = resolveExistingLocalPath(filePath);
+  if (!resolvedInputPath || !fs.existsSync(resolvedInputPath)) return { success: false, error: `File not found: ${filePath}` };
+  const escapedPath = resolvedInputPath.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
+$word = $null
+$doc = $null
 try {
   $word = New-Object -ComObject "Word.Application"
   $word.Visible = $false
   $doc = $word.Documents.Open('${escapedPath}', $false, $true) # ReadOnly
   $text = $doc.Content.Text
-  $doc.Close($false)
-  $word.Quit()
-  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
   $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
   Write-Output "###JSON_START###{\\"success\\":true,\\"text_b64\\":\\"$encoded\\"}###JSON_END###"
 } catch {
-  try { $word.Quit() } catch {}
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($doc -ne $null) { $doc.Close($false) } } catch {}
+  try { if ($word -ne $null) { $word.Quit() } } catch {}
+  try { if ($doc -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null } } catch {}
+  try { if ($word -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeOfficeComFailure(result, 'Word');
+  if (failure) return failure;
   let text = '';
   if (result.data && result.data.text_b64) {
     text = Buffer.from(result.data.text_b64, 'base64').toString('utf8');
@@ -4611,13 +4723,21 @@ function fileCreateFolder(folderPath) {
 
 async function outlookSearch(query, folder = 'Inbox', maxResults = 20, daysBack = 30) {
   if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
-  const escapedQuery = String(query).replace(/'/g, "''");
-  const escapedFolder = String(folder).replace(/'/g, "''");
+  const normalizedQuery = String(query || '').trim();
+  if (!normalizedQuery) return { success: false, error: 'query is required for Outlook search.' };
+  const normalizedFolder = String(folder || 'Inbox').trim() || 'Inbox';
+  const normalizedMaxResults = Math.max(1, Math.min(Math.round(Number(maxResults || 20)), 200));
+  const normalizedDaysBack = Math.max(1, Math.min(Math.round(Number(daysBack || 30)), 3650));
+  const escapedQuery = normalizedQuery.replace(/'/g, "''");
+  const escapedFolder = normalizedFolder.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
+$outlook = $null
+$ns = $null
 try {
   $outlook = New-Object -ComObject "Outlook.Application"
   $ns = $outlook.GetNamespace("MAPI")
+  try { $null = $ns.Logon("", "", $false, $false) } catch {}
   $folderObj = $null
   $folderName = '${escapedFolder}'
   switch ($folderName) {
@@ -4627,28 +4747,39 @@ try {
     'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
     default { $folderObj = $ns.GetDefaultFolder(6) }
   }
-  $cutoff = (Get-Date).AddDays(-${daysBack}).ToString("MM/dd/yyyy")
-  $filter = "[ReceivedTime] >= '$cutoff'"
-  $items = $folderObj.Items.Restrict($filter)
-  $items.Sort("[ReceivedTime]", $true)
+  if ($null -eq $folderObj) { throw "Unable to resolve Outlook folder: $folderName" }
+  $cutoffDate = (Get-Date).AddDays(-${normalizedDaysBack})
+  $items = $folderObj.Items
+  try { $items.Sort("[ReceivedTime]", $true) } catch {}
   $query = '${escapedQuery}'.ToLower()
   $results = @()
-  $count = 0
   foreach ($item in $items) {
-    if ($count -ge ${maxResults}) { break }
+    if ($results.Count -ge ${normalizedMaxResults}) { break }
+    if ($null -eq $item) { continue }
+    if ($item.Class -ne 43) { continue } # olMail
     $subj = if ($item.Subject) { $item.Subject } else { '' }
     $sender = if ($item.SenderName) { $item.SenderName } else { '' }
-    $body = if ($item.Body) { $item.Body.Substring(0, [Math]::Min(500, $item.Body.Length)) } else { '' }
+    $body = ''
+    try {
+      if ($item.Body) { $body = $item.Body.Substring(0, [Math]::Min(500, $item.Body.Length)) }
+    } catch {}
+    $msgDate = $null
+    try { $msgDate = $item.ReceivedTime } catch {}
+    if ($null -eq $msgDate) {
+      try { $msgDate = $item.SentOn } catch {}
+    }
+    if ($msgDate -and $msgDate -lt $cutoffDate) { continue }
     if ($subj.ToLower().Contains($query) -or $sender.ToLower().Contains($query) -or $body.ToLower().Contains($query)) {
+      $attachmentCount = 0
+      try { $attachmentCount = [int]$item.Attachments.Count } catch {}
       $results += @{
         entry_id = $item.EntryID
         subject = $subj
         sender = $sender
-        received = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm")
-        has_attachments = $item.Attachments.Count -gt 0
-        attachment_count = $item.Attachments.Count
+        received = if ($msgDate) { $msgDate.ToString("yyyy-MM-dd HH:mm") } else { '' }
+        has_attachments = $attachmentCount -gt 0
+        attachment_count = $attachmentCount
       }
-      $count++
     }
   }
   $json = $results | ConvertTo-Json -Compress -Depth 3
@@ -4657,34 +4788,50 @@ try {
 } catch {
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
   const emails = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
-  return { success: true, emails, message: `Found ${emails.length} email(s) matching "${query}".` };
+  return { success: true, emails, message: `Found ${emails.length} email(s) matching "${normalizedQuery}".` };
 }
 
 async function outlookReadEmail(entryId) {
   if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
-  const escapedId = String(entryId).replace(/'/g, "''");
+  const normalizedEntryId = String(entryId || '').trim();
+  if (!normalizedEntryId) return { success: false, error: 'entry_id is required to read Outlook email.' };
+  const escapedId = normalizedEntryId.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
+$outlook = $null
+$ns = $null
+$item = $null
 try {
   $outlook = New-Object -ComObject "Outlook.Application"
   $ns = $outlook.GetNamespace("MAPI")
+  try { $null = $ns.Logon("", "", $false, $false) } catch {}
   $item = $ns.GetItemFromID('${escapedId}')
+  if ($null -eq $item) { throw "Outlook item not found for EntryID." }
+  if ($item.Class -ne 43) { throw "Outlook item is not an email message." }
   $attachNames = @()
   foreach ($att in $item.Attachments) { $attachNames += $att.FileName }
   $bodyText = if ($item.Body) { $item.Body.Substring(0, [Math]::Min(10000, $item.Body.Length)) } else { '' }
   $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bodyText))
+  $msgDate = $null
+  try { $msgDate = $item.ReceivedTime } catch {}
+  if ($null -eq $msgDate) {
+    try { $msgDate = $item.SentOn } catch {}
+  }
   $result = @{
     subject = $item.Subject
     sender = $item.SenderName
     sender_email = $item.SenderEmailAddress
     to = $item.To
     cc = $item.CC
-    received = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm")
+    received = if ($msgDate) { $msgDate.ToString("yyyy-MM-dd HH:mm") } else { '' }
     body_b64 = $encoded
     attachments = $attachNames
   }
@@ -4693,10 +4840,14 @@ try {
 } catch {
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($item -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null } } catch {}
+  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
   if (result.data && result.data.body_b64) {
     result.data.body = Buffer.from(result.data.body_b64, 'base64').toString('utf8');
     delete result.data.body_b64;
@@ -4706,19 +4857,34 @@ try {
 
 async function outlookSaveAttachments(entryId, saveFolder) {
   if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
+  const normalizedEntryId = String(entryId || '').trim();
+  if (!normalizedEntryId) return { success: false, error: 'entry_id is required to save Outlook attachments.' };
   const folder = saveFolder || app.getPath('temp');
   if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-  const escapedId = String(entryId).replace(/'/g, "''");
+  const escapedId = normalizedEntryId.replace(/'/g, "''");
   const escapedFolder = folder.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
+$outlook = $null
+$ns = $null
+$item = $null
 try {
   $outlook = New-Object -ComObject "Outlook.Application"
   $ns = $outlook.GetNamespace("MAPI")
+  try { $null = $ns.Logon("", "", $false, $false) } catch {}
   $item = $ns.GetItemFromID('${escapedId}')
+  if ($null -eq $item) { throw "Outlook item not found for EntryID." }
+  if ($item.Class -ne 43) { throw "Outlook item is not an email message." }
   $saved = @()
   foreach ($att in $item.Attachments) {
-    $savePath = Join-Path '${escapedFolder}' $att.FileName
+    $baseName = if ($att.FileName) { $att.FileName } else { "attachment.bin" }
+    $savePath = Join-Path '${escapedFolder}' $baseName
+    if (Test-Path $savePath) {
+      $nameOnly = [System.IO.Path]::GetFileNameWithoutExtension($baseName)
+      $extOnly = [System.IO.Path]::GetExtension($baseName)
+      $suffix = (Get-Date -Format "yyyyMMdd_HHmmss_fff")
+      $savePath = Join-Path '${escapedFolder}' ("$nameOnly-$suffix$extOnly")
+    }
     $att.SaveAsFile($savePath)
     $saved += @{ name = $att.FileName; path = $savePath; size = $att.Size }
   }
@@ -4728,25 +4894,44 @@ try {
 } catch {
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($item -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null } } catch {}
+  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
   const files = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
   return { success: true, files, message: `Saved ${files.length} attachment(s) to ${folder}` };
 }
 
 async function outlookSendEmail(to, subject, body, cc, attachments) {
   if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
-  const escapedTo = String(to).replace(/'/g, "''");
-  const escapedSubject = String(subject).replace(/'/g, "''");
+  const normalizedTo = String(to || '').trim();
+  const normalizedSubject = String(subject || '').trim();
+  const normalizedBody = String(body || '');
+  if (!normalizedTo) return { success: false, error: 'to is required to send Outlook email.' };
+  if (!normalizedSubject) return { success: false, error: 'subject is required to send Outlook email.' };
+  const escapedTo = normalizedTo.replace(/'/g, "''");
+  const escapedSubject = normalizedSubject.replace(/'/g, "''");
   const escapedCc = cc ? String(cc).replace(/'/g, "''") : '';
   // Body is base64 encoded to avoid escaping issues
-  const bodyB64 = Buffer.from(body, 'utf8').toString('base64');
-  const attachPaths = Array.isArray(attachments) ? attachments : [];
+  const bodyB64 = Buffer.from(normalizedBody, 'utf8').toString('base64');
+  const rawAttachPaths = Array.isArray(attachments) ? attachments : [];
+  const attachPaths = [];
+  for (const attachPath of rawAttachPaths) {
+    const resolvedAttachment = resolveExistingLocalPath(attachPath);
+    if (!resolvedAttachment || !fs.existsSync(resolvedAttachment)) {
+      return { success: false, error: `Attachment file not found: ${attachPath}` };
+    }
+    attachPaths.push(resolvedAttachment);
+  }
   const attachLines = attachPaths.map(p => `$mail.Attachments.Add('${p.replace(/'/g, "''")}') | Out-Null`).join('\n  ');
   const script = `
 $ErrorActionPreference = 'Stop'
+$outlook = $null
+$mail = $null
 try {
   $outlook = New-Object -ComObject "Outlook.Application"
   $mail = $outlook.CreateItem(0) # olMailItem
@@ -4761,11 +4946,14 @@ try {
 } catch {
   $errMsg = $_.Exception.Message -replace '"', '\\"'
   Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($mail -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($mail) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
 }`;
   const result = await imanageRunPowerShell(script);
-  if (!result.success) return result;
-  if (result.data && result.data.error) return { success: false, error: result.data.error };
-  return { success: true, message: `Email sent to ${to}` };
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
+  return { success: true, message: `Email sent to ${normalizedTo}` };
 }
 
 // ========== COMMAND TOOL DISPATCHER ==========
@@ -5021,11 +5209,18 @@ async function dispatchTool(toolName, input, session = {}) {
     }
 
     case 'outlook_send_email': {
-      if (!safeInput.to || !safeInput.subject || !safeInput.body) {
-        result = { success: false, error: 'to, subject, and body are required' };
+      if (!safeInput.to || !safeInput.subject) {
+        result = { success: false, error: 'to and subject are required' };
         break;
       }
-      result = await outlookSendEmail(safeInput.to, safeInput.subject, safeInput.body, safeInput.cc, safeInput.attachments);
+      const sendBody = typeof safeInput.body === 'undefined' || safeInput.body === null
+        ? ''
+        : safeInput.body;
+      let sendAttachments = safeInput.attachments;
+      if (!Array.isArray(sendAttachments) && loadedFiles && loadedFiles.length > 0) {
+        sendAttachments = loadedFiles.map((file) => file.path).filter(Boolean);
+      }
+      result = await outlookSendEmail(safeInput.to, safeInput.subject, sendBody, safeInput.cc, sendAttachments);
       break;
     }
 
