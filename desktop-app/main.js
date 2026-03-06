@@ -3192,6 +3192,14 @@ const COMMAND_TOOLS = [
     }
   },
   {
+    name: 'imanage_test_connection',
+    description: 'Test iManage COM connectivity. Run this first if having connection issues. Returns diagnostic info about the COM object, login status, and available methods.',
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
     name: 'run_redline',
     description: 'Compare two documents to produce a redline showing differences. Supports Word, PDF, Excel, and PowerPoint.',
     input_schema: {
@@ -3400,13 +3408,22 @@ const COMMAND_TOOLS = [
 // ========== iMANAGE COM INTEGRATION ==========
 
 const IMANAGE_PS_BOOTSTRAP = `
+# ── iManage COM bootstrap ────────────────────────────────────────────────
+# Supports iManage Work 10.x, 9.x, FileSite, and DeskSite COM variants.
+# Each function has multiple fallback paths to handle version differences.
+
 function Get-IManageWorkObjectFactory {
+  # Ordered from most common (iManage Work 10.x) to legacy (DeskSite/FileSite)
   $progIds = @(
-    'Com.iManage.Work.WorkObjectFactory',
+    'iManage.COMAPILib.IManDMS',
     'iManage.Work.WorkObjectFactory',
+    'Com.iManage.Work.WorkObjectFactory',
+    'WorkSite.Application',
+    'iManage.WorkSite.Application',
     'iManage.iwComWrapper.WorkObjectFactory',
     'iManage.WorkSiteObjects.iwComWrapper.WorkObjectFactory',
-    'iManage.WorkSiteObjects.WorkObjectFactory'
+    'iManage.WorkSiteObjects.WorkObjectFactory',
+    'iManage.Integrations.WorkObjectFactory'
   )
   $errors = @()
   foreach ($progId in $progIds) {
@@ -3417,21 +3434,33 @@ function Get-IManageWorkObjectFactory {
       $errors += ($progId + ': ' + $_.Exception.Message)
     }
   }
-  throw ('Unable to create iManage COM object. ' + ($errors -join ' | '))
+  throw ('Unable to create iManage COM object. Tried: ' + ($progIds -join ', ') + '. Errors: ' + ($errors -join ' | ') + '. Ensure iManage Work Desktop is installed and running.')
 }
 
 function Invoke-IManageLogin($wof) {
-  $methodNames = @('LogIn', 'Login', 'ShowLoginDialog', 'ShowLogInDialog')
+  # Try multiple login method names across different COM versions
+  $methodNames = @('LogIn', 'Login', 'ShowLoginDialog', 'ShowLogInDialog', 'Connect')
+  $lastError = $null
   foreach ($methodName in $methodNames) {
     try {
       $method = $wof.PSObject.Methods[$methodName]
       if ($null -eq $method) { continue }
       $wof.$methodName()
-      Start-Sleep -Milliseconds 200
+      Start-Sleep -Milliseconds 500
       return $true
     } catch {
+      $lastError = $_.Exception.Message
       # Try next available login method.
     }
+  }
+  # Also try Sessions-based login (iManage Work 10.x IManDMS pattern)
+  try {
+    $sessions = $wof.Sessions
+    if ($null -ne $sessions -and $sessions.Count -gt 0) {
+      return $true  # Already has an active session
+    }
+  } catch {
+    # Sessions property not available on this COM version.
   }
   return $false
 }
@@ -3440,6 +3469,7 @@ function Get-IManageHasLogin($wof, [ref]$hasMember, [ref]$hasLogin) {
   $hasMember.Value = $false
   $hasLogin.Value = $false
 
+  # Check property-based HasLogin
   try {
     $prop = $wof.PSObject.Properties['HasLogin']
     if ($null -ne $prop) {
@@ -3451,6 +3481,7 @@ function Get-IManageHasLogin($wof, [ref]$hasMember, [ref]$hasLogin) {
     # Continue to method fallback.
   }
 
+  # Check method-based HasLogin()
   try {
     $method = $wof.PSObject.Methods['HasLogin']
     if ($null -ne $method) {
@@ -3461,6 +3492,26 @@ function Get-IManageHasLogin($wof, [ref]$hasMember, [ref]$hasLogin) {
   } catch {
     # No HasLogin member available.
   }
+
+  # Check Connected property (iManage Work 10.x)
+  try {
+    $prop = $wof.PSObject.Properties['Connected']
+    if ($null -ne $prop) {
+      $hasMember.Value = $true
+      $hasLogin.Value = [bool]$wof.Connected
+      return
+    }
+  } catch {}
+
+  # Check Sessions count (IManDMS pattern)
+  try {
+    $sessions = $wof.Sessions
+    if ($null -ne $sessions) {
+      $hasMember.Value = $true
+      $hasLogin.Value = ($sessions.Count -gt 0)
+      return
+    }
+  } catch {}
 }
 
 function Ensure-IManageLogin($wof) {
@@ -3468,22 +3519,32 @@ function Ensure-IManageLogin($wof) {
   $hasLogin = $false
   Get-IManageHasLogin $wof ([ref]$hasLoginMember) ([ref]$hasLogin)
 
+  # If already logged in, return immediately
+  if ($hasLoginMember -and $hasLogin) {
+    return
+  }
+
   if ($hasLoginMember -and -not $hasLogin) {
     $loginAttempted = Invoke-IManageLogin $wof
+    Start-Sleep -Milliseconds 300
     Get-IManageHasLogin $wof ([ref]$hasLoginMember) ([ref]$hasLogin)
+    if ($hasLoginMember -and $hasLogin) {
+      return
+    }
     if ($hasLoginMember -and -not $hasLogin) {
       if ($loginAttempted) {
-        throw "iManage login failed. Please sign in to iManage Work Desktop and retry."
+        throw "iManage login failed. Please ensure iManage Work Desktop is running and you are signed in, then retry."
       }
-      throw "iManage login required, but this iManage COM object does not expose an interactive login method. Please sign in to iManage Work Desktop and retry."
+      throw "iManage login required but no interactive login method is available. Please sign in to iManage Work Desktop first, then retry."
     }
     return
   }
 
   if (-not $hasLoginMember) {
     # Some COM variants do not expose HasLogin/LogIn methods.
-    # Best effort only; downstream calls will return concrete API errors if session is unavailable.
+    # Best effort — try to login; downstream calls will surface auth errors.
     [void](Invoke-IManageLogin $wof)
+    Start-Sleep -Milliseconds 300
   }
 }
 
@@ -3496,6 +3557,22 @@ function New-IManageQueryFile($queryText) {
     Author = $trimmed
     __EmmaNeighQuery = $true
   }
+}
+
+function Get-IManageComInfo($wof) {
+  # Diagnostic: enumerate available methods and properties on the COM object
+  $info = @{
+    type = $wof.GetType().FullName
+    methods = @()
+    properties = @()
+  }
+  try {
+    $info.methods = @($wof.PSObject.Methods | ForEach-Object { $_.Name } | Sort-Object -Unique)
+  } catch {}
+  try {
+    $info.properties = @($wof.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object -Unique)
+  } catch {}
+  return $info
 }
 `;
 
@@ -3592,7 +3669,12 @@ function isComClassFactoryError(result = {}) {
     blobs.includes('0x80040154') ||
     blobs.includes('80040154') ||
     blobs.includes('invalid class string') ||
-    blobs.includes('activex')
+    blobs.includes('activex') ||
+    blobs.includes('interop type') ||
+    blobs.includes('queryinterface') ||
+    blobs.includes('no such interface') ||
+    blobs.includes('regdb_e_classnotreg') ||
+    blobs.includes('co_e_classstring')
   );
 }
 
@@ -3839,7 +3921,17 @@ function resolveIManageCheckoutFilePath(checkoutResult, checkoutDir = '', prefer
   return '';
 }
 
-function imanageRunPowerShell(scriptContent) {
+/**
+ * Execute a PowerShell script for iManage COM operations.
+ * @param {string} scriptContent — PowerShell script body (IMANAGE_PS_BOOTSTRAP is prepended)
+ * @param {object} [options] — options
+ * @param {number} [options.timeoutMs=60000] — max execution time before killing the process
+ * @param {boolean} [options.allowInteractive=false] — if true, omits -NonInteractive flag (needed for file picker dialogs)
+ */
+function imanageRunPowerShell(scriptContent, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || 60000;
+  const allowInteractive = !!options.allowInteractive;
+
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       resolve({ success: false, error: 'iManage is only available on Windows.' });
@@ -3859,23 +3951,56 @@ function imanageRunPowerShell(scriptContent) {
 
     const runAttempt = () => {
       const host = hosts[attemptIndex];
-      const proc = spawnTracked(host, [
+      const psArgs = [
         '-NoProfile',
-        '-NonInteractive',
         '-ExecutionPolicy',
         'Bypass',
         '-Sta',
         '-File',
         scriptPath
-      ], { windowsHide: true });
+      ];
+      // Only add -NonInteractive when dialogs aren't needed
+      if (!allowInteractive) {
+        psArgs.splice(1, 0, '-NonInteractive');
+      }
+
+      const proc = spawnTracked(host, psArgs, { windowsHide: !allowInteractive });
 
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+      let settled = false;
+
+      // Timeout guard — kill process if it hangs
+      const timer = setTimeout(() => {
+        if (settled) return;
+        timedOut = true;
+        try { proc.kill('SIGTERM'); } catch (_) {}
+        setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch (_) {}
+        }, 2000);
+      }, timeoutMs);
 
       proc.stdout.on('data', (data) => { stdout += data.toString(); });
       proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
       proc.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+
+        if (timedOut) {
+          try { fs.unlinkSync(scriptPath); } catch (_) {}
+          resolve({
+            success: false,
+            error: `iManage operation timed out after ${Math.round(timeoutMs / 1000)}s. Ensure iManage Work Desktop is running and responsive.`,
+            stdout: String(stdout).trim(),
+            stderr: String(stderr).trim(),
+            host
+          });
+          return;
+        }
+
         const parsed = parseIManagePowerShellOutput(stdout, stderr, code, host);
         lastResult = parsed;
 
@@ -3899,6 +4024,10 @@ function imanageRunPowerShell(scriptContent) {
       });
 
       proc.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+
         lastResult = {
           success: false,
           error: `Failed to launch PowerShell (${host}): ${err.message}`,
@@ -3924,19 +4053,58 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+
   $files = New-Object System.Collections.Generic.List[System.Object]
-  $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
+
+  # Try multiple method signatures for file browsing across COM versions
+  $browseSuccess = $false
+  $browseErrors = @()
+
+  # Method 1: GetFiles with list ref + boolean (WorkObjectFactory pattern)
+  if (-not $browseSuccess) {
+    try {
+      $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
+      $browseSuccess = $true
+    } catch {
+      $browseErrors += ('GetFiles(ref,bool): ' + $_.Exception.Message)
+    }
+  }
+
+  # Method 2: GetFiles with list ref only
+  if (-not $browseSuccess) {
+    try {
+      $wof.GetFiles([ref]$files)
+      $browseSuccess = $true
+    } catch {
+      $browseErrors += ('GetFiles(ref): ' + $_.Exception.Message)
+    }
+  }
+
+  # Method 3: ShowOpen / OpenFileDialog pattern (some COM variants)
+  if (-not $browseSuccess) {
+    try {
+      $dlg = $wof.ShowOpen()
+      if ($null -ne $dlg) { $files.Add($dlg) }
+      $browseSuccess = $true
+    } catch {
+      $browseErrors += ('ShowOpen: ' + $_.Exception.Message)
+    }
+  }
+
+  if (-not $browseSuccess) {
+    throw ('Could not open iManage file picker. Methods tried: ' + ($browseErrors -join ' | '))
+  }
+
   $results = @()
   foreach ($f in $files) {
-    $info = @{
-      name = $f.Name
-      number = $f.Number
-      version = $f.Version
-      extension = $f.Extension
-      author = $f.Author
-      description = $f.Description
-      path = $f.Path
-    }
+    $info = @{}
+    try { $info.name = $f.Name } catch { $info.name = '' }
+    try { $info.number = $f.Number } catch { $info.number = '' }
+    try { $info.version = $f.Version } catch { $info.version = '' }
+    try { $info.extension = $f.Extension } catch { $info.extension = '' }
+    try { $info.author = $f.Author } catch { $info.author = '' }
+    try { $info.description = $f.Description } catch { $info.description = '' }
+    try { $info.path = $f.Path } catch { $info.path = '' }
     $results += $info
   }
   $json = $results | ConvertTo-Json -Compress -Depth 3
@@ -3946,7 +4114,7 @@ try {
   Write-Output "###JSON_START###$json###JSON_END###"
 }
   `;
-  const result = await imanageRunPowerShell(script);
+  const result = await imanageRunPowerShell(script, { allowInteractive: true, timeoutMs: 120000 });
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
   return { success: true, files: normalizeIManageArrayPayload(result.data, 'files') };
@@ -3976,48 +4144,48 @@ try {
   }
   ${normalizedAction === 'new_version' ? `
   # Save as new version — need profile ID from file path
-  $profileId = $wof.GetProfileIdFromFilePath($sourcePath)
+  $saveErrors = @()
+  $profileId = $null
+  try { $profileId = $wof.GetProfileIdFromFilePath($sourcePath) } catch { $saveErrors += ('GetProfileIdFromFilePath: ' + $_.Exception.Message) }
   if ($profileId) {
     $files = New-Object System.Collections.Generic.List[System.Object]
     $entry = New-IManageQueryFile($profileId)
     $files.Add($entry)
-    try {
-      $wof.SaveAsNewVersion([ref]$files, $sourcePath, ${showDialogPs})
-    } catch {
-      try {
-        $wof.SaveAsNewVersion([ref]$files, $sourcePath)
-      } catch {
-        $wof.SaveAsNewVersion([ref]$files)
-      }
-    }
-    $saved = @()
+    $saved = $false
+    # Try multiple SaveAsNewVersion signatures
+    if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath, ${showDialogPs}); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path,dialog): ' + $_.Exception.Message) } }
+    if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path): ' + $_.Exception.Message) } }
+    if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref): ' + $_.Exception.Message) } }
+    if (-not $saved) { throw ('Could not save new version. Methods tried: ' + ($saveErrors -join ' | ')) }
+    $savedFiles = @()
     foreach ($f in $files) {
-      $saved += @{
-        name = $f.Name
-        number = $f.Number
-        version = $f.Version
-      }
+      $info = @{}
+      try { $info.name = $f.Name } catch {}
+      try { $info.number = $f.Number } catch {}
+      try { $info.version = $f.Version } catch {}
+      $savedFiles += $info
     }
-    $json = @{ success = $true; action = "new_version"; profileId = $profileId; files = $saved } | ConvertTo-Json -Compress -Depth 4
+    $json = @{ success = $true; action = "new_version"; profileId = $profileId; files = $savedFiles } | ConvertTo-Json -Compress -Depth 4
     Write-Output "###JSON_START###$json###JSON_END###"
   } else {
-    Write-Output '###JSON_START###{"error":"Could not find iManage profile for this file. Try saving as new document instead."}###JSON_END###'
+    Write-Output ('###JSON_START###{"error":"Could not find iManage profile for this file (' + ($saveErrors -join '; ') + '). Try saving as new document instead."}###JSON_END###')
   }
   ` : `
-  # Save as new document — use SaveAsFiles with dialog
+  # Save as new document — try multiple method signatures
   $files = New-Object System.Collections.Generic.List[System.Object]
-  try {
-    $wof.SaveAsFiles([ref]$files, $sourcePath, ${showDialogPs})
-  } catch {
-    $wof.SaveAsFiles([ref]$files, $sourcePath)
-  }
+  $saveSuccess = $false
+  $saveErrors = @()
+  if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath, ${showDialogPs}); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path,dialog): ' + $_.Exception.Message) } }
+  if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path): ' + $_.Exception.Message) } }
+  if (-not $saveSuccess) { try { $wof.SaveAsFiles($sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(path): ' + $_.Exception.Message) } }
+  if (-not $saveSuccess) { throw ('Could not save to iManage. Methods tried: ' + ($saveErrors -join ' | ')) }
   $results = @()
   foreach ($f in $files) {
-    $results += @{
-      name = $f.Name
-      number = $f.Number
-      version = $f.Version
-    }
+    $info = @{}
+    try { $info.name = $f.Name } catch {}
+    try { $info.number = $f.Number } catch {}
+    try { $info.version = $f.Version } catch {}
+    $results += $info
   }
   $json = @{ success = $true; action = "new_document"; files = $results } | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4027,7 +4195,7 @@ try {
   Write-Output "###JSON_START###$json###JSON_END###"
 }
   `;
-  const result = await imanageRunPowerShell(script);
+  const result = await imanageRunPowerShell(script, { allowInteractive: showDialogBool, timeoutMs: 120000 });
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
   const data = result.data && typeof result.data === 'object' ? result.data : {};
@@ -4070,14 +4238,14 @@ try {
   $results = @()
   foreach ($f in $files) {
     if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
-    $results += @{
-      name = $f.Name
-      number = $f.Number
-      version = $f.Version
-      author = $f.Author
-      date = $f.Date
-      description = $f.Description
-    }
+    $info = @{}
+    try { $info.name = $f.Name } catch { $info.name = '' }
+    try { $info.number = $f.Number } catch { $info.number = '' }
+    try { $info.version = $f.Version } catch { $info.version = '' }
+    try { $info.author = $f.Author } catch { $info.author = '' }
+    try { $info.date = $f.Date } catch { $info.date = '' }
+    try { $info.description = $f.Description } catch { $info.description = '' }
+    $results += $info
   }
   if ($results.Count -eq 0) {
     throw "No versions were returned by iManage for profile ${escapedId}."
@@ -4150,12 +4318,12 @@ try {
   $results = @()
   foreach ($f in $files) {
     if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
-    $results += @{
-      name = $f.Name
-      number = $f.Number
-      path = $f.Path
-      version = $f.Version
-    }
+    $info = @{}
+    try { $info.name = $f.Name } catch { $info.name = '' }
+    try { $info.number = $f.Number } catch { $info.number = '' }
+    try { $info.path = $f.Path } catch { $info.path = '' }
+    try { $info.version = $f.Version } catch { $info.version = '' }
+    $results += $info
   }
   if ($results.Count -eq 0) {
     throw "iManage checkout returned no files for profile ${escapedId}."
@@ -4191,23 +4359,19 @@ try {
   Ensure-IManageLogin $wof
   $sourcePath = '${escapedPath}'
   $files = New-Object System.Collections.Generic.List[System.Object]
-  try {
-    $wof.CheckInFiles([ref]$files, $sourcePath)
-  } catch {
-    try {
-      $wof.CheckInFiles($sourcePath)
-    } catch {
-      throw $_
-    }
-  }
+  $checkinSuccess = $false
+  $checkinErrors = @()
+  if (-not $checkinSuccess) { try { $wof.CheckInFiles([ref]$files, $sourcePath); $checkinSuccess = $true } catch { $checkinErrors += ('CheckInFiles(ref,path): ' + $_.Exception.Message) } }
+  if (-not $checkinSuccess) { try { $wof.CheckInFiles($sourcePath); $checkinSuccess = $true } catch { $checkinErrors += ('CheckInFiles(path): ' + $_.Exception.Message) } }
+  if (-not $checkinSuccess) { throw ('Could not check in file. Methods tried: ' + ($checkinErrors -join ' | ')) }
   $results = @()
   foreach ($f in $files) {
-    $results += @{
-      name = $f.Name
-      number = $f.Number
-      version = $f.Version
-      path = $f.Path
-    }
+    $info = @{}
+    try { $info.name = $f.Name } catch { $info.name = '' }
+    try { $info.number = $f.Number } catch { $info.number = '' }
+    try { $info.version = $f.Version } catch { $info.version = '' }
+    try { $info.path = $f.Path } catch { $info.path = '' }
+    $results += $info
   }
   $json = @{ success = $true; message = "File checked in successfully"; files = $results } | ConvertTo-Json -Compress -Depth 4
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4241,18 +4405,23 @@ try {
   $files = New-Object System.Collections.Generic.List[System.Object]
   $searchFile = New-IManageQueryFile('${escapedQuery}')
   $files.Add($searchFile)
-  $wof.FindProfiles([ref]$files)
+  # Try multiple search method signatures
+  $searchSuccess = $false
+  $searchErrors = @()
+  if (-not $searchSuccess) { try { $wof.FindProfiles([ref]$files); $searchSuccess = $true } catch { $searchErrors += ('FindProfiles(ref): ' + $_.Exception.Message) } }
+  if (-not $searchSuccess) { try { $wof.FindProfiles($files); $searchSuccess = $true } catch { $searchErrors += ('FindProfiles(list): ' + $_.Exception.Message) } }
+  if (-not $searchSuccess) { throw ('iManage search failed. Methods tried: ' + ($searchErrors -join ' | ')) }
   $results = @()
   foreach ($f in $files) {
     if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
-    $results += @{
-      name = $f.Name
-      number = $f.Number
-      version = $f.Version
-      extension = $f.Extension
-      author = $f.Author
-      description = $f.Description
-    }
+    $info = @{}
+    try { $info.name = $f.Name } catch { $info.name = '' }
+    try { $info.number = $f.Number } catch { $info.number = '' }
+    try { $info.version = $f.Version } catch { $info.version = '' }
+    try { $info.extension = $f.Extension } catch { $info.extension = '' }
+    try { $info.author = $f.Author } catch { $info.author = '' }
+    try { $info.description = $f.Description } catch { $info.description = '' }
+    $results += $info
   }
   $json = $results | ConvertTo-Json -Compress -Depth 3
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4265,6 +4434,133 @@ try {
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
   return { success: true, files: normalizeIManageArrayPayload(result.data, 'files') };
+}
+
+/**
+ * Diagnostic: test iManage COM connectivity.
+ * Returns detailed info about which COM variant was found, login status, and available methods.
+ */
+async function imanageTestConnection() {
+  const script = `
+$ErrorActionPreference = 'Stop'
+$diag = @{
+  platform = $env:OS
+  powershell_version = $PSVersionTable.PSVersion.ToString()
+  architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+  com_created = $false
+  com_progid = ''
+  com_type = ''
+  login_status = 'unknown'
+  available_methods = @()
+  available_properties = @()
+  error = ''
+}
+
+try {
+  $diag.architecture = if ([System.IntPtr]::Size -eq 8) { '64-bit' } else { '32-bit' }
+} catch {
+  $diag.architecture = 'unknown'
+}
+
+# Try to create COM object
+$progIds = @(
+  'iManage.COMAPILib.IManDMS',
+  'iManage.Work.WorkObjectFactory',
+  'Com.iManage.Work.WorkObjectFactory',
+  'WorkSite.Application',
+  'iManage.WorkSite.Application',
+  'iManage.iwComWrapper.WorkObjectFactory',
+  'iManage.WorkSiteObjects.iwComWrapper.WorkObjectFactory',
+  'iManage.WorkSiteObjects.WorkObjectFactory',
+  'iManage.Integrations.WorkObjectFactory'
+)
+
+$comErrors = @()
+$wof = $null
+foreach ($progId in $progIds) {
+  try {
+    $wof = New-Object -ComObject $progId
+    if ($null -ne $wof) {
+      $diag.com_created = $true
+      $diag.com_progid = $progId
+      try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
+      break
+    }
+  } catch {
+    $comErrors += ($progId + ': ' + $_.Exception.Message)
+  }
+}
+
+if (-not $diag.com_created) {
+  $diag.error = 'No iManage COM object could be created. Tried: ' + ($progIds -join ', ') + '. Errors: ' + ($comErrors -join ' | ')
+  $json = $diag | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+  exit 0
+}
+
+# Enumerate methods and properties
+try {
+  $diag.available_methods = @($wof.PSObject.Methods | ForEach-Object { $_.Name } | Sort-Object -Unique | Select-Object -First 50)
+} catch {}
+try {
+  $diag.available_properties = @($wof.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object -Unique | Select-Object -First 50)
+} catch {}
+
+# Check login
+try {
+  $hasLoginMember = $false
+  $hasLogin = $false
+
+  try {
+    $prop = $wof.PSObject.Properties['HasLogin']
+    if ($null -ne $prop) { $hasLoginMember = $true; $hasLogin = [bool]$wof.HasLogin }
+  } catch {}
+  if (-not $hasLoginMember) {
+    try {
+      $prop = $wof.PSObject.Properties['Connected']
+      if ($null -ne $prop) { $hasLoginMember = $true; $hasLogin = [bool]$wof.Connected }
+    } catch {}
+  }
+  if (-not $hasLoginMember) {
+    try {
+      $sessions = $wof.Sessions
+      if ($null -ne $sessions) { $hasLoginMember = $true; $hasLogin = ($sessions.Count -gt 0) }
+    } catch {}
+  }
+
+  if ($hasLoginMember) {
+    $diag.login_status = if ($hasLogin) { 'logged_in' } else { 'not_logged_in' }
+  } else {
+    $diag.login_status = 'no_login_property'
+  }
+} catch {
+  $diag.login_status = 'error: ' + $_.Exception.Message
+}
+
+$json = $diag | ConvertTo-Json -Compress -Depth 3
+Write-Output "###JSON_START###$json###JSON_END###"
+  `;
+
+  const result = await imanageRunPowerShell(script, { timeoutMs: 30000 });
+  if (!result || !result.success) {
+    return {
+      success: false,
+      error: result ? (result.error || 'Unknown error') : 'PowerShell execution failed',
+      diagnostics: {
+        platform: process.platform,
+        powershellHosts: getIManagePowerShellHosts(),
+        stderr: result ? result.stderr : ''
+      }
+    };
+  }
+  const data = result.data || {};
+  return {
+    success: !!data.com_created,
+    diagnostics: data,
+    message: data.com_created
+      ? `iManage COM connected via ${data.com_progid} (${data.login_status}). ${data.available_methods.length} methods available.`
+      : `iManage COM could not be loaded. ${data.error || ''}`
+  };
 }
 
 async function extractChecklistDocumentNames(checklistPath) {
@@ -5053,6 +5349,10 @@ async function dispatchTool(toolName, input, session = {}) {
         break;
       }
       result = await imanageSearch(safeInput.query);
+      break;
+
+    case 'imanage_test_connection':
+      result = await imanageTestConnection();
       break;
 
     case 'run_redline': {
@@ -7555,6 +7855,7 @@ Current state:
 When the user asks you to perform an action (save to iManage, open a file, navigate, run a redline, etc.), use the appropriate tool.
 You can use tools across multiple steps in one request until the task is complete.
 For checklist-driven precedent workflows, you can use the batch checklist precedent redline tool.
+If the user reports iManage connection issues, use imanage_test_connection first to diagnose the problem.
 When they ask a question or want advice, respond with helpful text.
 Keep responses concise and practical.
 ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the user asks for iManage features, let them know.' : ''}`;
