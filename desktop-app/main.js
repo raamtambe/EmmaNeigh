@@ -928,6 +928,33 @@ async function logFeedbackToFirestore(data) {
   });
 }
 
+/**
+ * Log an agent prompt + tool calls to Firestore for usage analytics.
+ * Best-effort — never blocks the caller. Logs to 'prompt_logs' collection.
+ */
+async function logPromptToFirestore(data = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    username: String(data.username || 'unknown'),
+    email: data.email ? normalizeEmail(data.email) : null,
+    prompt: String(data.prompt || '').substring(0, 500), // truncate for storage
+    active_tab: String(data.activeTab || 'unknown'),
+    tools_called: Array.isArray(data.toolsCalled) ? data.toolsCalled : [],
+    tool_count: Number(data.toolCount) || 0,
+    model_used: String(data.modelUsed || 'unknown'),
+    success: !!data.success,
+    duration_ms: Number(data.durationMs) || 0,
+    app_version: APP_VERSION,
+    machine_id: MACHINE_ID
+  };
+
+  return writeTelemetryRecord({
+    eventType: 'prompt',
+    collection: 'prompt_logs',
+    payload: entry
+  });
+}
+
 function readFeedbackLogEntries() {
   try {
     if (!fs.existsSync(feedbackLogPath)) return [];
@@ -3224,6 +3251,149 @@ const COMMAND_TOOLS = [
       },
       required: ['query']
     }
+  },
+  // ===== Word COM tools =====
+  {
+    name: 'word_save_as_pdf',
+    description: 'Convert a Word document (.docx/.doc) to PDF using Microsoft Word COM automation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Path to the Word document to convert' },
+        output_path: { type: 'string', description: 'Optional output PDF path. If omitted, saves alongside the original with .pdf extension.' }
+      },
+      required: ['file_path']
+    }
+  },
+  {
+    name: 'word_find_replace',
+    description: 'Find and replace text in a Word document using Word COM. Can replace all occurrences.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Path to the Word document' },
+        find_text: { type: 'string', description: 'Text to find' },
+        replace_text: { type: 'string', description: 'Text to replace with' },
+        save: { type: 'boolean', description: 'Save the document after replacing. Default true.' }
+      },
+      required: ['file_path', 'find_text', 'replace_text']
+    }
+  },
+  {
+    name: 'word_extract_text',
+    description: 'Extract the full text content from a Word document.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Path to the Word document' }
+      },
+      required: ['file_path']
+    }
+  },
+  // ===== File system tools =====
+  {
+    name: 'file_copy',
+    description: 'Copy a file from one location to another.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'Source file path' },
+        destination: { type: 'string', description: 'Destination file path' }
+      },
+      required: ['source', 'destination']
+    }
+  },
+  {
+    name: 'file_move',
+    description: 'Move or rename a file.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'Source file path' },
+        destination: { type: 'string', description: 'Destination file path' }
+      },
+      required: ['source', 'destination']
+    }
+  },
+  {
+    name: 'file_list',
+    description: 'List files in a directory. Returns file names, sizes, and types.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string', description: 'Directory path to list' },
+        pattern: { type: 'string', description: 'Optional filter pattern (e.g. "*.docx", "*.pdf"). Default: all files.' }
+      },
+      required: ['directory']
+    }
+  },
+  {
+    name: 'file_create_folder',
+    description: 'Create a new folder/directory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path of the folder to create' }
+      },
+      required: ['path']
+    }
+  },
+  // ===== Outlook COM tools =====
+  {
+    name: 'outlook_search',
+    description: 'Search Outlook emails by subject, sender, date range, or body text. Returns matching emails.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query — matched against subject, sender, and body' },
+        folder: { type: 'string', description: 'Outlook folder to search. Default: Inbox. Examples: Inbox, Sent Items, Drafts' },
+        max_results: { type: 'integer', description: 'Maximum results to return. Default: 20.' },
+        days_back: { type: 'integer', description: 'Only search emails from the last N days. Default: 30.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'outlook_read_email',
+    description: 'Read the full content of an Outlook email by its EntryID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entry_id: { type: 'string', description: 'The Outlook EntryID of the email to read' }
+      },
+      required: ['entry_id']
+    }
+  },
+  {
+    name: 'outlook_save_attachments',
+    description: 'Save all attachments from an Outlook email to a local folder.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entry_id: { type: 'string', description: 'The Outlook EntryID of the email' },
+        save_folder: { type: 'string', description: 'Local folder to save attachments to. If omitted, uses temp folder.' }
+      },
+      required: ['entry_id']
+    }
+  },
+  {
+    name: 'outlook_send_email',
+    description: 'Compose and send an email via Outlook. Use only when the user explicitly asks to send an email.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Recipient email address(es), semicolon-separated' },
+        cc: { type: 'string', description: 'CC recipients, semicolon-separated' },
+        subject: { type: 'string', description: 'Email subject line' },
+        body: { type: 'string', description: 'Email body text (HTML supported)' },
+        attachments: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of local file paths to attach'
+        }
+      },
+      required: ['to', 'subject', 'body']
+    }
   }
 ];
 
@@ -4283,6 +4453,321 @@ async function runAgentChecklistPrecedentRedlines(config = {}) {
   };
 }
 
+// ========== WORD COM TOOLS ==========
+
+async function wordSaveAsPdf(filePath, outputPath) {
+  if (process.platform !== 'win32') return { success: false, error: 'Word COM is only available on Windows.' };
+  if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
+  const pdfPath = outputPath || filePath.replace(/\.(docx?|rtf)$/i, '.pdf');
+  const escapedInput = filePath.replace(/'/g, "''");
+  const escapedOutput = pdfPath.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $word = New-Object -ComObject "Word.Application"
+  $word.Visible = $false
+  $doc = $word.Documents.Open('${escapedInput}')
+  $doc.SaveAs2('${escapedOutput}', 17) # 17 = wdFormatPDF
+  $doc.Close($false)
+  $word.Quit()
+  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+  Write-Output '###JSON_START###{"success":true,"output":"${escapedOutput.replace(/\\/g, '\\\\')}"}###JSON_END###'
+} catch {
+  try { $word.Quit() } catch {}
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, message: `Saved PDF: ${pdfPath}`, output_path: pdfPath };
+}
+
+async function wordFindReplace(filePath, findText, replaceText, save = true) {
+  if (process.platform !== 'win32') return { success: false, error: 'Word COM is only available on Windows.' };
+  if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
+  const escapedPath = filePath.replace(/'/g, "''");
+  const escapedFind = findText.replace(/'/g, "''");
+  const escapedReplace = replaceText.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $word = New-Object -ComObject "Word.Application"
+  $word.Visible = $false
+  $doc = $word.Documents.Open('${escapedPath}')
+  $range = $doc.Content
+  $find = $range.Find
+  $find.Text = '${escapedFind}'
+  $find.Replacement.Text = '${escapedReplace}'
+  $find.Forward = $true
+  $find.Wrap = 1  # wdFindContinue
+  $count = 0
+  while ($find.Execute($false, $false, $false, $false, $false, $false, $true, 0, $false, $null, 2)) { $count++ }
+  ${save ? '$doc.Save()' : ''}
+  $doc.Close($false)
+  $word.Quit()
+  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+  Write-Output "###JSON_START###{\\"success\\":true,\\"replacements\\":$count}###JSON_END###"
+} catch {
+  try { $word.Quit() } catch {}
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, message: `Replaced ${result.data?.replacements || 0} occurrence(s).`, replacements: result.data?.replacements || 0 };
+}
+
+async function wordExtractText(filePath) {
+  if (process.platform !== 'win32') return { success: false, error: 'Word COM is only available on Windows.' };
+  if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
+  const escapedPath = filePath.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $word = New-Object -ComObject "Word.Application"
+  $word.Visible = $false
+  $doc = $word.Documents.Open('${escapedPath}', $false, $true) # ReadOnly
+  $text = $doc.Content.Text
+  $doc.Close($false)
+  $word.Quit()
+  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+  $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
+  Write-Output "###JSON_START###{\\"success\\":true,\\"text_b64\\":\\"$encoded\\"}###JSON_END###"
+} catch {
+  try { $word.Quit() } catch {}
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  let text = '';
+  if (result.data && result.data.text_b64) {
+    text = Buffer.from(result.data.text_b64, 'base64').toString('utf8');
+  }
+  return { success: true, text: text.substring(0, 50000), truncated: text.length > 50000 };
+}
+
+// ========== FILE SYSTEM TOOLS ==========
+
+function fileCopy(source, destination) {
+  try {
+    if (!fs.existsSync(source)) return { success: false, error: `Source not found: ${source}` };
+    const destDir = path.dirname(destination);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(source, destination);
+    return { success: true, message: `Copied to ${destination}` };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function fileMove(source, destination) {
+  try {
+    if (!fs.existsSync(source)) return { success: false, error: `Source not found: ${source}` };
+    const destDir = path.dirname(destination);
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    fs.renameSync(source, destination);
+    return { success: true, message: `Moved to ${destination}` };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function fileList(directory, pattern) {
+  try {
+    if (!fs.existsSync(directory)) return { success: false, error: `Directory not found: ${directory}` };
+    let entries = fs.readdirSync(directory, { withFileTypes: true });
+    const files = entries.map(e => {
+      const fullPath = path.join(directory, e.name);
+      const isDir = e.isDirectory();
+      let size = 0;
+      try { if (!isDir) size = fs.statSync(fullPath).size; } catch (_) {}
+      return { name: e.name, type: isDir ? 'folder' : path.extname(e.name).toLowerCase(), size, path: fullPath };
+    });
+    if (pattern) {
+      const ext = pattern.replace('*', '').toLowerCase();
+      return { success: true, files: files.filter(f => f.type === ext || f.name.toLowerCase().endsWith(ext)) };
+    }
+    return { success: true, files };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function fileCreateFolder(folderPath) {
+  try {
+    if (fs.existsSync(folderPath)) return { success: true, message: `Folder already exists: ${folderPath}` };
+    fs.mkdirSync(folderPath, { recursive: true });
+    return { success: true, message: `Created folder: ${folderPath}` };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// ========== OUTLOOK COM TOOLS ==========
+
+async function outlookSearch(query, folder = 'Inbox', maxResults = 20, daysBack = 30) {
+  if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
+  const escapedQuery = String(query).replace(/'/g, "''");
+  const escapedFolder = String(folder).replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $ns = $outlook.GetNamespace("MAPI")
+  $folderObj = $null
+  $folderName = '${escapedFolder}'
+  switch ($folderName) {
+    'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
+    'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
+    'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
+    'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
+    default { $folderObj = $ns.GetDefaultFolder(6) }
+  }
+  $cutoff = (Get-Date).AddDays(-${daysBack}).ToString("MM/dd/yyyy")
+  $filter = "[ReceivedTime] >= '$cutoff'"
+  $items = $folderObj.Items.Restrict($filter)
+  $items.Sort("[ReceivedTime]", $true)
+  $query = '${escapedQuery}'.ToLower()
+  $results = @()
+  $count = 0
+  foreach ($item in $items) {
+    if ($count -ge ${maxResults}) { break }
+    $subj = if ($item.Subject) { $item.Subject } else { '' }
+    $sender = if ($item.SenderName) { $item.SenderName } else { '' }
+    $body = if ($item.Body) { $item.Body.Substring(0, [Math]::Min(500, $item.Body.Length)) } else { '' }
+    if ($subj.ToLower().Contains($query) -or $sender.ToLower().Contains($query) -or $body.ToLower().Contains($query)) {
+      $results += @{
+        entry_id = $item.EntryID
+        subject = $subj
+        sender = $sender
+        received = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm")
+        has_attachments = $item.Attachments.Count -gt 0
+        attachment_count = $item.Attachments.Count
+      }
+      $count++
+    }
+  }
+  $json = $results | ConvertTo-Json -Compress -Depth 3
+  if (-not $json) { $json = '[]' }
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const emails = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
+  return { success: true, emails, message: `Found ${emails.length} email(s) matching "${query}".` };
+}
+
+async function outlookReadEmail(entryId) {
+  if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
+  const escapedId = String(entryId).replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $ns = $outlook.GetNamespace("MAPI")
+  $item = $ns.GetItemFromID('${escapedId}')
+  $attachNames = @()
+  foreach ($att in $item.Attachments) { $attachNames += $att.FileName }
+  $bodyText = if ($item.Body) { $item.Body.Substring(0, [Math]::Min(10000, $item.Body.Length)) } else { '' }
+  $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bodyText))
+  $result = @{
+    subject = $item.Subject
+    sender = $item.SenderName
+    sender_email = $item.SenderEmailAddress
+    to = $item.To
+    cc = $item.CC
+    received = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm")
+    body_b64 = $encoded
+    attachments = $attachNames
+  }
+  $json = $result | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  if (result.data && result.data.body_b64) {
+    result.data.body = Buffer.from(result.data.body_b64, 'base64').toString('utf8');
+    delete result.data.body_b64;
+  }
+  return { success: true, email: result.data };
+}
+
+async function outlookSaveAttachments(entryId, saveFolder) {
+  if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
+  const folder = saveFolder || app.getPath('temp');
+  if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+  const escapedId = String(entryId).replace(/'/g, "''");
+  const escapedFolder = folder.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $ns = $outlook.GetNamespace("MAPI")
+  $item = $ns.GetItemFromID('${escapedId}')
+  $saved = @()
+  foreach ($att in $item.Attachments) {
+    $savePath = Join-Path '${escapedFolder}' $att.FileName
+    $att.SaveAsFile($savePath)
+    $saved += @{ name = $att.FileName; path = $savePath; size = $att.Size }
+  }
+  $json = $saved | ConvertTo-Json -Compress -Depth 3
+  if (-not $json) { $json = '[]' }
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  const files = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
+  return { success: true, files, message: `Saved ${files.length} attachment(s) to ${folder}` };
+}
+
+async function outlookSendEmail(to, subject, body, cc, attachments) {
+  if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
+  const escapedTo = String(to).replace(/'/g, "''");
+  const escapedSubject = String(subject).replace(/'/g, "''");
+  const escapedCc = cc ? String(cc).replace(/'/g, "''") : '';
+  // Body is base64 encoded to avoid escaping issues
+  const bodyB64 = Buffer.from(body, 'utf8').toString('base64');
+  const attachPaths = Array.isArray(attachments) ? attachments : [];
+  const attachLines = attachPaths.map(p => `$mail.Attachments.Add('${p.replace(/'/g, "''")}') | Out-Null`).join('\n  ');
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $mail = $outlook.CreateItem(0) # olMailItem
+  $mail.To = '${escapedTo}'
+  ${escapedCc ? `$mail.CC = '${escapedCc}'` : ''}
+  $mail.Subject = '${escapedSubject}'
+  $bodyBytes = [Convert]::FromBase64String('${bodyB64}')
+  $mail.HTMLBody = [System.Text.Encoding]::UTF8.GetString($bodyBytes)
+  ${attachLines}
+  $mail.Send()
+  Write-Output '###JSON_START###{"success":true}###JSON_END###'
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+}`;
+  const result = await imanageRunPowerShell(script);
+  if (!result.success) return result;
+  if (result.data && result.data.error) return { success: false, error: result.data.error };
+  return { success: true, message: `Email sent to ${to}` };
+}
+
 // ========== COMMAND TOOL DISPATCHER ==========
 
 function getToolUsageEvent(toolName, input = {}, toolResult = null) {
@@ -4459,6 +4944,90 @@ async function dispatchTool(toolName, input, session = {}) {
       }
       result = { success: true, message: `Email search started for: ${safeInput.query}` };
       break;
+
+    // ── Word COM tools ──────────────────────────────────────────────
+    case 'word_save_as_pdf': {
+      const wordFile = resolveToolFilePath(safeInput, loadedFiles, 0) || normalizeLocalPath(safeInput.file_path);
+      if (!wordFile) { result = { success: false, error: 'file_path is required' }; break; }
+      const pdfOut = safeInput.output_path ? normalizeLocalPath(safeInput.output_path) : undefined;
+      result = await wordSaveAsPdf(wordFile, pdfOut);
+      break;
+    }
+
+    case 'word_find_replace': {
+      const wordFile = resolveToolFilePath(safeInput, loadedFiles, 0) || normalizeLocalPath(safeInput.file_path);
+      if (!wordFile) { result = { success: false, error: 'file_path is required' }; break; }
+      if (!safeInput.find_text) { result = { success: false, error: 'find_text is required' }; break; }
+      result = await wordFindReplace(wordFile, safeInput.find_text, safeInput.replace_text || '', safeInput.save !== false);
+      break;
+    }
+
+    case 'word_extract_text': {
+      const wordFile = resolveToolFilePath(safeInput, loadedFiles, 0) || normalizeLocalPath(safeInput.file_path);
+      if (!wordFile) { result = { success: false, error: 'file_path is required' }; break; }
+      result = await wordExtractText(wordFile);
+      break;
+    }
+
+    // ── File system tools ───────────────────────────────────────────
+    case 'file_copy': {
+      const src = resolveToolFilePath(safeInput, loadedFiles, 0) || normalizeLocalPath(safeInput.source);
+      const dst = normalizeLocalPath(safeInput.destination);
+      if (!src || !dst) { result = { success: false, error: 'source and destination are required' }; break; }
+      result = fileCopy(src, dst);
+      break;
+    }
+
+    case 'file_move': {
+      const src = resolveToolFilePath(safeInput, loadedFiles, 0) || normalizeLocalPath(safeInput.source);
+      const dst = normalizeLocalPath(safeInput.destination);
+      if (!src || !dst) { result = { success: false, error: 'source and destination are required' }; break; }
+      result = fileMove(src, dst);
+      break;
+    }
+
+    case 'file_list': {
+      const dir = normalizeLocalPath(safeInput.directory);
+      if (!dir) { result = { success: false, error: 'directory is required' }; break; }
+      result = fileList(dir, safeInput.pattern);
+      break;
+    }
+
+    case 'file_create_folder': {
+      const fp = normalizeLocalPath(safeInput.path);
+      if (!fp) { result = { success: false, error: 'path is required' }; break; }
+      result = fileCreateFolder(fp);
+      break;
+    }
+
+    // ── Outlook COM tools ───────────────────────────────────────────
+    case 'outlook_search': {
+      if (!safeInput.query) { result = { success: false, error: 'query is required' }; break; }
+      result = await outlookSearch(safeInput.query, safeInput.folder, safeInput.max_results, safeInput.days_back);
+      break;
+    }
+
+    case 'outlook_read_email': {
+      if (!safeInput.entry_id) { result = { success: false, error: 'entry_id is required' }; break; }
+      result = await outlookReadEmail(safeInput.entry_id);
+      break;
+    }
+
+    case 'outlook_save_attachments': {
+      if (!safeInput.entry_id) { result = { success: false, error: 'entry_id is required' }; break; }
+      const saveDir = safeInput.save_folder ? normalizeLocalPath(safeInput.save_folder) : undefined;
+      result = await outlookSaveAttachments(safeInput.entry_id, saveDir);
+      break;
+    }
+
+    case 'outlook_send_email': {
+      if (!safeInput.to || !safeInput.subject || !safeInput.body) {
+        result = { success: false, error: 'to, subject, and body are required' };
+        break;
+      }
+      result = await outlookSendEmail(safeInput.to, safeInput.subject, safeInput.body, safeInput.cc, safeInput.attachments);
+      break;
+    }
 
     default:
       result = { success: false, error: `Unknown tool: ${toolName}` };
@@ -6766,6 +7335,8 @@ ${prompt}`;
 
 // ========== EXECUTE-COMMAND: Natural Language Tool Use ==========
 ipcMain.handle('execute-command', async (event, { prompt, context }) => {
+  const cmdStartedAt = Date.now();
+  const toolsCalledLog = []; // track tool names for prompt logging
   try {
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -6887,6 +7458,18 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
         const toolUses = content.filter((part) => part && part.type === 'tool_use' && part.name);
         if (!toolUses.length) {
           const finalText = conversationParts.join('\n\n').trim();
+          // Best-effort prompt logging to Firebase
+          logPromptToFirestore({
+            username: session.actor?.username || session.actor?.name || 'unknown',
+            email: session.actor?.email,
+            prompt,
+            activeTab,
+            toolsCalled: toolsCalledLog,
+            toolCount: toolsCalledLog.length,
+            modelUsed: modelName,
+            success: true,
+            durationMs: Date.now() - cmdStartedAt
+          }).catch(() => {});
           return {
             success: true,
             type: lastToolName ? 'tool_result' : 'text',
@@ -6908,6 +7491,7 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
           lastToolName = toolUse.name;
           lastToolInput = toolUse.input;
           lastToolResult = toolResult;
+          toolsCalledLog.push(toolUse.name);
 
           let serialized = '{}';
           try {
@@ -6940,6 +7524,18 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       }
 
       const fallbackText = conversationParts.join('\n\n').trim() || 'Command ran, but the model reached the tool-step limit before finishing.';
+      // Best-effort prompt logging to Firebase
+      logPromptToFirestore({
+        username: session.actor?.username || session.actor?.name || 'unknown',
+        email: session.actor?.email,
+        prompt,
+        activeTab,
+        toolsCalled: toolsCalledLog,
+        toolCount: toolsCalledLog.length,
+        modelUsed: modelName,
+        success: true,
+        durationMs: Date.now() - cmdStartedAt
+      }).catch(() => {});
       return {
         success: true,
         type: lastToolName ? 'tool_result' : 'text',
@@ -6951,6 +7547,18 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       };
     }
 
+    // Log failed prompt attempt (no model available)
+    logPromptToFirestore({
+      username: session.actor?.username || session.actor?.name || 'unknown',
+      email: session.actor?.email,
+      prompt,
+      activeTab,
+      toolsCalled: toolsCalledLog,
+      toolCount: toolsCalledLog.length,
+      modelUsed: 'none',
+      success: false,
+      durationMs: Date.now() - cmdStartedAt
+    }).catch(() => {});
     return {
       success: false,
       error: `No supported Claude model available. Last error: ${getErrorDetail(lastResponse)}`
