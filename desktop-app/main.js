@@ -55,6 +55,8 @@ const FIREBASE_STATUS_FAILURE_CACHE_MS = 8000;
 const TELEMETRY_INGEST_TIMEOUT_MS = 20000;
 const TELEMETRY_INGEST_KEY = 'telemetry_ingest_url';
 const TELEMETRY_INGEST_TOKEN_KEY = 'telemetry_ingest_token';
+const AGENT_PROXY_URL_KEY = 'agent_proxy_url';
+const AGENT_PROXY_TOKEN_KEY = 'agent_proxy_token';
 const TELEMETRY_CONFIG_FILENAME = 'telemetry-config.json';
 const FEEDBACK_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
 const ANALYTICS_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
@@ -349,6 +351,18 @@ function encodeSecretForSetting(secretValue) {
     }
   } catch (_) {}
   return `plain:${plain}`;
+}
+
+function encodeSecretToSetting(plainValue) {
+  const value = String(plainValue || '').trim();
+  if (!value) return '';
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = safeStorage.encryptString(value);
+      return 'enc:' + encrypted.toString('base64');
+    }
+  } catch (_) {}
+  return 'plain:' + value;
 }
 
 function decodeSecretFromSetting(storedValue) {
@@ -7829,16 +7843,73 @@ ${prompt}`;
 });
 
 // ========== EXECUTE-COMMAND: Natural Language Tool Use ==========
+
+// Convert Anthropic-format tool definitions to OpenAI-format
+function convertToolsToOpenAIFormat(tools) {
+  return tools.map(t => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description || '',
+      parameters: t.input_schema || { type: 'object', properties: {} }
+    }
+  }));
+}
+
+// Resolve which provider + config to use for the agent command bar
+function resolveAgentProvider() {
+  const proxyUrl = getAgentProxyUrl();
+  if (proxyUrl) {
+    // Proxy mode — forward everything to the proxy server which holds the real API key
+    return { mode: 'proxy', proxyUrl, proxyToken: getAgentProxyToken() };
+  }
+
+  const provider = getAIProvider();
+  const apiKey = getApiKey();
+  const isLocal = provider === 'ollama' || provider === 'lmstudio';
+
+  if (provider === 'anthropic' || (!isLocal && apiKey && apiKey.startsWith('sk-ant-'))) {
+    return { mode: 'anthropic', apiKey, provider: 'anthropic' };
+  }
+  if (provider === 'openai' || (!isLocal && apiKey && apiKey.startsWith('sk-'))) {
+    return {
+      mode: 'openai',
+      apiKey,
+      provider: 'openai',
+      baseUrl: 'https://api.openai.com',
+      models: [getOpenAIModel(), DEFAULT_OPENAI_MODEL, 'gpt-4o-mini', 'gpt-4o']
+    };
+  }
+  if (provider === 'lmstudio') {
+    return {
+      mode: 'openai',
+      apiKey: '',
+      provider: 'lmstudio',
+      baseUrl: getLmStudioBaseUrl(),
+      models: [getLmStudioModel(), DEFAULT_LMSTUDIO_MODEL]
+    };
+  }
+  // Default: Ollama (free, local, no key needed)
+  return {
+    mode: 'openai',
+    apiKey: '',
+    provider: 'ollama',
+    baseUrl: getOllamaBaseUrl(),
+    models: [getOllamaModel(), DEFAULT_OLLAMA_MODEL, 'llama3.1:8b', 'qwen2.5:7b']
+  };
+}
+
 ipcMain.handle('execute-command', async (event, { prompt, context }) => {
   const cmdStartedAt = Date.now();
-  const toolsCalledLog = []; // track tool names for prompt logging
+  const toolsCalledLog = [];
   try {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      return { success: false, error: 'No Anthropic API key configured. Add your API key in Settings to use natural language commands.' };
+    const agentConfig = resolveAgentProvider();
+
+    // Anthropic mode requires API key; Ollama/LM Studio do not
+    if (agentConfig.mode === 'anthropic' && !agentConfig.apiKey) {
+      return { success: false, error: 'No Anthropic API key configured. Set a key in Settings, switch to Ollama (free), or configure a backend proxy.' };
     }
 
-    // Build context-aware system prompt
     const activeTab = context?.activeTab || 'unknown';
     const loadedFiles = context?.loadedFiles || [];
     const isWindows = process.platform === 'win32';
@@ -7861,166 +7932,21 @@ Keep responses concise and practical.
 ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the user asks for iManage features, let them know.' : ''}`;
 
     const session = context && typeof context === 'object'
-      ? {
-          actor: context.actor || {},
-          loadedFiles: context.loadedFiles || []
-        }
+      ? { actor: context.actor || {}, loadedFiles: context.loadedFiles || [] }
       : { actor: {}, loadedFiles: [] };
 
     const formatToolSummary = (toolName, toolResult) => {
-      const toolLabel = String(toolName || 'tool')
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, (char) => char.toUpperCase());
-      if (!toolResult || typeof toolResult !== 'object') {
-        return `- ${toolLabel}: no result returned.`;
-      }
-
-      if (!toolResult.success) {
-        return `- ${toolLabel}: failed (${toolResult.error || 'unknown error'}).`;
-      }
-
-      if (toolResult.message) {
-        return `- ${toolLabel}: ${toolResult.message}`;
-      }
-      if (Array.isArray(toolResult.files)) {
-        return `- ${toolLabel}: ${toolResult.files.length} file(s) returned.`;
-      }
-      if (Array.isArray(toolResult.versions)) {
-        return `- ${toolLabel}: ${toolResult.versions.length} version(s) returned.`;
-      }
-      if (toolResult.output_folder) {
-        return `- ${toolLabel}: completed. Output folder: ${toolResult.output_folder}`;
-      }
+      const toolLabel = String(toolName || 'tool').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      if (!toolResult || typeof toolResult !== 'object') return `- ${toolLabel}: no result returned.`;
+      if (!toolResult.success) return `- ${toolLabel}: failed (${toolResult.error || 'unknown error'}).`;
+      if (toolResult.message) return `- ${toolLabel}: ${toolResult.message}`;
+      if (Array.isArray(toolResult.files)) return `- ${toolLabel}: ${toolResult.files.length} file(s) returned.`;
+      if (Array.isArray(toolResult.versions)) return `- ${toolLabel}: ${toolResult.versions.length} version(s) returned.`;
+      if (toolResult.output_folder) return `- ${toolLabel}: completed. Output folder: ${toolResult.output_folder}`;
       return `- ${toolLabel}: completed.`;
     };
 
-    // Call Claude API with iterative tool use
-    const modelCandidates = [
-      getClaudeModel(),
-      DEFAULT_CLAUDE_MODEL,
-      'claude-3-5-sonnet-20241022'
-    ];
-
-    let lastResponse = null;
-    const maxToolTurns = 8;
-    for (const modelName of modelCandidates) {
-      let messages = [{ role: 'user', content: prompt }];
-      let lastToolName = null;
-      let lastToolInput = null;
-      let lastToolResult = null;
-      const conversationParts = [];
-      let modelUnavailable = false;
-
-      for (let turn = 0; turn < maxToolTurns; turn += 1) {
-        const response = await requestHttps({
-          baseUrl: 'https://api.anthropic.com',
-          path: '/v1/messages',
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01'
-          },
-          body: JSON.stringify({
-            model: modelName,
-            max_tokens: 1200,
-            system: systemPrompt,
-            tools: COMMAND_TOOLS,
-            messages
-          }),
-          timeoutMs: 30000
-        });
-
-        lastResponse = response;
-
-        if (response.statusCode !== 200) {
-          if (isLikelyModelError(response)) {
-            modelUnavailable = true;
-            break;
-          }
-          return {
-            success: false,
-            error: `Claude API error (${response.statusCode}): ${getErrorDetail(response)}`
-          };
-        }
-
-        const content = Array.isArray(response.jsonBody?.content) ? response.jsonBody.content : [];
-        const textBlocks = content.filter((part) => part && part.type === 'text' && part.text);
-        if (textBlocks.length > 0) {
-          const text = textBlocks.map((part) => String(part.text || '').trim()).filter(Boolean).join('\n');
-          if (text) conversationParts.push(text);
-        }
-
-        const toolUses = content.filter((part) => part && part.type === 'tool_use' && part.name);
-        if (!toolUses.length) {
-          const finalText = conversationParts.join('\n\n').trim();
-          // Best-effort prompt logging to Firebase
-          logPromptToFirestore({
-            username: session.actor?.username || session.actor?.name || 'unknown',
-            email: session.actor?.email,
-            prompt,
-            activeTab,
-            toolsCalled: toolsCalledLog,
-            toolCount: toolsCalledLog.length,
-            modelUsed: modelName,
-            success: true,
-            durationMs: Date.now() - cmdStartedAt
-          }).catch(() => {});
-          return {
-            success: true,
-            type: lastToolName ? 'tool_result' : 'text',
-            tool: lastToolName,
-            input: lastToolInput,
-            toolResult: lastToolResult,
-            message: finalText || 'Command received but no actionable response was generated.',
-            modelUsed: modelName
-          };
-        }
-
-        messages.push({ role: 'assistant', content });
-        const toolResultBlocks = [];
-        const toolSummaries = [];
-
-        for (const toolUse of toolUses) {
-          console.log(`[execute-command] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
-          const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
-          lastToolName = toolUse.name;
-          lastToolInput = toolUse.input;
-          lastToolResult = toolResult;
-          toolsCalledLog.push(toolUse.name);
-
-          let serialized = '{}';
-          try {
-            serialized = JSON.stringify(toolResult);
-          } catch (_) {
-            serialized = JSON.stringify({
-              success: false,
-              error: 'Tool result could not be serialized.'
-            });
-          }
-
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: serialized,
-            is_error: !toolResult || toolResult.success !== true
-          });
-          toolSummaries.push(formatToolSummary(toolUse.name, toolResult));
-        }
-
-        if (toolSummaries.length > 0) {
-          conversationParts.push(`Executed tools:\n${toolSummaries.join('\n')}`);
-        }
-
-        messages.push({ role: 'user', content: toolResultBlocks });
-      }
-
-      if (modelUnavailable) {
-        continue;
-      }
-
-      const fallbackText = conversationParts.join('\n\n').trim() || 'Command ran, but the model reached the tool-step limit before finishing.';
-      // Best-effort prompt logging to Firebase
+    const logAndReturn = (result, modelUsed) => {
       logPromptToFirestore({
         username: session.actor?.username || session.actor?.name || 'unknown',
         email: session.actor?.email,
@@ -8028,37 +7954,275 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
         activeTab,
         toolsCalled: toolsCalledLog,
         toolCount: toolsCalledLog.length,
-        modelUsed: modelName,
-        success: true,
+        modelUsed: modelUsed || 'unknown',
+        success: !!result.success,
         durationMs: Date.now() - cmdStartedAt
       }).catch(() => {});
-      return {
-        success: true,
-        type: lastToolName ? 'tool_result' : 'text',
-        tool: lastToolName,
-        input: lastToolInput,
-        toolResult: lastToolResult,
-        message: fallbackText,
-        modelUsed: modelName
-      };
+      return result;
+    };
+
+    const maxToolTurns = 8;
+
+    // ── PROXY MODE ──────────────────────────────────────────────────
+    // Send the full request to your backend proxy which holds the API key.
+    // The proxy is expected to accept the same body as Anthropic /v1/messages
+    // and return the same response format.
+    if (agentConfig.mode === 'proxy') {
+      let messages = [{ role: 'user', content: prompt }];
+      let lastToolName = null, lastToolInput = null, lastToolResult = null;
+      const conversationParts = [];
+
+      for (let turn = 0; turn < maxToolTurns; turn += 1) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (agentConfig.proxyToken) headers['Authorization'] = `Bearer ${agentConfig.proxyToken}`;
+        headers['X-EmmaNeigh-Version'] = APP_VERSION;
+        headers['X-EmmaNeigh-Machine'] = MACHINE_ID;
+
+        const response = await requestHttps({
+          baseUrl: agentConfig.proxyUrl,
+          path: '/v1/agent',
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            system: systemPrompt,
+            tools: COMMAND_TOOLS,
+            messages,
+            max_tokens: 1200
+          }),
+          timeoutMs: 60000
+        });
+
+        if (response.statusCode !== 200) {
+          if (isLikelyModelError(response)) break;
+          return logAndReturn({ success: false, error: `Proxy error (${response.statusCode}): ${getErrorDetail(response)}` }, 'proxy');
+        }
+
+        const content = Array.isArray(response.jsonBody?.content) ? response.jsonBody.content : [];
+        const textBlocks = content.filter(p => p && p.type === 'text' && p.text);
+        if (textBlocks.length > 0) {
+          const text = textBlocks.map(p => String(p.text || '').trim()).filter(Boolean).join('\n');
+          if (text) conversationParts.push(text);
+        }
+
+        const toolUses = content.filter(p => p && p.type === 'tool_use' && p.name);
+        if (!toolUses.length) {
+          return logAndReturn({
+            success: true,
+            type: lastToolName ? 'tool_result' : 'text',
+            tool: lastToolName, input: lastToolInput, toolResult: lastToolResult,
+            message: conversationParts.join('\n\n').trim() || 'Command received.',
+            modelUsed: response.jsonBody?.model || 'proxy'
+          }, response.jsonBody?.model || 'proxy');
+        }
+
+        messages.push({ role: 'assistant', content });
+        const toolResultBlocks = [];
+        const toolSummaries = [];
+        for (const toolUse of toolUses) {
+          console.log(`[execute-command:proxy] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
+          const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
+          lastToolName = toolUse.name; lastToolInput = toolUse.input; lastToolResult = toolResult;
+          toolsCalledLog.push(toolUse.name);
+          let serialized = '{}';
+          try { serialized = JSON.stringify(toolResult); } catch (_) { serialized = '{"success":false,"error":"Serialize error"}'; }
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: toolUse.id, content: serialized, is_error: !toolResult || toolResult.success !== true });
+          toolSummaries.push(formatToolSummary(toolUse.name, toolResult));
+        }
+        if (toolSummaries.length > 0) conversationParts.push(`Executed tools:\n${toolSummaries.join('\n')}`);
+        messages.push({ role: 'user', content: toolResultBlocks });
+      }
+
+      return logAndReturn({
+        success: true, type: lastToolName ? 'tool_result' : 'text',
+        tool: lastToolName, input: lastToolInput, toolResult: lastToolResult,
+        message: conversationParts.join('\n\n').trim() || 'Reached tool-step limit.',
+        modelUsed: 'proxy'
+      }, 'proxy');
     }
 
-    // Log failed prompt attempt (no model available)
-    logPromptToFirestore({
-      username: session.actor?.username || session.actor?.name || 'unknown',
-      email: session.actor?.email,
-      prompt,
-      activeTab,
-      toolsCalled: toolsCalledLog,
-      toolCount: toolsCalledLog.length,
-      modelUsed: 'none',
+    // ── ANTHROPIC MODE ──────────────────────────────────────────────
+    if (agentConfig.mode === 'anthropic') {
+      const modelCandidates = [getClaudeModel(), DEFAULT_CLAUDE_MODEL, 'claude-3-5-sonnet-20241022'];
+      let lastResponse = null;
+
+      for (const modelName of modelCandidates) {
+        let messages = [{ role: 'user', content: prompt }];
+        let lastToolName = null, lastToolInput = null, lastToolResult = null;
+        const conversationParts = [];
+        let modelUnavailable = false;
+
+        for (let turn = 0; turn < maxToolTurns; turn += 1) {
+          const response = await requestHttps({
+            baseUrl: 'https://api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': agentConfig.apiKey,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({ model: modelName, max_tokens: 1200, system: systemPrompt, tools: COMMAND_TOOLS, messages }),
+            timeoutMs: 30000
+          });
+          lastResponse = response;
+
+          if (response.statusCode !== 200) {
+            if (isLikelyModelError(response)) { modelUnavailable = true; break; }
+            return logAndReturn({ success: false, error: `Claude API error (${response.statusCode}): ${getErrorDetail(response)}` }, modelName);
+          }
+
+          const content = Array.isArray(response.jsonBody?.content) ? response.jsonBody.content : [];
+          const textBlocks = content.filter(p => p && p.type === 'text' && p.text);
+          if (textBlocks.length > 0) {
+            const text = textBlocks.map(p => String(p.text || '').trim()).filter(Boolean).join('\n');
+            if (text) conversationParts.push(text);
+          }
+
+          const toolUses = content.filter(p => p && p.type === 'tool_use' && p.name);
+          if (!toolUses.length) {
+            return logAndReturn({
+              success: true, type: lastToolName ? 'tool_result' : 'text',
+              tool: lastToolName, input: lastToolInput, toolResult: lastToolResult,
+              message: conversationParts.join('\n\n').trim() || 'Command received but no actionable response was generated.',
+              modelUsed: modelName
+            }, modelName);
+          }
+
+          messages.push({ role: 'assistant', content });
+          const toolResultBlocks = [];
+          const toolSummaries = [];
+          for (const toolUse of toolUses) {
+            console.log(`[execute-command:anthropic] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
+            const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
+            lastToolName = toolUse.name; lastToolInput = toolUse.input; lastToolResult = toolResult;
+            toolsCalledLog.push(toolUse.name);
+            let serialized = '{}';
+            try { serialized = JSON.stringify(toolResult); } catch (_) { serialized = '{"success":false,"error":"Serialize error"}'; }
+            toolResultBlocks.push({ type: 'tool_result', tool_use_id: toolUse.id, content: serialized, is_error: !toolResult || toolResult.success !== true });
+            toolSummaries.push(formatToolSummary(toolUse.name, toolResult));
+          }
+          if (toolSummaries.length > 0) conversationParts.push(`Executed tools:\n${toolSummaries.join('\n')}`);
+          messages.push({ role: 'user', content: toolResultBlocks });
+        }
+
+        if (modelUnavailable) continue;
+
+        return logAndReturn({
+          success: true, type: lastToolName ? 'tool_result' : 'text',
+          tool: lastToolName, input: lastToolInput, toolResult: lastToolResult,
+          message: conversationParts.join('\n\n').trim() || 'Reached tool-step limit.',
+          modelUsed: modelName
+        }, modelName);
+      }
+
+      return logAndReturn({ success: false, error: `No supported Claude model available. Last error: ${getErrorDetail(lastResponse)}` }, 'none');
+    }
+
+    // ── OPENAI-COMPATIBLE MODE (Ollama, LM Studio, OpenAI) ──────────
+    const openaiTools = convertToolsToOpenAIFormat(COMMAND_TOOLS);
+    const modelCandidates = agentConfig.models || [DEFAULT_OLLAMA_MODEL];
+    let lastResponse = null;
+
+    for (const modelName of modelCandidates) {
+      let messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ];
+      let lastToolName = null, lastToolInput = null, lastToolResult = null;
+      const conversationParts = [];
+      let modelUnavailable = false;
+
+      for (let turn = 0; turn < maxToolTurns; turn += 1) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (agentConfig.apiKey) headers['Authorization'] = `Bearer ${agentConfig.apiKey}`;
+
+        const response = await requestHttps({
+          baseUrl: agentConfig.baseUrl,
+          path: '/v1/chat/completions',
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model: modelName,
+            max_tokens: 1200,
+            temperature: 0,
+            messages,
+            tools: openaiTools
+          }),
+          timeoutMs: 90000
+        });
+        lastResponse = response;
+
+        if (response.statusCode !== 200) {
+          if (isLikelyModelError(response)) { modelUnavailable = true; break; }
+          return logAndReturn({
+            success: false,
+            error: `${agentConfig.provider} error (${response.statusCode}): ${getErrorDetail(response)}`
+          }, modelName);
+        }
+
+        const choice = response.jsonBody?.choices?.[0];
+        const assistantMsg = choice?.message;
+        if (!assistantMsg) {
+          return logAndReturn({ success: false, error: `${agentConfig.provider} response missing message.` }, modelName);
+        }
+
+        // Extract text
+        const text = String(assistantMsg.content || '').trim();
+        if (text) conversationParts.push(text);
+
+        // Extract tool calls (OpenAI format)
+        const toolCalls = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls : [];
+        if (!toolCalls.length) {
+          return logAndReturn({
+            success: true, type: lastToolName ? 'tool_result' : 'text',
+            tool: lastToolName, input: lastToolInput, toolResult: lastToolResult,
+            message: conversationParts.join('\n\n').trim() || 'Command received.',
+            modelUsed: modelName
+          }, modelName);
+        }
+
+        // Add assistant message to conversation (with tool_calls)
+        messages.push(assistantMsg);
+
+        const toolSummaries = [];
+        for (const tc of toolCalls) {
+          const fnName = tc.function?.name || '';
+          let fnArgs = {};
+          try { fnArgs = JSON.parse(tc.function?.arguments || '{}'); } catch (_) {}
+
+          console.log(`[execute-command:${agentConfig.provider}] Tool call: ${fnName}`, JSON.stringify(fnArgs));
+          const toolResult = await dispatchTool(fnName, fnArgs, session);
+          lastToolName = fnName; lastToolInput = fnArgs; lastToolResult = toolResult;
+          toolsCalledLog.push(fnName);
+
+          let serialized = '{}';
+          try { serialized = JSON.stringify(toolResult); } catch (_) { serialized = '{"success":false,"error":"Serialize error"}'; }
+
+          // OpenAI tool result format: role=tool, tool_call_id, content
+          messages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: serialized
+          });
+          toolSummaries.push(formatToolSummary(fnName, toolResult));
+        }
+        if (toolSummaries.length > 0) conversationParts.push(`Executed tools:\n${toolSummaries.join('\n')}`);
+      }
+
+      if (modelUnavailable) continue;
+
+      return logAndReturn({
+        success: true, type: lastToolName ? 'tool_result' : 'text',
+        tool: lastToolName, input: lastToolInput, toolResult: lastToolResult,
+        message: conversationParts.join('\n\n').trim() || 'Reached tool-step limit.',
+        modelUsed: modelName
+      }, modelName);
+    }
+
+    return logAndReturn({
       success: false,
-      durationMs: Date.now() - cmdStartedAt
-    }).catch(() => {});
-    return {
-      success: false,
-      error: `No supported Claude model available. Last error: ${getErrorDetail(lastResponse)}`
-    };
+      error: `No supported ${agentConfig.provider} model available. Ensure ${agentConfig.provider === 'ollama' ? 'Ollama is running (ollama serve) and a model is pulled (ollama pull llama3.1:8b)' : 'the provider is reachable'}. Last error: ${getErrorDetail(lastResponse)}`
+    }, 'none');
   } catch (e) {
     console.error('[execute-command] Error:', e);
     return { success: false, error: e.message };
@@ -8541,6 +8705,43 @@ ipcMain.handle('test-api-key', async (event, payload) => {
 // Get API key for use (returns actual key, only for internal use)
 ipcMain.handle('get-api-key-value', async () => {
   return getApiKey();
+});
+
+// ── Agent proxy settings ────────────────────────────────────────────
+ipcMain.handle('get-agent-proxy', async () => {
+  return {
+    success: true,
+    url: getAgentProxyUrl(),
+    hasToken: !!getAgentProxyToken()
+  };
+});
+
+ipcMain.handle('set-agent-proxy', async (event, { url, token }) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    const normalizedUrl = String(url || '').trim();
+    db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${AGENT_PROXY_URL_KEY}', '${normalizedUrl.replace(/'/g, "''")}')`);
+    if (token !== undefined) {
+      const encoded = encodeSecretToSetting(String(token || '').trim());
+      db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${AGENT_PROXY_TOKEN_KEY}', '${encoded.replace(/'/g, "''")}')`);
+    }
+    saveDatabase();
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-agent-config', async () => {
+  const config = resolveAgentProvider();
+  return {
+    success: true,
+    mode: config.mode,
+    provider: config.provider || config.mode,
+    hasProxy: config.mode === 'proxy',
+    hasApiKey: config.mode === 'anthropic' ? !!config.apiKey : true,
+    models: config.models || []
+  };
 });
 
 // ========== USER ACCOUNT HANDLERS ==========
@@ -9636,6 +9837,17 @@ function getClaudeModel() {
 // Initialize model env var on startup (called after DB init)
 function initClaudeModel() {
   process.env.CLAUDE_MODEL = getClaudeModel();
+}
+
+// ── Agent proxy settings ────────────────────────────────────────────
+function getAgentProxyUrl() {
+  const raw = (getSettingValue(AGENT_PROXY_URL_KEY, '') || '').trim();
+  if (!raw) return '';
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
+function getAgentProxyToken() {
+  return decodeSecretFromSetting(getSettingValue(AGENT_PROXY_TOKEN_KEY, '')) || '';
 }
 
 // ========== SMTP SETTINGS HANDLERS ==========
