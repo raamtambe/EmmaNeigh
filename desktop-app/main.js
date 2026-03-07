@@ -57,6 +57,11 @@ const TELEMETRY_INGEST_KEY = 'telemetry_ingest_url';
 const TELEMETRY_INGEST_TOKEN_KEY = 'telemetry_ingest_token';
 const AGENT_PROXY_URL_KEY = 'agent_proxy_url';
 const AGENT_PROXY_TOKEN_KEY = 'agent_proxy_token';
+const ACCESS_POLICY_URL_KEY = 'access_policy_url';
+const ACCESS_POLICY_TOKEN_KEY = 'access_policy_token';
+const ACCESS_POLICY_FAIL_CLOSED_KEY = 'access_policy_fail_closed';
+const ACCESS_POLICY_TIMEOUT_MS = 15000;
+const ACCESS_POLICY_CACHE_MS = 45000;
 const TELEMETRY_CONFIG_FILENAME = 'telemetry-config.json';
 const FEEDBACK_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
 const ANALYTICS_ADMIN_DEFAULTS = ['rtambe', 'raamtambe'];
@@ -451,6 +456,347 @@ function getTelemetryIngestToken() {
     bundled.apiKey ||
     ''
   ).trim();
+}
+
+function normalizeBooleanSetting(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text) return fallback;
+  if (['1', 'true', 'yes', 'on', 'enabled', 'enable'].includes(text)) return true;
+  if (['0', 'false', 'no', 'off', 'disabled', 'disable'].includes(text)) return false;
+  return fallback;
+}
+
+function getAccessPolicyUrl() {
+  const fromSetting = normalizeIngestUrl(getSettingValue(ACCESS_POLICY_URL_KEY, ''));
+  if (fromSetting) return fromSetting;
+
+  const fromEnv = normalizeIngestUrl(process.env.EMMANEIGH_ACCESS_POLICY_URL || '');
+  if (fromEnv) return fromEnv;
+
+  const bundled = loadBundledTelemetryConfig();
+  if (!bundled) return '';
+  return normalizeIngestUrl(
+    bundled.accessPolicyUrl ||
+    bundled.access_policy_url ||
+    bundled.userAccessPolicyUrl ||
+    bundled.user_access_policy_url ||
+    bundled.killSwitchUrl ||
+    bundled.kill_switch_url ||
+    ''
+  );
+}
+
+function getAccessPolicyToken() {
+  const fromSetting = decodeSecretFromSetting(getSettingValue(ACCESS_POLICY_TOKEN_KEY, ''));
+  if (fromSetting) return fromSetting;
+
+  const fromEnv = String(process.env.EMMANEIGH_ACCESS_POLICY_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+
+  const bundled = loadBundledTelemetryConfig();
+  if (!bundled) return '';
+  return String(
+    bundled.accessPolicyToken ||
+    bundled.access_policy_token ||
+    bundled.userAccessPolicyToken ||
+    bundled.user_access_policy_token ||
+    bundled.killSwitchToken ||
+    bundled.kill_switch_token ||
+    ''
+  ).trim();
+}
+
+function getAccessPolicyFailClosed() {
+  const fromSettingRaw = getSettingValue(ACCESS_POLICY_FAIL_CLOSED_KEY, null);
+  if (fromSettingRaw !== null && typeof fromSettingRaw !== 'undefined' && String(fromSettingRaw).trim() !== '') {
+    return normalizeBooleanSetting(fromSettingRaw, false);
+  }
+
+  const envRaw = process.env.EMMANEIGH_ACCESS_POLICY_FAIL_CLOSED;
+  if (typeof envRaw !== 'undefined' && String(envRaw).trim() !== '') {
+    return normalizeBooleanSetting(envRaw, false);
+  }
+
+  const bundled = loadBundledTelemetryConfig();
+  if (!bundled) return false;
+  const bundledRaw = bundled.accessPolicyFailClosed ?? bundled.access_policy_fail_closed ?? null;
+  return normalizeBooleanSetting(bundledRaw, false);
+}
+
+function normalizePolicyList(rawValue) {
+  if (Array.isArray(rawValue)) {
+    return rawValue
+      .map((entry) => String(entry || '').trim().toLowerCase())
+      .filter(Boolean);
+  }
+  if (typeof rawValue === 'string') {
+    return rawValue
+      .split(/[,\n;]+/)
+      .map((entry) => String(entry || '').trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function getPolicyList(policy, keys) {
+  for (const key of keys) {
+    if (policy && Object.prototype.hasOwnProperty.call(policy, key)) {
+      const list = normalizePolicyList(policy[key]);
+      if (list.length > 0) return list;
+    }
+  }
+  return [];
+}
+
+function matchesPolicyEntry(value, entry) {
+  const normalizedValue = String(value || '').trim().toLowerCase();
+  const normalizedEntry = String(entry || '').trim().toLowerCase();
+  if (!normalizedValue || !normalizedEntry) return false;
+  if (normalizedEntry === '*' || normalizedEntry === 'all') return true;
+  if (normalizedValue === normalizedEntry) return true;
+
+  if (normalizedValue.includes('@')) {
+    if (normalizedEntry.startsWith('*@') && normalizedValue.endsWith(normalizedEntry.slice(1))) return true;
+    if (normalizedEntry.startsWith('@') && normalizedValue.endsWith(normalizedEntry)) return true;
+  }
+
+  if (normalizedEntry.startsWith('*.') && normalizedValue.endsWith(normalizedEntry.slice(1))) return true;
+  if (normalizedEntry.startsWith('.')) return normalizedValue.endsWith(normalizedEntry);
+  return false;
+}
+
+function listHasMatch(list, value) {
+  if (!Array.isArray(list) || list.length === 0) return false;
+  return list.some((entry) => matchesPolicyEntry(value, entry));
+}
+
+function evaluateAccessPolicyPayload(payload, identity = {}) {
+  const policyRoot = payload && typeof payload === 'object' ? payload : {};
+  const policy = policyRoot.policy && typeof policyRoot.policy === 'object' ? policyRoot.policy : policyRoot;
+
+  const email = normalizeEmail(identity.email || '');
+  const username = normalizeUsername(identity.username || '');
+  const userId = String(identity.userId || identity.user_id || '').trim().toLowerCase();
+  const emailDomain = email.includes('@') ? email.split('@')[1] : '';
+  const emailLocalPart = email.includes('@') ? email.split('@')[0] : '';
+  const message =
+    String(
+      policy.message ||
+      policy.reason ||
+      policy.denied_message ||
+      policyRoot.message ||
+      policyRoot.reason ||
+      ''
+    ).trim() || 'Access to EmmaNeigh has been disabled by your administrator.';
+
+  const directAllowRaw =
+    policy.allowed ??
+    policy.allow ??
+    policy.is_allowed ??
+    policy.enabled ??
+    policy.active;
+  const directBlockRaw =
+    policy.blocked ??
+    policy.block ??
+    policy.deny ??
+    policy.disabled ??
+    policy.revoked ??
+    policy.suspended;
+
+  const hasDirectAllow = typeof directAllowRaw !== 'undefined' && directAllowRaw !== null;
+  const hasDirectBlock = typeof directBlockRaw !== 'undefined' && directBlockRaw !== null;
+  const directAllow = normalizeBooleanSetting(directAllowRaw, true);
+  const directBlock = normalizeBooleanSetting(directBlockRaw, false);
+
+  const statusText = String(policy.status || policyRoot.status || '').trim().toLowerCase();
+  if (statusText === 'blocked' || statusText === 'disabled' || statusText === 'deny' || statusText === 'revoked') {
+    return { allowed: false, message };
+  }
+  if (normalizeBooleanSetting(policy.block_all ?? policy.disable_all ?? policy.kill_switch ?? false, false)) {
+    return { allowed: false, message };
+  }
+  if (hasDirectBlock && directBlock) {
+    return { allowed: false, message };
+  }
+  if (hasDirectAllow && !directAllow) {
+    return { allowed: false, message };
+  }
+
+  const blockedEmails = getPolicyList(policy, ['blocked_emails', 'blockedEmails', 'denylist', 'denied_emails', 'banned_emails']);
+  const blockedDomains = getPolicyList(policy, ['blocked_domains', 'blockedDomains', 'denied_domains', 'banned_domains']);
+  const blockedUsers = getPolicyList(policy, ['blocked_users', 'blockedUsers', 'blocked_usernames', 'blocked_user_ids', 'blockedUserIds']);
+
+  const allowedEmails = getPolicyList(policy, ['allowed_emails', 'allowedEmails', 'allowlist', 'approved_emails']);
+  const allowedDomains = getPolicyList(policy, ['allowed_domains', 'allowedDomains', 'approved_domains']);
+  const allowedUsers = getPolicyList(policy, ['allowed_users', 'allowedUsers', 'allowed_usernames', 'allowed_user_ids', 'allowedUserIds']);
+
+  if (email && listHasMatch(blockedEmails, email)) return { allowed: false, message };
+  if (emailDomain && listHasMatch(blockedDomains, emailDomain)) return { allowed: false, message };
+  if ((username && listHasMatch(blockedUsers, username)) || (userId && listHasMatch(blockedUsers, userId))) {
+    return { allowed: false, message };
+  }
+
+  const hasAllowRules = allowedEmails.length > 0 || allowedDomains.length > 0 || allowedUsers.length > 0;
+  if (hasAllowRules) {
+    const emailAllowed = email && (listHasMatch(allowedEmails, email) || listHasMatch(allowedEmails, emailLocalPart));
+    const domainAllowed = emailDomain && listHasMatch(allowedDomains, emailDomain);
+    const userAllowed = (username && listHasMatch(allowedUsers, username)) || (userId && listHasMatch(allowedUsers, userId));
+    if (!(emailAllowed || domainAllowed || userAllowed)) {
+      return { allowed: false, message };
+    }
+  }
+
+  return {
+    allowed: true,
+    message: String(
+      policy.allowed_message ||
+      policyRoot.allowed_message ||
+      'Access granted.'
+    ).trim()
+  };
+}
+
+const accessPolicyCache = new Map();
+
+function clearAccessPolicyCache() {
+  accessPolicyCache.clear();
+}
+
+function buildAccessPolicyCacheKey(identity = {}, eventType = '') {
+  return [
+    normalizeEmail(identity.email || ''),
+    normalizeUsername(identity.username || ''),
+    String(identity.userId || '').trim().toLowerCase(),
+    String(eventType || '').trim().toLowerCase()
+  ].join('|');
+}
+
+function setAccessPolicyCache(key, value) {
+  if (!key) return;
+  accessPolicyCache.set(key, {
+    checkedAt: Date.now(),
+    value
+  });
+  if (accessPolicyCache.size > 500) {
+    const firstKey = accessPolicyCache.keys().next().value;
+    if (firstKey) accessPolicyCache.delete(firstKey);
+  }
+}
+
+function getAccessPolicyCache(key, force = false) {
+  if (!key || force) return null;
+  const cached = accessPolicyCache.get(key);
+  if (!cached) return null;
+  if ((Date.now() - cached.checkedAt) > ACCESS_POLICY_CACHE_MS) {
+    accessPolicyCache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+async function evaluateAccessPolicy(identity = {}, options = {}) {
+  const email = normalizeEmail(identity.email || '');
+  const username = normalizeUsername(identity.username || '');
+  const userId = String(identity.userId || identity.user_id || '').trim();
+  const eventType = String(options.eventType || options.context || 'session').trim().toLowerCase() || 'session';
+  const force = !!options.force;
+
+  const policyUrl = getAccessPolicyUrl();
+  if (!policyUrl) {
+    return {
+      success: true,
+      configured: false,
+      allowed: true,
+      message: 'Access policy is not configured.'
+    };
+  }
+
+  const cacheKey = buildAccessPolicyCacheKey({ email, username, userId }, eventType);
+  const cached = getAccessPolicyCache(cacheKey, force);
+  if (cached) return cached;
+
+  const token = getAccessPolicyToken();
+  const headers = { Accept: 'application/json' };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    headers['x-emmaneigh-access-key'] = token;
+  }
+
+  const policyPayload = {
+    email: email || null,
+    username: username || null,
+    user_id: userId || null,
+    machine_id: MACHINE_ID,
+    app_version: APP_VERSION,
+    event_type: eventType,
+    timestamp: new Date().toISOString()
+  };
+
+  let getResponse;
+  try {
+    const requestUrl = new URL(policyUrl);
+    if (email) requestUrl.searchParams.set('email', email);
+    if (username) requestUrl.searchParams.set('username', username);
+    if (userId) requestUrl.searchParams.set('user_id', userId);
+    requestUrl.searchParams.set('event_type', eventType);
+    requestUrl.searchParams.set('app_version', APP_VERSION);
+    requestUrl.searchParams.set('machine_id', MACHINE_ID);
+
+    getResponse = await requestHttps({
+      baseUrl: requestUrl.toString(),
+      path: '',
+      method: 'GET',
+      headers,
+      timeoutMs: ACCESS_POLICY_TIMEOUT_MS
+    });
+  } catch (e) {
+    getResponse = { statusCode: 0, networkError: e.message, rawBody: '', jsonBody: null };
+  }
+
+  let response = getResponse;
+  if (response.statusCode === 405 || response.statusCode === 404 || response.statusCode === 400) {
+    response = await requestHttps({
+      baseUrl: policyUrl,
+      path: '',
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(policyPayload),
+      timeoutMs: ACCESS_POLICY_TIMEOUT_MS
+    });
+  }
+
+  if (!(response.statusCode >= 200 && response.statusCode < 300)) {
+    const failClosed = getAccessPolicyFailClosed();
+    const failureResult = {
+      success: true,
+      configured: true,
+      allowed: !failClosed,
+      message: failClosed
+        ? `Access policy service is unavailable (${getErrorDetail(response)}). Access is blocked until policy is reachable.`
+        : `Access policy service is unavailable (${getErrorDetail(response)}). Continuing with local access.`,
+      source: 'policy_unreachable'
+    };
+    setAccessPolicyCache(cacheKey, failureResult);
+    return failureResult;
+  }
+
+  const payload = response.jsonBody && typeof response.jsonBody === 'object'
+    ? response.jsonBody
+    : parseJsonSafe(response.rawBody || '') || {};
+  const decision = evaluateAccessPolicyPayload(payload, { email, username, userId });
+  const result = {
+    success: true,
+    configured: true,
+    allowed: !!decision.allowed,
+    message: decision.message || (decision.allowed ? 'Access granted.' : 'Access denied by policy.'),
+    source: 'policy_remote'
+  };
+  setAccessPolicyCache(cacheKey, result);
+  return result;
 }
 
 function invalidateTelemetryStatusCache() {
@@ -3207,10 +3553,22 @@ const COMMAND_TOOLS = [
   },
   {
     name: 'imanage_test_connection',
-    description: 'Test iManage COM connectivity. Run this first if having connection issues. Returns diagnostic info about the COM object, login status, and available methods.',
+    description: 'Test iManage COM connectivity. Run this first if having connection issues. Returns diagnostic info about the COM object, login status, available methods, and detected API type (IManDMS vs WorkObjectFactory).',
     input_schema: {
       type: 'object',
       properties: {}
+    }
+  },
+  {
+    name: 'imanage_create_folder',
+    description: 'Create a new folder/workspace in iManage.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        folder_name: { type: 'string', description: 'Name of the folder to create' },
+        parent_path: { type: 'string', description: 'Optional parent folder path or ID to create the folder under' }
+      },
+      required: ['folder_name']
     }
   },
   {
@@ -3423,11 +3781,14 @@ const COMMAND_TOOLS = [
 
 const IMANAGE_PS_BOOTSTRAP = `
 # ── iManage COM bootstrap ────────────────────────────────────────────────
-# Supports iManage Work 10.x, 9.x, FileSite, and DeskSite COM variants.
-# Each function has multiple fallback paths to handle version differences.
+# Supports iManage Work 10.x (IManDMS), 9.x (WorkObjectFactory), FileSite, and DeskSite COM variants.
+# Detects COM type and provides unified + type-specific helpers.
+
+# Global COM type tracking — set by Get-IManageWorkObjectFactory
+$global:IManageProgId = ''
+$global:IManageCOMType = ''  # 'IManDMS', 'WorkObjectFactory', 'WorkSite'
 
 function Get-IManageWorkObjectFactory {
-  # Ordered from most common (iManage Work 10.x) to legacy (DeskSite/FileSite)
   $progIds = @(
     'iManage.COMAPILib.IManDMS',
     'iManage.Work.WorkObjectFactory',
@@ -3443,7 +3804,17 @@ function Get-IManageWorkObjectFactory {
   foreach ($progId in $progIds) {
     try {
       $obj = New-Object -ComObject $progId
-      if ($null -ne $obj) { return $obj }
+      if ($null -ne $obj) {
+        $global:IManageProgId = $progId
+        if ($progId -match 'IManDMS') {
+          $global:IManageCOMType = 'IManDMS'
+        } elseif ($progId -match 'WorkSite') {
+          $global:IManageCOMType = 'WorkSite'
+        } else {
+          $global:IManageCOMType = 'WorkObjectFactory'
+        }
+        return $obj
+      }
     } catch {
       $errors += ($progId + ': ' + $_.Exception.Message)
     }
@@ -3579,6 +3950,8 @@ function Get-IManageComInfo($wof) {
     type = $wof.GetType().FullName
     methods = @()
     properties = @()
+    comType = $global:IManageCOMType
+    progId = $global:IManageProgId
   }
   try {
     $info.methods = @($wof.PSObject.Methods | ForEach-Object { $_.Name } | Sort-Object -Unique)
@@ -3587,6 +3960,197 @@ function Get-IManageComInfo($wof) {
     $info.properties = @($wof.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object -Unique)
   } catch {}
   return $info
+}
+
+# ── IManDMS session-based helpers (iManage Work 10.x) ──────────────────
+
+function Get-IManDMSSession($dms) {
+  try {
+    $sessions = $dms.Sessions
+    if ($null -ne $sessions -and $sessions.Count -gt 0) {
+      for ($i = 1; $i -le $sessions.Count; $i++) {
+        try {
+          $s = $sessions.Item($i)
+          if ($null -ne $s) { return $s }
+        } catch {}
+      }
+    }
+  } catch {}
+  try {
+    $session = $dms.Sessions.Add()
+    if ($null -ne $session) {
+      try { $session.TrustedLogin() } catch {}
+      return $session
+    }
+  } catch {}
+  throw "Could not get or create iManage DMS session. Ensure iManage Work Desktop is running and you are signed in."
+}
+
+function Get-IManDMSDatabase($session) {
+  try {
+    $wa = $session.WorkArea
+    if ($null -ne $wa) { return $wa }
+  } catch {}
+  try {
+    $dbs = $session.Databases
+    if ($null -ne $dbs -and $dbs.Count -gt 0) {
+      for ($i = 1; $i -le $dbs.Count; $i++) {
+        try {
+          $db = $dbs.Item($i)
+          if ($null -ne $db) { return $db }
+        } catch {}
+      }
+    }
+  } catch {}
+  try {
+    $pdb = $session.PreferredDatabase
+    if ($null -ne $pdb) { return $pdb }
+  } catch {}
+  throw "Could not access iManage database. Ensure you are connected to an iManage library."
+}
+
+function Get-IManDMSDocById($dms, $docNumber, $versionNum) {
+  $session = Get-IManDMSSession $dms
+  $db = Get-IManDMSDatabase $session
+  $errors = @()
+  if ($null -ne $versionNum -and $versionNum -gt 0) {
+    try {
+      $doc = $db.GetDocument($docNumber, $versionNum)
+      if ($null -ne $doc) { return $doc }
+    } catch { $errors += ('GetDocument(num,ver): ' + $_.Exception.Message) }
+  }
+  try {
+    $doc = $db.GetDocument($docNumber)
+    if ($null -ne $doc) { return $doc }
+  } catch { $errors += ('GetDocument(num): ' + $_.Exception.Message) }
+  try {
+    $numInt = [int]$docNumber
+    $doc = $db.GetDocument($numInt)
+    if ($null -ne $doc) { return $doc }
+  } catch { $errors += ('GetDocument(int): ' + $_.Exception.Message) }
+  throw ('Could not retrieve document ' + $docNumber + '. Errors: ' + ($errors -join ' | '))
+}
+
+function Search-IManDMSDocs($dms, $queryText, $maxResults) {
+  if (-not $maxResults) { $maxResults = 25 }
+  $session = Get-IManDMSSession $dms
+  $db = Get-IManDMSDatabase $session
+  $errors = @()
+  try {
+    $params = $db.CreateSearchParameters()
+    if ($null -ne $params) {
+      try { $params.Add('DESCRIPTION', $queryText) } catch {}
+      try { $params.Add('DOCNAME', $queryText) } catch {
+        try { $params.Add('NAME', $queryText) } catch {}
+      }
+      $found = $db.SearchDocuments($params, $maxResults)
+      if ($null -ne $found) {
+        $results = @()
+        foreach ($doc in $found) { $results += $doc }
+        if ($results.Count -gt 0) { return $results }
+      }
+    }
+  } catch { $errors += ('SearchDocuments(params): ' + $_.Exception.Message) }
+  try {
+    $found = $db.SearchDocuments($queryText)
+    if ($null -ne $found) {
+      $results = @()
+      foreach ($doc in $found) { $results += $doc }
+      if ($results.Count -gt 0) { return $results }
+    }
+  } catch { $errors += ('SearchDocuments(string): ' + $_.Exception.Message) }
+  try {
+    $found = $db.QuickSearch($queryText, $maxResults)
+    if ($null -ne $found) {
+      $results = @()
+      foreach ($doc in $found) { $results += $doc }
+      if ($results.Count -gt 0) { return $results }
+    }
+  } catch { $errors += ('QuickSearch: ' + $_.Exception.Message) }
+  if ($errors.Count -gt 0) {
+    throw ('iManage search failed. Methods tried: ' + ($errors -join ' | '))
+  }
+  return @()
+}
+
+function Import-IManDMSDoc($dms, $localPath) {
+  $session = Get-IManDMSSession $dms
+  $db = Get-IManDMSDatabase $session
+  $errors = @()
+  try {
+    $doc = $db.ImportDocument($localPath)
+    if ($null -ne $doc) { return $doc }
+  } catch { $errors += ('db.ImportDocument: ' + $_.Exception.Message) }
+  try {
+    $doc = $db.CreateDocument()
+    if ($null -ne $doc) {
+      $fileName = [System.IO.Path]::GetFileNameWithoutExtension($localPath)
+      $ext = [System.IO.Path]::GetExtension($localPath).TrimStart('.')
+      try { $doc.Name = $fileName } catch {}
+      try { $doc.Extension = $ext } catch {}
+      try { $doc.Type = $ext } catch {}
+      $doc.UpdateFromFile($localPath)
+      return $doc
+    }
+  } catch { $errors += ('CreateDocument+UpdateFromFile: ' + $_.Exception.Message) }
+  try {
+    $doc = $db.AddDocument($localPath)
+    if ($null -ne $doc) { return $doc }
+  } catch { $errors += ('AddDocument: ' + $_.Exception.Message) }
+  throw ('Could not import document to iManage. Methods tried: ' + ($errors -join ' | '))
+}
+
+function Extract-IManDocInfo($doc) {
+  $info = @{}
+  try { $info.name = $doc.Name } catch { $info.name = '' }
+  try { $info.number = $doc.Number } catch {
+    try { $info.number = $doc.DocNumber } catch { $info.number = '' }
+  }
+  try { $info.version = $doc.Version } catch { $info.version = '' }
+  try { $info.extension = $doc.Extension } catch {
+    try { $info.extension = $doc.Type } catch { $info.extension = '' }
+  }
+  try { $info.author = $doc.Author } catch { $info.author = '' }
+  try { $info.description = $doc.Description } catch { $info.description = '' }
+  try { $info.path = $doc.Path } catch { $info.path = '' }
+  return $info
+}
+
+function Create-IManDMSFolder($dms, $folderName, $parentPath) {
+  $session = Get-IManDMSSession $dms
+  $db = Get-IManDMSDatabase $session
+  $errors = @()
+  $parent = $null
+  if ($parentPath) {
+    try { $parent = $db.GetFolder($parentPath) } catch {}
+    try { if ($null -eq $parent) { $parent = $db.GetFolderByPath($parentPath) } } catch {}
+  }
+  if ($null -ne $parent) {
+    try {
+      $folder = $parent.SubFolders.Add($folderName)
+      if ($null -ne $folder) { return $folder }
+    } catch { $errors += ('parent.SubFolders.Add: ' + $_.Exception.Message) }
+    try {
+      $folder = $parent.CreateSubFolder($folderName)
+      if ($null -ne $folder) { return $folder }
+    } catch { $errors += ('parent.CreateSubFolder: ' + $_.Exception.Message) }
+  }
+  try {
+    $folder = $db.CreateFolder($folderName)
+    if ($null -ne $folder) { return $folder }
+  } catch { $errors += ('db.CreateFolder: ' + $_.Exception.Message) }
+  try {
+    $folder = $db.Folders.Add($folderName)
+    if ($null -ne $folder) { return $folder }
+  } catch { $errors += ('db.Folders.Add: ' + $_.Exception.Message) }
+  try {
+    $root = $db.RootFolder
+    if ($null -ne $root) {
+      $folder = $root.SubFolders.Add($folderName)
+      if ($null -ne $folder) { return $folder }
+    }
+  } catch { $errors += ('RootFolder.SubFolders.Add: ' + $_.Exception.Message) }
+  throw ('Could not create folder. Methods tried: ' + ($errors -join ' | '))
 }
 `;
 
@@ -4068,61 +4632,85 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
 
-  $files = New-Object System.Collections.Generic.List[System.Object]
-
-  # Try multiple method signatures for file browsing across COM versions
-  $browseSuccess = $false
-  $browseErrors = @()
-
-  # Method 1: GetFiles with list ref + boolean (WorkObjectFactory pattern)
-  if (-not $browseSuccess) {
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    # IManDMS session-based path — list recent workspace documents
+    $session = Get-IManDMSSession $wof
+    $db = Get-IManDMSDatabase $session
+    $docs = @()
+    $browseErrors = @()
+    # Try RecentDocuments
     try {
-      $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
-      $browseSuccess = $true
-    } catch {
-      $browseErrors += ('GetFiles(ref,bool): ' + $_.Exception.Message)
+      $recent = $db.RecentDocuments
+      if ($null -ne $recent) { foreach ($d in $recent) { $docs += $d } }
+    } catch { $browseErrors += ('RecentDocuments: ' + $_.Exception.Message) }
+    # Try SearchDocuments with wildcard if no recent docs
+    if ($docs.Count -eq 0) {
+      try {
+        $params = $db.CreateSearchParameters()
+        if ($null -ne $params) {
+          try { $params.Add('DOCNAME', '*') } catch {}
+          $found = $db.SearchDocuments($params, 25)
+          if ($null -ne $found) { foreach ($d in $found) { $docs += $d } }
+        }
+      } catch { $browseErrors += ('SearchDocuments(*): ' + $_.Exception.Message) }
     }
-  }
-
-  # Method 2: GetFiles with list ref only
-  if (-not $browseSuccess) {
-    try {
-      $wof.GetFiles([ref]$files)
-      $browseSuccess = $true
-    } catch {
-      $browseErrors += ('GetFiles(ref): ' + $_.Exception.Message)
+    if ($docs.Count -eq 0 -and $browseErrors.Count -gt 0) {
+      throw ('Could not browse iManage documents. Methods tried: ' + ($browseErrors -join ' | '))
     }
-  }
+    $results = @()
+    foreach ($d in $docs) { $results += (Extract-IManDocInfo $d) }
+    $json = $results | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
+  } else {
+    # WorkObjectFactory / WorkSite path
+    $files = New-Object System.Collections.Generic.List[System.Object]
+    $browseSuccess = $false
+    $browseErrors = @()
 
-  # Method 3: ShowOpen / OpenFileDialog pattern (some COM variants)
-  if (-not $browseSuccess) {
-    try {
-      $dlg = $wof.ShowOpen()
-      if ($null -ne $dlg) { $files.Add($dlg) }
-      $browseSuccess = $true
-    } catch {
-      $browseErrors += ('ShowOpen: ' + $_.Exception.Message)
+    if (-not $browseSuccess) {
+      try {
+        $wof.GetFiles([ref]$files, ${multiple ? '$true' : '$false'})
+        $browseSuccess = $true
+      } catch {
+        $browseErrors += ('GetFiles(ref,bool): ' + $_.Exception.Message)
+      }
     }
-  }
+    if (-not $browseSuccess) {
+      try {
+        $wof.GetFiles([ref]$files)
+        $browseSuccess = $true
+      } catch {
+        $browseErrors += ('GetFiles(ref): ' + $_.Exception.Message)
+      }
+    }
+    if (-not $browseSuccess) {
+      try {
+        $dlg = $wof.ShowOpen()
+        if ($null -ne $dlg) { $files.Add($dlg) }
+        $browseSuccess = $true
+      } catch {
+        $browseErrors += ('ShowOpen: ' + $_.Exception.Message)
+      }
+    }
+    if (-not $browseSuccess) {
+      throw ('Could not open iManage file picker. Methods tried: ' + ($browseErrors -join ' | '))
+    }
 
-  if (-not $browseSuccess) {
-    throw ('Could not open iManage file picker. Methods tried: ' + ($browseErrors -join ' | '))
+    $results = @()
+    foreach ($f in $files) {
+      $info = @{}
+      try { $info.name = $f.Name } catch { $info.name = '' }
+      try { $info.number = $f.Number } catch { $info.number = '' }
+      try { $info.version = $f.Version } catch { $info.version = '' }
+      try { $info.extension = $f.Extension } catch { $info.extension = '' }
+      try { $info.author = $f.Author } catch { $info.author = '' }
+      try { $info.description = $f.Description } catch { $info.description = '' }
+      try { $info.path = $f.Path } catch { $info.path = '' }
+      $results += $info
+    }
+    $json = $results | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
   }
-
-  $results = @()
-  foreach ($f in $files) {
-    $info = @{}
-    try { $info.name = $f.Name } catch { $info.name = '' }
-    try { $info.number = $f.Number } catch { $info.number = '' }
-    try { $info.version = $f.Version } catch { $info.version = '' }
-    try { $info.extension = $f.Extension } catch { $info.extension = '' }
-    try { $info.author = $f.Author } catch { $info.author = '' }
-    try { $info.description = $f.Description } catch { $info.description = '' }
-    try { $info.path = $f.Path } catch { $info.path = '' }
-    $results += $info
-  }
-  $json = $results | ConvertTo-Json -Compress -Depth 3
-  Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4156,54 +4744,94 @@ try {
     Write-Output "###JSON_START###$json###JSON_END###"
     exit 0
   }
-  ${normalizedAction === 'new_version' ? `
-  # Save as new version — need profile ID from file path
-  $saveErrors = @()
-  $profileId = $null
-  try { $profileId = $wof.GetProfileIdFromFilePath($sourcePath) } catch { $saveErrors += ('GetProfileIdFromFilePath: ' + $_.Exception.Message) }
-  if ($profileId) {
+
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    # IManDMS session-based save
+    ${normalizedAction === 'new_version' ? `
+    # New version via IManDMS — find document, then CheckIn / UpdateFromFile
+    $saveErrors = @()
+    $docSaved = $false
+    # Try to get document number from file name pattern (e.g. 12345_1.doc)
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourcePath)
+    $docNumMatch = [regex]::Match($baseName, '(\\d{4,})')
+    if ($docNumMatch.Success) {
+      $docNum = $docNumMatch.Groups[1].Value
+      try {
+        $doc = Get-IManDMSDocById $wof $docNum $null
+        if ($null -ne $doc) {
+          try { $doc.CheckIn($sourcePath); $docSaved = $true } catch { $saveErrors += ('CheckIn: ' + $_.Exception.Message) }
+          if (-not $docSaved) { try { $doc.UpdateFromFile($sourcePath); $docSaved = $true } catch { $saveErrors += ('UpdateFromFile: ' + $_.Exception.Message) } }
+          if ($docSaved) {
+            $info = Extract-IManDocInfo $doc
+            $json = @{ success = $true; action = "new_version"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+            Write-Output "###JSON_START###\$json###JSON_END###"
+            exit 0
+          }
+        }
+      } catch { $saveErrors += ('GetDoc: ' + $_.Exception.Message) }
+    }
+    if (-not $docSaved) {
+      # Fall back to import as new document
+      $doc = Import-IManDMSDoc $wof $sourcePath
+      $info = Extract-IManDocInfo $doc
+      $json = @{ success = $true; action = "new_document"; note = "Saved as new document (could not save as new version)"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+      Write-Output "###JSON_START###\$json###JSON_END###"
+    }
+    ` : `
+    # New document via IManDMS — import
+    $doc = Import-IManDMSDoc $wof $sourcePath
+    $info = Extract-IManDocInfo $doc
+    $json = @{ success = $true; action = "new_document"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+    Write-Output "###JSON_START###\$json###JSON_END###"
+    `}
+  } else {
+    # WorkObjectFactory / WorkSite path
+    ${normalizedAction === 'new_version' ? `
+    $saveErrors = @()
+    $profileId = $null
+    try { $profileId = $wof.GetProfileIdFromFilePath($sourcePath) } catch { $saveErrors += ('GetProfileIdFromFilePath: ' + $_.Exception.Message) }
+    if ($profileId) {
+      $files = New-Object System.Collections.Generic.List[System.Object]
+      $entry = New-IManageQueryFile($profileId)
+      $files.Add($entry)
+      $saved = $false
+      if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath, ${showDialogPs}); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path,dialog): ' + $_.Exception.Message) } }
+      if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path): ' + $_.Exception.Message) } }
+      if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref): ' + $_.Exception.Message) } }
+      if (-not $saved) { throw ('Could not save new version. Methods tried: ' + ($saveErrors -join ' | ')) }
+      $savedFiles = @()
+      foreach ($f in $files) {
+        $info = @{}
+        try { $info.name = $f.Name } catch {}
+        try { $info.number = $f.Number } catch {}
+        try { $info.version = $f.Version } catch {}
+        $savedFiles += $info
+      }
+      $json = @{ success = $true; action = "new_version"; profileId = $profileId; files = $savedFiles } | ConvertTo-Json -Compress -Depth 4
+      Write-Output "###JSON_START###$json###JSON_END###"
+    } else {
+      Write-Output ('###JSON_START###{"error":"Could not find iManage profile for this file (' + ($saveErrors -join '; ') + '). Try saving as new document instead."}###JSON_END###')
+    }
+    ` : `
     $files = New-Object System.Collections.Generic.List[System.Object]
-    $entry = New-IManageQueryFile($profileId)
-    $files.Add($entry)
-    $saved = $false
-    # Try multiple SaveAsNewVersion signatures
-    if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath, ${showDialogPs}); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path,dialog): ' + $_.Exception.Message) } }
-    if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path): ' + $_.Exception.Message) } }
-    if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref): ' + $_.Exception.Message) } }
-    if (-not $saved) { throw ('Could not save new version. Methods tried: ' + ($saveErrors -join ' | ')) }
-    $savedFiles = @()
+    $saveSuccess = $false
+    $saveErrors = @()
+    if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath, ${showDialogPs}); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path,dialog): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { try { $wof.SaveAsFiles($sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(path): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { throw ('Could not save to iManage. Methods tried: ' + ($saveErrors -join ' | ')) }
+    $results = @()
     foreach ($f in $files) {
       $info = @{}
       try { $info.name = $f.Name } catch {}
       try { $info.number = $f.Number } catch {}
       try { $info.version = $f.Version } catch {}
-      $savedFiles += $info
+      $results += $info
     }
-    $json = @{ success = $true; action = "new_version"; profileId = $profileId; files = $savedFiles } | ConvertTo-Json -Compress -Depth 4
+    $json = @{ success = $true; action = "new_document"; files = $results } | ConvertTo-Json -Compress -Depth 3
     Write-Output "###JSON_START###$json###JSON_END###"
-  } else {
-    Write-Output ('###JSON_START###{"error":"Could not find iManage profile for this file (' + ($saveErrors -join '; ') + '). Try saving as new document instead."}###JSON_END###')
+    `}
   }
-  ` : `
-  # Save as new document — try multiple method signatures
-  $files = New-Object System.Collections.Generic.List[System.Object]
-  $saveSuccess = $false
-  $saveErrors = @()
-  if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath, ${showDialogPs}); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path,dialog): ' + $_.Exception.Message) } }
-  if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path): ' + $_.Exception.Message) } }
-  if (-not $saveSuccess) { try { $wof.SaveAsFiles($sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(path): ' + $_.Exception.Message) } }
-  if (-not $saveSuccess) { throw ('Could not save to iManage. Methods tried: ' + ($saveErrors -join ' | ')) }
-  $results = @()
-  foreach ($f in $files) {
-    $info = @{}
-    try { $info.name = $f.Name } catch {}
-    try { $info.number = $f.Number } catch {}
-    try { $info.version = $f.Version } catch {}
-    $results += $info
-  }
-  $json = @{ success = $true; action = "new_document"; files = $results } | ConvertTo-Json -Compress -Depth 3
-  Write-Output "###JSON_START###$json###JSON_END###"
-  `}
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4230,42 +4858,81 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
-  $files = New-Object System.Collections.Generic.List[System.Object]
-  $queryFile = New-IManageQueryFile('${escapedId}')
-  $files.Add($queryFile)
-  try {
-    $wof.FindProfiles([ref]$files)
-  } catch {
-    # Continue with direct profile ID fallback.
-  }
-  if ($files.Count -eq 0) {
-    $files.Add($queryFile)
-  }
-  try {
-    $wof.GetAllVersions([ref]$files)
-  } catch {
+
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    # IManDMS: get document and enumerate Versions collection
+    $doc = Get-IManDMSDocById $wof '${escapedId}' $null
+    $results = @()
+    $versionsErrors = @()
+    # Try Versions collection
+    try {
+      $versions = $doc.Versions
+      if ($null -ne $versions) {
+        foreach ($v in $versions) {
+          $info = Extract-IManDocInfo $v
+          try { $info.date = $v.EditDate } catch { try { $info.date = $v.Date } catch { $info.date = '' } }
+          $results += $info
+        }
+      }
+    } catch { $versionsErrors += ('doc.Versions: ' + $_.Exception.Message) }
+    # Fallback: try GetVersions method
+    if ($results.Count -eq 0) {
+      try {
+        $versions = $doc.GetVersions()
+        if ($null -ne $versions) {
+          foreach ($v in $versions) {
+            $info = Extract-IManDocInfo $v
+            try { $info.date = $v.EditDate } catch { $info.date = '' }
+            $results += $info
+          }
+        }
+      } catch { $versionsErrors += ('GetVersions(): ' + $_.Exception.Message) }
+    }
+    # Fallback: just return the document itself as a single version
+    if ($results.Count -eq 0) {
+      $info = Extract-IManDocInfo $doc
+      try { $info.date = $doc.EditDate } catch { $info.date = '' }
+      $results += $info
+    }
+    $json = $results | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
+  } else {
+    # WorkObjectFactory path
     $files = New-Object System.Collections.Generic.List[System.Object]
-    $fallback = New-Object PSObject -Property @{ Number = '${escapedId}' }
-    $files.Add($fallback)
-    $wof.GetAllVersions([ref]$files)
+    $queryFile = New-IManageQueryFile('${escapedId}')
+    $files.Add($queryFile)
+    try {
+      $wof.FindProfiles([ref]$files)
+    } catch {}
+    if ($files.Count -eq 0) {
+      $files.Add($queryFile)
+    }
+    try {
+      $wof.GetAllVersions([ref]$files)
+    } catch {
+      $files = New-Object System.Collections.Generic.List[System.Object]
+      $fallback = New-Object PSObject -Property @{ Number = '${escapedId}' }
+      $files.Add($fallback)
+      $wof.GetAllVersions([ref]$files)
+    }
+    $results = @()
+    foreach ($f in $files) {
+      if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
+      $info = @{}
+      try { $info.name = $f.Name } catch { $info.name = '' }
+      try { $info.number = $f.Number } catch { $info.number = '' }
+      try { $info.version = $f.Version } catch { $info.version = '' }
+      try { $info.author = $f.Author } catch { $info.author = '' }
+      try { $info.date = $f.Date } catch { $info.date = '' }
+      try { $info.description = $f.Description } catch { $info.description = '' }
+      $results += $info
+    }
+    if ($results.Count -eq 0) {
+      throw "No versions were returned by iManage for profile ${escapedId}."
+    }
+    $json = $results | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
   }
-  $results = @()
-  foreach ($f in $files) {
-    if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
-    $info = @{}
-    try { $info.name = $f.Name } catch { $info.name = '' }
-    try { $info.number = $f.Number } catch { $info.number = '' }
-    try { $info.version = $f.Version } catch { $info.version = '' }
-    try { $info.author = $f.Author } catch { $info.author = '' }
-    try { $info.date = $f.Date } catch { $info.date = '' }
-    try { $info.description = $f.Description } catch { $info.description = '' }
-    $results += $info
-  }
-  if ($results.Count -eq 0) {
-    throw "No versions were returned by iManage for profile ${escapedId}."
-  }
-  $json = $results | ConvertTo-Json -Compress -Depth 3
-  Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4301,49 +4968,78 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
-  $files = New-Object System.Collections.Generic.List[System.Object]
-  $queryFile = New-Object PSObject -Property @{
-    Number = '${escapedId}'
-    ${versionBlock}
-  }
-  $files.Add($queryFile)
-  try {
-    $wof.FindProfiles([ref]$files)
-  } catch {
-    # Continue with direct profile object fallback.
-  }
-  if ($files.Count -eq 0) {
-    $files.Add($queryFile)
-  }
-  ${applyVersionBlock}
-  $checkoutDir = '${escapedCheckoutPath}'
-  if (-not $checkoutDir) { $checkoutDir = [System.IO.Path]::GetTempPath() }
-  try {
-    $wof.CheckOutFiles([ref]$files, $checkoutDir)
-  } catch {
+
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    # IManDMS: get document by ID and checkout/copy to local
+    $doc = Get-IManDMSDocById $wof '${escapedId}' ${versionNumber === null ? '$null' : versionNumber}
+    $checkoutDir = '${escapedCheckoutPath}'
+    if (-not $checkoutDir) { $checkoutDir = [System.IO.Path]::GetTempPath() }
+    $docName = ''
+    try { $docName = $doc.Name } catch {}
+    $docExt = ''
+    try { $docExt = $doc.Extension } catch { try { $docExt = $doc.Type } catch {} }
+    if (-not $docName) { $docName = '${escapedId}' }
+    if ($docExt -and -not $docName.EndsWith(".$docExt")) { $docName = "$docName.$docExt" }
+    $destPath = [System.IO.Path]::Combine($checkoutDir, $docName)
+    if (-not (Test-Path $checkoutDir)) { New-Item -ItemType Directory -Path $checkoutDir -Force | Out-Null }
+    $coErrors = @()
+    $coSuccess = $false
+    # Try CheckOut
+    try { $doc.CheckOut($destPath, 1); $coSuccess = $true } catch { $coErrors += ('CheckOut(path,mode): ' + $_.Exception.Message) }
+    if (-not $coSuccess) { try { $doc.CheckOut($destPath); $coSuccess = $true } catch { $coErrors += ('CheckOut(path): ' + $_.Exception.Message) } }
+    # Try GetCopy (download without lock)
+    if (-not $coSuccess) { try { $doc.GetCopy($destPath); $coSuccess = $true } catch { $coErrors += ('GetCopy: ' + $_.Exception.Message) } }
+    # Try Copy
+    if (-not $coSuccess) { try { $doc.Copy($destPath); $coSuccess = $true } catch { $coErrors += ('Copy: ' + $_.Exception.Message) } }
+    if (-not $coSuccess) { throw ('Could not checkout document. Methods tried: ' + ($coErrors -join ' | ')) }
+    $info = Extract-IManDocInfo $doc
+    $info.path = $destPath
+    $json = @{ success = $true; files = @($info); requested_version = ${versionNumber === null ? '""' : versionNumber} } | ConvertTo-Json -Compress -Depth 4
+    Write-Output "###JSON_START###$json###JSON_END###"
+  } else {
+    # WorkObjectFactory path
     $files = New-Object System.Collections.Generic.List[System.Object]
-    $fallback = New-Object PSObject -Property @{
+    $queryFile = New-Object PSObject -Property @{
       Number = '${escapedId}'
       ${versionBlock}
     }
-    $files.Add($fallback)
-    $wof.CheckOutFiles([ref]$files, $checkoutDir)
+    $files.Add($queryFile)
+    try {
+      $wof.FindProfiles([ref]$files)
+    } catch {}
+    if ($files.Count -eq 0) {
+      $files.Add($queryFile)
+    }
+    ${applyVersionBlock}
+    $checkoutDir = '${escapedCheckoutPath}'
+    if (-not $checkoutDir) { $checkoutDir = [System.IO.Path]::GetTempPath() }
+    try {
+      $wof.CheckOutFiles([ref]$files, $checkoutDir)
+    } catch {
+      $files = New-Object System.Collections.Generic.List[System.Object]
+      $fallback = New-Object PSObject -Property @{
+        Number = '${escapedId}'
+        ${versionBlock}
+      }
+      $files.Add($fallback)
+      $wof.CheckOutFiles([ref]$files, $checkoutDir)
+    }
+    $results = @()
+    foreach ($f in $files) {
+      if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
+      $info = @{}
+      try { $info.name = $f.Name } catch { $info.name = '' }
+      try { $info.number = $f.Number } catch { $info.number = '' }
+      try { $info.path = $f.Path } catch { $info.path = '' }
+      try { $info.version = $f.Version } catch { $info.version = '' }
+      $results += $info
+    }
+    if ($results.Count -eq 0) {
+      throw "iManage checkout returned no files for profile ${escapedId}."
+    }
+    $json = @{ success = $true; files = $results; requested_version = ${versionNumber === null ? '""' : versionNumber} } | ConvertTo-Json -Compress -Depth 4
+    Write-Output "###JSON_START###$json###JSON_END###"
   }
-  $results = @()
-  foreach ($f in $files) {
-    if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
-    $info = @{}
-    try { $info.name = $f.Name } catch { $info.name = '' }
-    try { $info.number = $f.Number } catch { $info.number = '' }
-    try { $info.path = $f.Path } catch { $info.path = '' }
-    try { $info.version = $f.Version } catch { $info.version = '' }
-    $results += $info
-  }
-  if ($results.Count -eq 0) {
-    throw "iManage checkout returned no files for profile ${escapedId}."
-  }
-  $json = @{ success = $true; files = $results; requested_version = ${versionNumber === null ? '""' : versionNumber} } | ConvertTo-Json -Compress -Depth 4
-  Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4372,23 +5068,57 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
   $sourcePath = '${escapedPath}'
-  $files = New-Object System.Collections.Generic.List[System.Object]
-  $checkinSuccess = $false
-  $checkinErrors = @()
-  if (-not $checkinSuccess) { try { $wof.CheckInFiles([ref]$files, $sourcePath); $checkinSuccess = $true } catch { $checkinErrors += ('CheckInFiles(ref,path): ' + $_.Exception.Message) } }
-  if (-not $checkinSuccess) { try { $wof.CheckInFiles($sourcePath); $checkinSuccess = $true } catch { $checkinErrors += ('CheckInFiles(path): ' + $_.Exception.Message) } }
-  if (-not $checkinSuccess) { throw ('Could not check in file. Methods tried: ' + ($checkinErrors -join ' | ')) }
-  $results = @()
-  foreach ($f in $files) {
-    $info = @{}
-    try { $info.name = $f.Name } catch { $info.name = '' }
-    try { $info.number = $f.Number } catch { $info.number = '' }
-    try { $info.version = $f.Version } catch { $info.version = '' }
-    try { $info.path = $f.Path } catch { $info.path = '' }
-    $results += $info
+
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    # IManDMS: extract doc number from filename, get document, check in
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourcePath)
+    $docNumMatch = [regex]::Match($baseName, '(\d{4,})')
+    $ciErrors = @()
+    $ciSuccess = $false
+    if ($docNumMatch.Success) {
+      $docNum = $docNumMatch.Groups[1].Value
+      try {
+        $doc = Get-IManDMSDocById $wof $docNum $null
+        if ($null -ne $doc) {
+          try { $doc.CheckIn($sourcePath, 'Checked in via EmmaNeigh'); $ciSuccess = $true } catch { $ciErrors += ('CheckIn(path,comment): ' + $_.Exception.Message) }
+          if (-not $ciSuccess) { try { $doc.CheckIn($sourcePath); $ciSuccess = $true } catch { $ciErrors += ('CheckIn(path): ' + $_.Exception.Message) } }
+          if (-not $ciSuccess) { try { $doc.UpdateFromFile($sourcePath); $ciSuccess = $true } catch { $ciErrors += ('UpdateFromFile: ' + $_.Exception.Message) } }
+          if ($ciSuccess) {
+            $info = Extract-IManDocInfo $doc
+            $json = @{ success = $true; message = "File checked in successfully"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+            Write-Output "###JSON_START###$json###JSON_END###"
+            exit 0
+          }
+        }
+      } catch { $ciErrors += ('GetDoc: ' + $_.Exception.Message) }
+    }
+    if (-not $ciSuccess) {
+      # Fallback: import as new document
+      $doc = Import-IManDMSDoc $wof $sourcePath
+      $info = Extract-IManDocInfo $doc
+      $json = @{ success = $true; message = "Imported as new document (could not match existing document for check-in)"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+      Write-Output "###JSON_START###$json###JSON_END###"
+    }
+  } else {
+    # WorkObjectFactory path
+    $files = New-Object System.Collections.Generic.List[System.Object]
+    $checkinSuccess = $false
+    $checkinErrors = @()
+    if (-not $checkinSuccess) { try { $wof.CheckInFiles([ref]$files, $sourcePath); $checkinSuccess = $true } catch { $checkinErrors += ('CheckInFiles(ref,path): ' + $_.Exception.Message) } }
+    if (-not $checkinSuccess) { try { $wof.CheckInFiles($sourcePath); $checkinSuccess = $true } catch { $checkinErrors += ('CheckInFiles(path): ' + $_.Exception.Message) } }
+    if (-not $checkinSuccess) { throw ('Could not check in file. Methods tried: ' + ($checkinErrors -join ' | ')) }
+    $results = @()
+    foreach ($f in $files) {
+      $info = @{}
+      try { $info.name = $f.Name } catch { $info.name = '' }
+      try { $info.number = $f.Number } catch { $info.number = '' }
+      try { $info.version = $f.Version } catch { $info.version = '' }
+      try { $info.path = $f.Path } catch { $info.path = '' }
+      $results += $info
+    }
+    $json = @{ success = $true; message = "File checked in successfully"; files = $results } | ConvertTo-Json -Compress -Depth 4
+    Write-Output "###JSON_START###$json###JSON_END###"
   }
-  $json = @{ success = $true; message = "File checked in successfully"; files = $results } | ConvertTo-Json -Compress -Depth 4
-  Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4416,29 +5146,39 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
-  $files = New-Object System.Collections.Generic.List[System.Object]
-  $searchFile = New-IManageQueryFile('${escapedQuery}')
-  $files.Add($searchFile)
-  # Try multiple search method signatures
-  $searchSuccess = $false
-  $searchErrors = @()
-  if (-not $searchSuccess) { try { $wof.FindProfiles([ref]$files); $searchSuccess = $true } catch { $searchErrors += ('FindProfiles(ref): ' + $_.Exception.Message) } }
-  if (-not $searchSuccess) { try { $wof.FindProfiles($files); $searchSuccess = $true } catch { $searchErrors += ('FindProfiles(list): ' + $_.Exception.Message) } }
-  if (-not $searchSuccess) { throw ('iManage search failed. Methods tried: ' + ($searchErrors -join ' | ')) }
-  $results = @()
-  foreach ($f in $files) {
-    if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
-    $info = @{}
-    try { $info.name = $f.Name } catch { $info.name = '' }
-    try { $info.number = $f.Number } catch { $info.number = '' }
-    try { $info.version = $f.Version } catch { $info.version = '' }
-    try { $info.extension = $f.Extension } catch { $info.extension = '' }
-    try { $info.author = $f.Author } catch { $info.author = '' }
-    try { $info.description = $f.Description } catch { $info.description = '' }
-    $results += $info
+
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    # IManDMS session-based search
+    $docs = Search-IManDMSDocs $wof '${escapedQuery}' 25
+    $results = @()
+    foreach ($d in $docs) { $results += (Extract-IManDocInfo $d) }
+    $json = $results | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
+  } else {
+    # WorkObjectFactory path
+    $files = New-Object System.Collections.Generic.List[System.Object]
+    $searchFile = New-IManageQueryFile('${escapedQuery}')
+    $files.Add($searchFile)
+    $searchSuccess = $false
+    $searchErrors = @()
+    if (-not $searchSuccess) { try { $wof.FindProfiles([ref]$files); $searchSuccess = $true } catch { $searchErrors += ('FindProfiles(ref): ' + $_.Exception.Message) } }
+    if (-not $searchSuccess) { try { $wof.FindProfiles($files); $searchSuccess = $true } catch { $searchErrors += ('FindProfiles(list): ' + $_.Exception.Message) } }
+    if (-not $searchSuccess) { throw ('iManage search failed. Methods tried: ' + ($searchErrors -join ' | ')) }
+    $results = @()
+    foreach ($f in $files) {
+      if ($f.PSObject.Properties.Match('__EmmaNeighQuery').Count -gt 0) { continue }
+      $info = @{}
+      try { $info.name = $f.Name } catch { $info.name = '' }
+      try { $info.number = $f.Number } catch { $info.number = '' }
+      try { $info.version = $f.Version } catch { $info.version = '' }
+      try { $info.extension = $f.Extension } catch { $info.extension = '' }
+      try { $info.author = $f.Author } catch { $info.author = '' }
+      try { $info.description = $f.Description } catch { $info.description = '' }
+      $results += $info
+    }
+    $json = $results | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
   }
-  $json = $results | ConvertTo-Json -Compress -Depth 3
-  Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
   $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
   Write-Output "###JSON_START###$json###JSON_END###"
@@ -4498,6 +5238,14 @@ foreach ($progId in $progIds) {
       $diag.com_created = $true
       $diag.com_progid = $progId
       try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
+      # Classify COM type
+      if ($progId -match 'IManDMS') {
+        $diag.com_api_type = 'IManDMS'
+      } elseif ($progId -match 'WorkSite') {
+        $diag.com_api_type = 'WorkSite'
+      } else {
+        $diag.com_api_type = 'WorkObjectFactory'
+      }
       break
     }
   } catch {
@@ -4572,9 +5320,68 @@ Write-Output "###JSON_START###$json###JSON_END###"
     success: !!data.com_created,
     diagnostics: data,
     message: data.com_created
-      ? `iManage COM connected via ${data.com_progid} (${data.login_status}). ${data.available_methods.length} methods available.`
+      ? `iManage COM connected via ${data.com_progid} [API: ${data.com_api_type || 'unknown'}] (${data.login_status}). ${data.available_methods.length} methods available.`
       : `iManage COM could not be loaded. ${data.error || ''}`
   };
+}
+
+/**
+ * Create a folder in iManage.
+ */
+async function imanageCreateFolder(folderName, parentPath = '') {
+  const normalizedName = String(folderName || '').trim();
+  if (!normalizedName) {
+    return { success: false, error: 'A folder name is required.' };
+  }
+  const escapedName = normalizedName.replace(/'/g, "''");
+  const escapedParent = String(parentPath || '').trim().replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+try {
+  $wof = Get-IManageWorkObjectFactory
+  Ensure-IManageLogin $wof
+
+  if ($global:IManageCOMType -eq 'IManDMS') {
+    $folder = Create-IManDMSFolder $wof '${escapedName}' '${escapedParent}'
+    $info = @{}
+    try { $info.name = $folder.Name } catch { $info.name = '${escapedName}' }
+    try { $info.id = $folder.FolderNumber } catch {
+      try { $info.id = $folder.FolderId } catch { $info.id = '' }
+    }
+    try { $info.path = $folder.Path } catch { $info.path = '' }
+    $json = @{ success = $true; folder = $info } | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
+  } else {
+    # WorkObjectFactory — try CreateFolder / MakeFolder methods
+    $createErrors = @()
+    $created = $false
+    if (-not $created) { try { $wof.CreateFolder('${escapedName}'); $created = $true } catch { $createErrors += ('CreateFolder: ' + $_.Exception.Message) } }
+    if (-not $created) { try { $wof.MakeFolder('${escapedName}'); $created = $true } catch { $createErrors += ('MakeFolder: ' + $_.Exception.Message) } }
+    if (-not $created -and '${escapedParent}') {
+      try {
+        $files = New-Object System.Collections.Generic.List[System.Object]
+        $queryFile = New-IManageQueryFile('${escapedParent}')
+        $files.Add($queryFile)
+        $wof.FindProfiles([ref]$files)
+        if ($files.Count -gt 0) {
+          try { $wof.CreateFolder('${escapedName}', $files[0]); $created = $true } catch { $createErrors += ('CreateFolder(name,parent): ' + $_.Exception.Message) }
+        }
+      } catch { $createErrors += ('FindParent: ' + $_.Exception.Message) }
+    }
+    if (-not $created) { throw ('Could not create folder. Methods tried: ' + ($createErrors -join ' | ')) }
+    $json = @{ success = $true; folder = @{ name = '${escapedName}' } } | ConvertTo-Json -Compress -Depth 3
+    Write-Output "###JSON_START###$json###JSON_END###"
+  }
+} catch {
+  $json = @{ error = $_.Exception.Message } | ConvertTo-Json -Compress
+  Write-Output "###JSON_START###$json###JSON_END###"
+}
+  `;
+  const result = await imanageRunPowerShell(script, { timeoutMs: 60000 });
+  const failure = normalizeIManageFailure(result);
+  if (failure) return failure;
+  const data = result.data && typeof result.data === 'object' ? result.data : {};
+  return { success: true, folder: data.folder || { name: normalizedName } };
 }
 
 async function extractChecklistDocumentNames(checklistPath) {
@@ -5367,6 +6174,14 @@ async function dispatchTool(toolName, input, session = {}) {
 
     case 'imanage_test_connection':
       result = await imanageTestConnection();
+      break;
+
+    case 'imanage_create_folder':
+      if (!safeInput.folder_name || !String(safeInput.folder_name).trim()) {
+        result = { success: false, error: 'folder_name is required.' };
+        break;
+      }
+      result = await imanageCreateFolder(safeInput.folder_name, safeInput.parent_path || '');
       break;
 
     case 'run_redline': {
@@ -7899,15 +8714,50 @@ function resolveAgentProvider() {
   };
 }
 
-ipcMain.handle('execute-command', async (event, { prompt, context }) => {
+ipcMain.handle('execute-command', async (event, { prompt, context, conversationHistory }) => {
   const cmdStartedAt = Date.now();
   const toolsCalledLog = [];
+  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const threadId = String(context?.thread_id || '').trim();
+  const progressSender = event && event.sender ? event.sender : null;
+  let progressFinalized = false;
+
+  const emitAgentProgress = (status, message, extra = {}) => {
+    if (!progressSender || !message) return;
+    progressSender.send('agent-execution-progress', {
+      run_id: runId,
+      thread_id: threadId,
+      status: String(status || '').trim() || 'update',
+      message: String(message || '').trim(),
+      is_error: !!extra.is_error,
+      tool: extra.tool || null,
+      timestamp: new Date().toISOString()
+    });
+  };
+
+  const finalizeAgentProgress = (result) => {
+    if (progressFinalized) return;
+    progressFinalized = true;
+    if (result && result.success) {
+      const completedMessage = String(result.message || '').trim() || 'Agent run completed.';
+      emitAgentProgress('complete', completedMessage);
+    } else {
+      const failedMessage = String((result && result.error) || 'Agent run failed.').trim();
+      emitAgentProgress('error', failedMessage, { is_error: true });
+    }
+  };
   try {
     const agentConfig = resolveAgentProvider();
+    emitAgentProgress('start', 'Agent is planning your request...');
 
     // Anthropic mode requires API key; Ollama/LM Studio do not
     if (agentConfig.mode === 'anthropic' && !agentConfig.apiKey) {
-      return { success: false, error: 'No Anthropic API key configured. Set a key in Settings, switch to Ollama (free), or configure a backend proxy.' };
+      const missingKeyResult = {
+        success: false,
+        error: 'No Anthropic API key configured. Set a key in Settings, switch to Ollama (free), or configure a backend proxy.'
+      };
+      finalizeAgentProgress(missingKeyResult);
+      return missingKeyResult;
     }
 
     const activeTab = context?.activeTab || 'unknown';
@@ -7947,6 +8797,7 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
     };
 
     const logAndReturn = (result, modelUsed) => {
+      finalizeAgentProgress(result);
       logPromptToFirestore({
         username: session.actor?.username || session.actor?.name || 'unknown',
         email: session.actor?.email,
@@ -7963,12 +8814,27 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
 
     const maxToolTurns = 8;
 
+    // Build initial messages with conversation memory
+    const priorHistory = Array.isArray(conversationHistory)
+      ? conversationHistory
+          .filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+          .slice(-10)
+      : [];
+    const buildInitialMessages = () => {
+      const msgs = [];
+      for (const m of priorHistory) {
+        msgs.push({ role: m.role, content: String(m.content) });
+      }
+      msgs.push({ role: 'user', content: prompt });
+      return msgs;
+    };
+
     // ── PROXY MODE ──────────────────────────────────────────────────
     // Send the full request to your backend proxy which holds the API key.
     // The proxy is expected to accept the same body as Anthropic /v1/messages
     // and return the same response format.
     if (agentConfig.mode === 'proxy') {
-      let messages = [{ role: 'user', content: prompt }];
+      let messages = buildInitialMessages();
       let lastToolName = null, lastToolInput = null, lastToolResult = null;
       const conversationParts = [];
 
@@ -8020,7 +8886,13 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
         const toolSummaries = [];
         for (const toolUse of toolUses) {
           console.log(`[execute-command:proxy] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
+          emitAgentProgress('tool_start', `Running tool: ${toolUse.name.replace(/_/g, ' ')}`, { tool: toolUse.name });
           const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
+          emitAgentProgress(
+            toolResult && toolResult.success ? 'tool_complete' : 'tool_error',
+            formatToolSummary(toolUse.name, toolResult),
+            { tool: toolUse.name, is_error: !(toolResult && toolResult.success) }
+          );
           lastToolName = toolUse.name; lastToolInput = toolUse.input; lastToolResult = toolResult;
           toolsCalledLog.push(toolUse.name);
           let serialized = '{}';
@@ -8046,7 +8918,7 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       let lastResponse = null;
 
       for (const modelName of modelCandidates) {
-        let messages = [{ role: 'user', content: prompt }];
+        let messages = buildInitialMessages();
         let lastToolName = null, lastToolInput = null, lastToolResult = null;
         const conversationParts = [];
         let modelUnavailable = false;
@@ -8093,7 +8965,13 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
           const toolSummaries = [];
           for (const toolUse of toolUses) {
             console.log(`[execute-command:anthropic] Tool call: ${toolUse.name}`, JSON.stringify(toolUse.input));
+            emitAgentProgress('tool_start', `Running tool: ${toolUse.name.replace(/_/g, ' ')}`, { tool: toolUse.name });
             const toolResult = await dispatchTool(toolUse.name, toolUse.input, session);
+            emitAgentProgress(
+              toolResult && toolResult.success ? 'tool_complete' : 'tool_error',
+              formatToolSummary(toolUse.name, toolResult),
+              { tool: toolUse.name, is_error: !(toolResult && toolResult.success) }
+            );
             lastToolName = toolUse.name; lastToolInput = toolUse.input; lastToolResult = toolResult;
             toolsCalledLog.push(toolUse.name);
             let serialized = '{}';
@@ -8124,9 +9002,10 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
     let lastResponse = null;
 
     for (const modelName of modelCandidates) {
+      const initialMsgs = buildInitialMessages();
       let messages = [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt }
+        ...initialMsgs
       ];
       let lastToolName = null, lastToolInput = null, lastToolResult = null;
       const conversationParts = [];
@@ -8191,7 +9070,13 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
           try { fnArgs = JSON.parse(tc.function?.arguments || '{}'); } catch (_) {}
 
           console.log(`[execute-command:${agentConfig.provider}] Tool call: ${fnName}`, JSON.stringify(fnArgs));
+          emitAgentProgress('tool_start', `Running tool: ${fnName.replace(/_/g, ' ')}`, { tool: fnName });
           const toolResult = await dispatchTool(fnName, fnArgs, session);
+          emitAgentProgress(
+            toolResult && toolResult.success ? 'tool_complete' : 'tool_error',
+            formatToolSummary(fnName, toolResult),
+            { tool: fnName, is_error: !(toolResult && toolResult.success) }
+          );
           lastToolName = fnName; lastToolInput = fnArgs; lastToolResult = toolResult;
           toolsCalledLog.push(fnName);
 
@@ -8225,6 +9110,7 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
     }, 'none');
   } catch (e) {
     console.error('[execute-command] Error:', e);
+    finalizeAgentProgress({ success: false, error: e.message });
     return { success: false, error: e.message };
   }
 });
@@ -8755,6 +9641,18 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
     return { success: false, error: 'Please enter a valid email address' };
   }
 
+  const loginAccess = await evaluateAccessPolicy(
+    { email: normalizedEmail, username: buildUsernameFromEmail(normalizedEmail) },
+    { eventType: 'login' }
+  );
+  if (!loginAccess.allowed) {
+    return {
+      success: false,
+      blocked: true,
+      error: loginAccess.message || 'Access has been disabled by your administrator.'
+    };
+  }
+
   const safeEmail = normalizedEmail.replace(/'/g, "''");
   let isNewUser = false;
 
@@ -8841,6 +9739,18 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
     return { success: false, error: 'A valid email address is required' };
   }
 
+  const createAccess = await evaluateAccessPolicy(
+    { email: normalizedEmail, username: username || buildUsernameFromEmail(normalizedEmail) },
+    { eventType: 'account_create' }
+  );
+  if (!createAccess.allowed) {
+    return {
+      success: false,
+      blocked: true,
+      error: createAccess.message || 'Account creation is currently disabled for this user.'
+    };
+  }
+
   if (!securityQuestion || !securityAnswer || !String(securityAnswer).trim()) {
     return { success: false, error: 'Security question and answer are required for password reset' };
   }
@@ -8901,6 +9811,18 @@ ipcMain.handle('login-user', async (event, { username, password, email }) => {
   const normalizedEmail = normalizeEmail(email);
   if (!isValidEmail(normalizedEmail)) {
     return { success: false, error: 'Please enter a valid email address' };
+  }
+
+  const loginAccess = await evaluateAccessPolicy(
+    { email: normalizedEmail, username },
+    { eventType: 'login' }
+  );
+  if (!loginAccess.allowed) {
+    return {
+      success: false,
+      blocked: true,
+      error: loginAccess.message || 'Access has been disabled by your administrator.'
+    };
   }
 
   try {
@@ -9000,6 +9922,18 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
 
     const [id, username, displayName, apiKeyEnc, email] = userResult[0].values[0];
     const normalizedEmail = normalizeEmail(email || '');
+
+    const loginAccess = await evaluateAccessPolicy(
+      { email: normalizedEmail, username, userId: id },
+      { eventType: 'login_2fa' }
+    );
+    if (!loginAccess.allowed) {
+      return {
+        success: false,
+        blocked: true,
+        error: loginAccess.message || 'Access has been disabled by your administrator.'
+      };
+    }
 
     const activityLogged = await logUserActivity(username, 'login', {
       email: normalizedEmail,
@@ -9247,6 +10181,18 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
     const row = result[0].values[0];
     const [id, uname, displayName, apiKeyEnc, email] = row;
     const normalizedEmail = normalizeEmail(email || '');
+
+    const sessionAccess = await evaluateAccessPolicy(
+      { email: normalizedEmail, username: uname, userId: id },
+      { eventType: 'session_restore' }
+    );
+    if (!sessionAccess.allowed) {
+      return {
+        success: false,
+        blocked: true,
+        error: sessionAccess.message || 'Access has been disabled by your administrator.'
+      };
+    }
 
     return {
       success: true,
@@ -9666,6 +10612,9 @@ ipcMain.handle('save-setting', async (event, { key, value }) => {
     if (key === TELEMETRY_INGEST_KEY || key === TELEMETRY_INGEST_TOKEN_KEY) {
       invalidateTelemetryStatusCache();
     }
+    if (key === ACCESS_POLICY_URL_KEY || key === ACCESS_POLICY_TOKEN_KEY || key === ACCESS_POLICY_FAIL_CLOSED_KEY) {
+      clearAccessPolicyCache();
+    }
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -9772,6 +10721,110 @@ ipcMain.handle('test-telemetry-ingest-config', async (event, config = {}) => {
     return { success: true, message: 'Telemetry backend ingest connection successful.' };
   } catch (e) {
     return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('get-access-policy-config', async () => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    return {
+      success: true,
+      url: getAccessPolicyUrl(),
+      hasToken: !!getAccessPolicyToken(),
+      failClosed: getAccessPolicyFailClosed()
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-access-policy-config', async (event, config = {}) => {
+  if (!db) return { success: false, error: 'Database not initialized' };
+  try {
+    const rawUrl = String(config.url || '').trim();
+    const normalizedUrl = normalizeIngestUrl(rawUrl);
+    if (!normalizedUrl) {
+      return { success: false, error: 'Access policy URL must be a valid http(s) URL.' };
+    }
+
+    const rawToken = typeof config.token === 'string' ? config.token.trim() : '';
+    const keepExistingToken = !!config.keepExistingToken;
+    const failClosed = normalizeBooleanSetting(config.failClosed, false);
+
+    if (!writeSettingValue(ACCESS_POLICY_URL_KEY, normalizedUrl)) {
+      return { success: false, error: 'Failed to save access policy URL.' };
+    }
+
+    if (rawToken) {
+      if (!writeSettingValue(ACCESS_POLICY_TOKEN_KEY, encodeSecretForSetting(rawToken))) {
+        return { success: false, error: 'Failed to save access policy token.' };
+      }
+    } else if (!keepExistingToken) {
+      if (!writeSettingValue(ACCESS_POLICY_TOKEN_KEY, '')) {
+        return { success: false, error: 'Failed to clear access policy token.' };
+      }
+    }
+
+    if (!writeSettingValue(ACCESS_POLICY_FAIL_CLOSED_KEY, failClosed ? '1' : '0')) {
+      return { success: false, error: 'Failed to save fail-closed setting.' };
+    }
+
+    saveDatabase();
+    clearAccessPolicyCache();
+
+    const testResult = await evaluateAccessPolicy(
+      { email: config.email || 'admin@example.com', username: config.username || 'admin' },
+      { eventType: 'policy_test', force: true }
+    );
+
+    return {
+      success: true,
+      status: testResult
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('test-access-policy-config', async (event, config = {}) => {
+  try {
+    const identity = config.identity && typeof config.identity === 'object' ? config.identity : {};
+    const result = await evaluateAccessPolicy(
+      {
+        email: identity.email || '',
+        username: identity.username || '',
+        userId: identity.userId || ''
+      },
+      { eventType: String(config.eventType || 'policy_test'), force: true }
+    );
+    return { success: true, status: result };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('check-access-policy', async (event, identity = {}) => {
+  try {
+    const result = await evaluateAccessPolicy(
+      {
+        email: identity.email || '',
+        username: identity.username || '',
+        userId: identity.userId || ''
+      },
+      {
+        eventType: String(identity.eventType || identity.context || 'session'),
+        force: !!identity.force
+      }
+    );
+    return {
+      success: true,
+      configured: !!result.configured,
+      allowed: !!result.allowed,
+      message: result.message || '',
+      source: result.source || 'unknown'
+    };
+  } catch (e) {
+    return { success: false, allowed: true, message: e.message };
   }
 });
 

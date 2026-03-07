@@ -568,9 +568,9 @@
     }
 
     .agent-panel {
-      width: min(420px, 38vw);
-      min-width: 320px;
-      max-width: 480px;
+      width: min(560px, 48vw);
+      min-width: 420px;
+      max-width: 680px;
       border: 1px solid #2a2a2a;
       border-radius: 12px;
       background: linear-gradient(180deg, #111 0%, #0d0d0d 100%);
@@ -580,6 +580,82 @@
       min-height: 0;
       -webkit-app-region: no-drag;
       overflow: hidden;
+    }
+
+    .agent-shell {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      gap: 10px;
+    }
+
+    .agent-thread-sidebar {
+      width: 170px;
+      min-width: 150px;
+      max-width: 190px;
+      border: 1px solid #232323;
+      border-radius: 10px;
+      background: #0b0b0b;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      gap: 8px;
+    }
+
+    .agent-thread-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
+    }
+
+    .agent-thread-btn {
+      border: 1px solid #262626;
+      background: #141414;
+      color: #d1d5db;
+      border-radius: 8px;
+      padding: 8px;
+      cursor: pointer;
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+    }
+
+    .agent-thread-btn:hover {
+      border-color: #3a3a3a;
+      background: #191919;
+    }
+
+    .agent-thread-btn.active {
+      border-color: #3b82f6;
+      background: rgba(59, 130, 246, 0.16);
+      color: #dbeafe;
+    }
+
+    .agent-thread-title {
+      font-size: 11px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agent-thread-meta {
+      font-size: 10px;
+      color: #8a8a8a;
+    }
+
+    .agent-thread-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
     .agent-panel-header {
@@ -694,7 +770,7 @@
 
     .agent-chat {
       flex: 1;
-      min-height: 160px;
+      min-height: 120px;
       border: 1px solid #222;
       border-radius: 10px;
       background: #0a0a0a;
@@ -736,6 +812,38 @@
       border: 1px dashed #333;
     }
 
+    .agent-horse-runner {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 4px 0;
+      opacity: 0.85;
+    }
+
+    .agent-live-log {
+      margin-top: 8px;
+      border: 1px solid #252525;
+      border-radius: 8px;
+      background: #0d0d0d;
+      min-height: 56px;
+      max-height: 120px;
+      overflow-y: auto;
+      padding: 8px;
+      font-size: 11px;
+      color: #9ca3af;
+      line-height: 1.35;
+    }
+
+    .agent-live-entry {
+      margin-bottom: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .agent-live-entry:last-child {
+      margin-bottom: 0;
+    }
+
     .agent-input-wrap {
       margin-top: 10px;
     }
@@ -770,6 +878,17 @@
         min-width: 0;
         max-width: none;
         min-height: 280px;
+      }
+
+      .agent-shell {
+        flex-direction: column;
+      }
+
+      .agent-thread-sidebar {
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        max-height: 150px;
       }
     }
 
@@ -3445,6 +3564,22 @@
           </div>
           <div id="telemetryIngestStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
 
+          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+            <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Remote Access Policy URL</label>
+            <input type="text" id="accessPolicyUrlInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="https://your-ingest-service.example.com/access-policy">
+            <label style="font-size: 12px; color: #888; display: block; margin: 8px 0 6px;">Access Policy Token (optional)</label>
+            <input type="password" id="accessPolicyTokenInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="Bearer token or shared secret">
+            <label style="display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: #888;">
+              <input type="checkbox" id="accessPolicyFailClosedInput" style="margin: 0;">
+              Block access if policy service is unreachable (fail closed)
+            </label>
+            <div style="display: flex; gap: 8px; margin-top: 10px;">
+              <button class="settings-btn settings-btn-primary" id="saveAccessPolicyBtn">Save Access Policy</button>
+              <button class="settings-btn settings-btn-secondary" id="testAccessPolicyBtn">Test Policy</button>
+            </div>
+            <div id="accessPolicyStatus" style="font-size: 12px; color: #888; margin-top: 8px;"></div>
+          </div>
+
           <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;"></div>
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Firebase Config JSON</label>
           <textarea id="firebaseConfigInput" style="width: 100%; min-height: 120px; resize: vertical; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
@@ -4848,26 +4983,63 @@
           <button class="agent-clear-btn" id="agentClearBtn">Clear</button>
         </div>
 
-        <div class="agent-status" id="agentStatus">
-          Attach files and enter a command (example: "generate sig packet").
-        </div>
-
-        <div class="agent-attach-row">
-          <button class="btn btn-secondary" id="agentAttachBtn" style="margin-top: 0; padding: 6px 12px;">Attach Files</button>
-          <span class="agent-attach-hint">PDF, DOCX, CSV, XLSX</span>
-        </div>
-
-        <div class="agent-attachments" id="agentAttachments"></div>
-
-        <div class="agent-chat" id="agentChat">
-          <div class="agent-msg agent-msg-assistant">
-            Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.
+        <div class="agent-shell">
+          <div class="agent-thread-sidebar">
+            <button class="btn btn-secondary" id="agentNewThreadBtn" style="margin-top: 0; padding: 6px 10px; font-size: 11px;">+ New Thread</button>
+            <div class="agent-thread-list" id="agentThreadList"></div>
           </div>
-        </div>
 
-        <div class="agent-input-wrap">
-          <textarea id="agentPromptInput" class="agent-prompt-input" rows="3" placeholder='Try: "save this to iManage" or "go to redline" or "compare these two docs"'></textarea>
-          <button class="btn btn-primary" id="agentRunBtn" style="margin-top: 8px;">Run</button>
+          <div class="agent-thread-main">
+            <div class="agent-status" id="agentStatus">
+              Attach files and enter a command (example: "generate sig packet").
+            </div>
+
+            <div class="agent-attach-row">
+              <button class="btn btn-secondary" id="agentAttachBtn" style="margin-top: 0; padding: 6px 12px;">Attach Files</button>
+              <span class="agent-attach-hint">PDF, DOCX, CSV, XLSX</span>
+            </div>
+
+            <div class="agent-attachments" id="agentAttachments"></div>
+
+            <div class="agent-chat" id="agentChat">
+              <div class="agent-msg agent-msg-assistant">
+                Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.
+              </div>
+            </div>
+
+            <div class="agent-horse-runner" id="agentHorseRunner" style="display: none;">
+              <div class="horse-container" style="transform: scale(0.7); margin: 0 auto;">
+                <div class="horse">
+                  <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
+                    <ellipse cx="50" cy="35" rx="28" ry="16"/>
+                    <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
+                    <ellipse cx="88" cy="8" rx="11" ry="7"/>
+                    <path d="M 94 2 L 97 -4 L 96 3 Z"/>
+                    <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
+                    <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+                    <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+                    <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
+                    <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
+                    <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
+                    <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
+                  </svg>
+                </div>
+                <div class="dust">
+                  <div class="dust-particle"></div>
+                  <div class="dust-particle"></div>
+                  <div class="dust-particle"></div>
+                  <div class="dust-particle"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="agent-live-log" id="agentLiveLog"></div>
+
+            <div class="agent-input-wrap">
+              <textarea id="agentPromptInput" class="agent-prompt-input" rows="3" placeholder='Try: "see latest emails from Person A, save attachments to iManage, redline v1 vs v2, and send reply"'></textarea>
+              <button class="btn btn-primary" id="agentRunBtn" style="margin-top: 8px;">Run</button>
+            </div>
+          </div>
         </div>
       </aside>
     </div><!-- End workspace-layout -->
@@ -5127,6 +5299,13 @@
     const saveTelemetryIngestBtn = document.getElementById('saveTelemetryIngestBtn');
     const testTelemetryIngestBtn = document.getElementById('testTelemetryIngestBtn');
     const telemetryIngestStatus = document.getElementById('telemetryIngestStatus');
+    const accessPolicyUrlInput = document.getElementById('accessPolicyUrlInput');
+    const accessPolicyTokenInput = document.getElementById('accessPolicyTokenInput');
+    const accessPolicyFailClosedInput = document.getElementById('accessPolicyFailClosedInput');
+    const saveAccessPolicyBtn = document.getElementById('saveAccessPolicyBtn');
+    const testAccessPolicyBtn = document.getElementById('testAccessPolicyBtn');
+    const accessPolicyStatus = document.getElementById('accessPolicyStatus');
+    const telemetryAdminControls = document.getElementById('telemetryAdminControls');
     const firebaseConfigInput = document.getElementById('firebaseConfigInput');
     const firebaseConfigStatus = document.getElementById('firebaseConfigStatus');
     const saveFirebaseConfigBtn = document.getElementById('saveFirebaseConfigBtn');
@@ -5322,6 +5501,43 @@
       }
     }
 
+    function setAccessPolicyStatus(message, tone = 'neutral') {
+      if (!accessPolicyStatus) return;
+      accessPolicyStatus.textContent = message || '';
+      if (tone === 'success') {
+        accessPolicyStatus.style.color = '#22c55e';
+      } else if (tone === 'error') {
+        accessPolicyStatus.style.color = '#ef4444';
+      } else if (tone === 'warning') {
+        accessPolicyStatus.style.color = '#f59e0b';
+      } else {
+        accessPolicyStatus.style.color = '#888';
+      }
+    }
+
+    async function loadAccessPolicyConfig() {
+      try {
+        const result = await ipcRenderer.invoke('get-access-policy-config');
+        if (!result || !result.success) {
+          setAccessPolicyStatus(result?.error || 'Unable to load access policy config.', 'error');
+          return;
+        }
+        if (accessPolicyUrlInput) accessPolicyUrlInput.value = result.url || '';
+        if (accessPolicyTokenInput) accessPolicyTokenInput.value = '';
+        if (accessPolicyFailClosedInput) accessPolicyFailClosedInput.checked = !!result.failClosed;
+        if (result.url) {
+          const tone = result.failClosed ? 'warning' : 'success';
+          const modeLabel = result.failClosed ? 'fail-closed' : 'fail-open';
+          const tokenLabel = result.hasToken ? 'token configured' : 'no token configured';
+          setAccessPolicyStatus(`Remote access policy configured (${modeLabel}, ${tokenLabel}).`, tone);
+        } else {
+          setAccessPolicyStatus('No remote access policy configured.', 'neutral');
+        }
+      } catch (e) {
+        setAccessPolicyStatus(`Failed to load access policy config: ${e.message}`, 'error');
+      }
+    }
+
     function setFirebaseConfigStatus(message, tone = 'neutral') {
       if (!firebaseConfigStatus) return;
       firebaseConfigStatus.textContent = message || '';
@@ -5339,6 +5555,7 @@
     async function refreshFirebaseSettingsStatus(force = false) {
       try {
         await loadTelemetryIngestConfig();
+        await loadAccessPolicyConfig();
         const configResult = await ipcRenderer.invoke('get-firebase-config');
         const statusResult = await ipcRenderer.invoke('get-firebase-telemetry-status', {
           force,
@@ -5449,6 +5666,81 @@
         testTelemetryIngestBtn.textContent = 'Test Ingest';
       }
     });
+
+    if (saveAccessPolicyBtn) {
+      saveAccessPolicyBtn.addEventListener('click', async () => {
+        const url = String(accessPolicyUrlInput?.value || '').trim();
+        const token = String(accessPolicyTokenInput?.value || '').trim();
+        const failClosed = !!(accessPolicyFailClosedInput && accessPolicyFailClosedInput.checked);
+
+        if (!url) {
+          setAccessPolicyStatus('Remote access policy URL is required.', 'error');
+          return;
+        }
+
+        saveAccessPolicyBtn.disabled = true;
+        saveAccessPolicyBtn.textContent = 'Saving...';
+        try {
+          const result = await ipcRenderer.invoke('save-access-policy-config', {
+            url,
+            token,
+            keepExistingToken: !token,
+            failClosed,
+            email: currentUser?.email || ''
+          });
+          if (!result || !result.success) {
+            setAccessPolicyStatus(result?.error || 'Failed to save access policy config.', 'error');
+            return;
+          }
+          if (accessPolicyTokenInput) accessPolicyTokenInput.value = '';
+          const status = result.status || {};
+          if (status.allowed) {
+            setAccessPolicyStatus('Access policy saved and validated.', failClosed ? 'warning' : 'success');
+          } else {
+            setAccessPolicyStatus(status.message || 'Access policy saved, but current identity is blocked.', 'warning');
+          }
+          await loadAccessPolicyConfig();
+        } catch (e) {
+          setAccessPolicyStatus(`Save failed: ${e.message}`, 'error');
+        } finally {
+          saveAccessPolicyBtn.disabled = false;
+          saveAccessPolicyBtn.textContent = 'Save Access Policy';
+        }
+      });
+    }
+
+    if (testAccessPolicyBtn) {
+      testAccessPolicyBtn.addEventListener('click', async () => {
+        testAccessPolicyBtn.disabled = true;
+        testAccessPolicyBtn.textContent = 'Testing...';
+        setAccessPolicyStatus('Testing remote access policy...');
+        try {
+          const result = await ipcRenderer.invoke('test-access-policy-config', {
+            eventType: 'manual_test',
+            identity: {
+              email: currentUser?.email || '',
+              username: currentUser?.username || '',
+              userId: currentUser?.id || ''
+            }
+          });
+          if (!result || !result.success) {
+            setAccessPolicyStatus(result?.error || 'Access policy test failed.', 'error');
+            return;
+          }
+          const status = result.status || {};
+          if (status.allowed) {
+            setAccessPolicyStatus(status.message || 'Access policy allows this user.', 'success');
+          } else {
+            setAccessPolicyStatus(status.message || 'Access policy blocks this user.', 'warning');
+          }
+        } catch (e) {
+          setAccessPolicyStatus(`Test failed: ${e.message}`, 'error');
+        } finally {
+          testAccessPolicyBtn.disabled = false;
+          testAccessPolicyBtn.textContent = 'Test Policy';
+        }
+      });
+    }
 
     saveFirebaseConfigBtn.addEventListener('click', async () => {
       const raw = (firebaseConfigInput.value || '').trim();
@@ -5638,6 +5930,9 @@
       if (!userStatsSection) return;
       const allowed = canCurrentUserViewUserStats();
       userStatsSection.style.display = allowed ? '' : 'none';
+      if (telemetryAdminControls) {
+        telemetryAdminControls.style.display = allowed ? 'block' : 'none';
+      }
     }
 
     async function loadUserStats() {
@@ -5949,7 +6244,80 @@
 
     // Current user state
     let currentUser = null;  // { id, username, displayName, isGuest }
+    const SESSION_USAGE_HEARTBEAT_MS = 5 * 60 * 1000;
+    const SESSION_POLICY_CHECK_MS = 60 * 1000;
+    let sessionUsageHeartbeatId = null;
+    let sessionPolicyHeartbeatId = null;
+    let sessionStartTimestamp = 0;
     applyUserStatsVisibility();
+
+    function clearSessionHeartbeatTimers() {
+      if (sessionUsageHeartbeatId) {
+        clearInterval(sessionUsageHeartbeatId);
+        sessionUsageHeartbeatId = null;
+      }
+      if (sessionPolicyHeartbeatId) {
+        clearInterval(sessionPolicyHeartbeatId);
+        sessionPolicyHeartbeatId = null;
+      }
+    }
+
+    async function enforceSessionPolicyCheck(eventType = 'session_heartbeat', force = false) {
+      if (!currentUser || currentUser.isGuest || !currentUser.email) return true;
+      try {
+        const result = await ipcRenderer.invoke('check-access-policy', {
+          email: currentUser.email || '',
+          username: currentUser.username || '',
+          userId: currentUser.id || '',
+          eventType,
+          force
+        });
+        if (result && result.success && result.allowed === false) {
+          const loginError = document.getElementById('loginError');
+          if (loginError) {
+            loginError.textContent = result.message || 'Access has been disabled by your administrator.';
+          }
+          await stopSessionMonitoring('policy_blocked');
+          localStorage.removeItem('emmaneigh_session');
+          localStorage.removeItem('emmaneigh_user');
+          currentUser = null;
+          userName.textContent = 'Sign In Required';
+          applyUserStatsVisibility();
+          refreshFeedbackAccess();
+          loginModal.classList.remove('hidden');
+          resetLoginForms();
+          return false;
+        }
+      } catch (_) {}
+      return true;
+    }
+
+    async function startSessionMonitoring(source = 'login') {
+      clearSessionHeartbeatTimers();
+      sessionStartTimestamp = Date.now();
+      await enforceSessionPolicyCheck('session_start', true);
+      if (!currentUser || currentUser.isGuest) return;
+
+      logUsage('session', 'start', 0, 0, 0, { engine: source }).catch(() => {});
+
+      sessionUsageHeartbeatId = setInterval(() => {
+        if (!currentUser || currentUser.isGuest) return;
+        logUsage('session', 'heartbeat', 0, 0, 0, { engine: 'app' }).catch(() => {});
+      }, SESSION_USAGE_HEARTBEAT_MS);
+
+      sessionPolicyHeartbeatId = setInterval(() => {
+        enforceSessionPolicyCheck('session_heartbeat', false).catch(() => {});
+      }, SESSION_POLICY_CHECK_MS);
+    }
+
+    async function stopSessionMonitoring(reason = 'logout') {
+      clearSessionHeartbeatTimers();
+      if (currentUser && !currentUser.isGuest && sessionStartTimestamp) {
+        const durationMs = Math.max(0, Date.now() - sessionStartTimestamp);
+        logUsage('session', 'end', 0, 0, durationMs, { engine: reason }).catch(() => {});
+      }
+      sessionStartTimestamp = 0;
+    }
 
     // Firebase login gate removed — login always works regardless of Firebase status
     async function refreshFirebaseLoginGate(force = false) {
@@ -6210,6 +6578,7 @@
           refreshFeedbackAccess();
           // Load user's API key
           loadUserApiKey();
+          await startSessionMonitoring('login');
         } else {
           errorEl.textContent = result.error || 'Login failed';
         }
@@ -6250,6 +6619,7 @@
           pending2FAEmail = null;
           // Load user's API key
           loadUserApiKey();
+          await startSessionMonitoring('login_2fa');
         } else {
           setTfaMessage(result.error || 'Verification failed');
         }
@@ -6338,6 +6708,7 @@
           applyUserStatsVisibility();
           refreshFeedbackAccess();
           loadUserApiKey();
+          await startSessionMonitoring('create_or_login');
         } else {
           errorEl.textContent = result.error || 'Sign in failed';
         }
@@ -6389,11 +6760,13 @@
             applyUserStatsVisibility();
             refreshFeedbackAccess();
             loadUserApiKey();
+            await startSessionMonitoring('session_restore');
             return;
           }
         } catch (e) {
           console.error('Session restore failed:', e);
         }
+        await stopSessionMonitoring('session_invalid');
         localStorage.removeItem('emmaneigh_session');
         localStorage.removeItem('emmaneigh_user');
       }
@@ -6407,8 +6780,9 @@
     checkStoredSession();
 
     // Click on user info to logout/switch user
-    userInfo.addEventListener('click', () => {
+    userInfo.addEventListener('click', async () => {
       // Clear session and show login modal
+      await stopSessionMonitoring('manual_logout');
       localStorage.removeItem('emmaneigh_session');
       localStorage.removeItem('emmaneigh_user');
       currentUser = null;
@@ -6667,9 +7041,12 @@
     const agentAttachBtn = document.getElementById('agentAttachBtn');
     const agentAttachmentsEl = document.getElementById('agentAttachments');
     const agentChat = document.getElementById('agentChat');
+    const agentLiveLog = document.getElementById('agentLiveLog');
     const agentPromptInput = document.getElementById('agentPromptInput');
     const agentRunBtn = document.getElementById('agentRunBtn');
     const agentClearBtn = document.getElementById('agentClearBtn');
+    const agentThreadList = document.getElementById('agentThreadList');
+    const agentNewThreadBtn = document.getElementById('agentNewThreadBtn');
 
     const AGENT_TAB_LABELS = {
       packets: 'Create Sig Packets',
@@ -6685,8 +7062,243 @@
     };
 
     const AGENT_UPLOAD_EXTENSIONS = ['pdf', 'docx', 'doc', 'csv', 'xlsx', 'xls', 'txt', 'msg', 'eml'];
+    const AGENT_THREAD_STORAGE_KEY = 'emmaneigh_agent_threads_v1';
+    const AGENT_MAX_THREADS = 60;
+    const AGENT_MAX_MESSAGES_PER_THREAD = 250;
+    const AGENT_MAX_STEPS_PER_THREAD = 120;
     let agentAttachments = [];
     let agentBusy = false;
+    let agentThreads = [];
+    let activeAgentThreadId = null;
+    let activeAgentRunId = null;
+    let activeAgentRunThreadId = null;
+
+    function getDefaultAgentIntro() {
+      return 'Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.';
+    }
+
+    function formatAgentThreadTime(timestamp) {
+      if (!timestamp) return '';
+      try {
+        return new Date(timestamp).toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        });
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function createAgentThread(seedTitle) {
+      const now = new Date().toISOString();
+      const title = String(seedTitle || '').trim() || 'New Thread';
+      return {
+        id: `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        title: title.slice(0, 80),
+        created_at: now,
+        updated_at: now,
+        last_status: 'Ready.',
+        last_status_error: false,
+        attachments: [],
+        messages: [{
+          role: 'assistant',
+          text: getDefaultAgentIntro(),
+          timestamp: now
+        }],
+        live_steps: []
+      };
+    }
+
+    function getActiveAgentThread() {
+      return agentThreads.find((thread) => thread.id === activeAgentThreadId) || null;
+    }
+
+    function saveAgentThreads() {
+      try {
+        localStorage.setItem(AGENT_THREAD_STORAGE_KEY, JSON.stringify(agentThreads.slice(0, AGENT_MAX_THREADS)));
+      } catch (_) {}
+    }
+
+    function normalizeStoredAgentThread(rawThread) {
+      if (!rawThread || typeof rawThread !== 'object') return null;
+      const now = new Date().toISOString();
+      const thread = {
+        id: String(rawThread.id || `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        title: String(rawThread.title || 'New Thread').slice(0, 80),
+        created_at: rawThread.created_at || now,
+        updated_at: rawThread.updated_at || now,
+        last_status: String(rawThread.last_status || 'Ready.'),
+        last_status_error: !!rawThread.last_status_error,
+        attachments: Array.isArray(rawThread.attachments) ? rawThread.attachments.slice(0, 30).map((file) => ({
+          path: String(file.path || ''),
+          name: String(file.name || getAgentAttachmentName(file.path || 'file')),
+          ext: String(file.ext || getAgentAttachmentExt(file.path || ''))
+        })).filter((file) => file.path) : [],
+        messages: Array.isArray(rawThread.messages) ? rawThread.messages.slice(-AGENT_MAX_MESSAGES_PER_THREAD).map((message) => ({
+          role: message.role === 'user' ? 'user' : (message.role === 'system' ? 'system' : 'assistant'),
+          text: String(message.text || ''),
+          timestamp: message.timestamp || now
+        })).filter((message) => message.text) : [],
+        live_steps: Array.isArray(rawThread.live_steps) ? rawThread.live_steps.slice(-AGENT_MAX_STEPS_PER_THREAD).map((step) => ({
+          text: String(step.text || ''),
+          is_error: !!step.is_error,
+          timestamp: step.timestamp || now
+        })).filter((step) => step.text) : []
+      };
+      if (thread.messages.length === 0) {
+        thread.messages.push({
+          role: 'assistant',
+          text: getDefaultAgentIntro(),
+          timestamp: now
+        });
+      }
+      return thread;
+    }
+
+    function loadAgentThreads() {
+      let parsed = [];
+      try {
+        const raw = localStorage.getItem(AGENT_THREAD_STORAGE_KEY);
+        if (raw) {
+          const value = JSON.parse(raw);
+          if (Array.isArray(value)) parsed = value;
+        }
+      } catch (_) {}
+
+      const normalized = parsed
+        .map(normalizeStoredAgentThread)
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      agentThreads = normalized.slice(0, AGENT_MAX_THREADS);
+      if (!agentThreads.length) {
+        const thread = createAgentThread();
+        agentThreads = [thread];
+      }
+      activeAgentThreadId = agentThreads[0].id;
+      saveAgentThreads();
+    }
+
+    function touchActiveAgentThread() {
+      const thread = getActiveAgentThread();
+      if (!thread) return;
+      thread.updated_at = new Date().toISOString();
+      agentThreads.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      saveAgentThreads();
+    }
+
+    function renderAgentThreadList() {
+      if (!agentThreadList) return;
+      agentThreadList.innerHTML = '';
+      agentThreads.forEach((thread) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `agent-thread-btn${thread.id === activeAgentThreadId ? ' active' : ''}`;
+        button.dataset.threadId = thread.id;
+
+        const title = document.createElement('div');
+        title.className = 'agent-thread-title';
+        title.textContent = thread.title || 'New Thread';
+        button.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'agent-thread-meta';
+        meta.textContent = formatAgentThreadTime(thread.updated_at);
+        button.appendChild(meta);
+
+        agentThreadList.appendChild(button);
+      });
+    }
+
+    function renderAgentMessages() {
+      const thread = getActiveAgentThread();
+      if (!thread) return;
+      agentChat.innerHTML = '';
+      thread.messages.forEach((entry) => {
+        const message = document.createElement('div');
+        if (entry.role === 'user') {
+          message.className = 'agent-msg agent-msg-user';
+        } else if (entry.role === 'system') {
+          message.className = 'agent-msg agent-msg-system';
+        } else {
+          message.className = 'agent-msg agent-msg-assistant';
+        }
+        message.textContent = entry.text;
+        agentChat.appendChild(message);
+      });
+      agentChat.scrollTop = agentChat.scrollHeight;
+    }
+
+    function renderAgentLiveLog() {
+      if (!agentLiveLog) return;
+      const thread = getActiveAgentThread();
+      if (!thread || !Array.isArray(thread.live_steps) || thread.live_steps.length === 0) {
+        agentLiveLog.textContent = 'Live execution updates will appear here while the agent runs.';
+        return;
+      }
+      agentLiveLog.innerHTML = '';
+      thread.live_steps.slice(-AGENT_MAX_STEPS_PER_THREAD).forEach((entry) => {
+        const line = document.createElement('div');
+        line.className = 'agent-live-entry';
+        line.textContent = `• ${entry.text}`;
+        line.style.color = entry.is_error ? '#fca5a5' : '#9ca3af';
+        agentLiveLog.appendChild(line);
+      });
+      agentLiveLog.scrollTop = agentLiveLog.scrollHeight;
+    }
+
+    function syncAgentAttachmentsToThread() {
+      const thread = getActiveAgentThread();
+      if (!thread) return;
+      thread.attachments = agentAttachments.map((file) => ({
+        path: String(file.path || ''),
+        name: String(file.name || getAgentAttachmentName(file.path || 'file')),
+        ext: String(file.ext || getAgentAttachmentExt(file.path || ''))
+      }));
+      touchActiveAgentThread();
+      renderAgentThreadList();
+    }
+
+    function switchAgentThread(threadId) {
+      const target = agentThreads.find((thread) => thread.id === threadId);
+      if (!target) return;
+      activeAgentThreadId = target.id;
+      agentAttachments = Array.isArray(target.attachments) ? target.attachments.map((file) => ({ ...file })) : [];
+      renderAgentThreadList();
+      renderAgentAttachments();
+      renderAgentMessages();
+      renderAgentLiveLog();
+      setAgentStatus(target.last_status || 'Ready.', !!target.last_status_error);
+      saveAgentThreads();
+    }
+
+    function createNewAgentThread(seedTitle) {
+      const thread = createAgentThread(seedTitle);
+      agentThreads.unshift(thread);
+      agentThreads = agentThreads.slice(0, AGENT_MAX_THREADS);
+      activeAgentThreadId = thread.id;
+      agentAttachments = [];
+      renderAgentThreadList();
+      renderAgentAttachments();
+      renderAgentMessages();
+      renderAgentLiveLog();
+      setAgentStatus(thread.last_status || 'Ready.');
+      saveAgentThreads();
+    }
+
+    function maybeSetAgentThreadTitleFromPrompt(promptText) {
+      const thread = getActiveAgentThread();
+      if (!thread) return;
+      const trimmedPrompt = String(promptText || '').trim();
+      if (!trimmedPrompt) return;
+      const currentTitle = String(thread.title || '').trim().toLowerCase();
+      if (currentTitle === 'new thread' || currentTitle === 'untitled thread') {
+        thread.title = trimmedPrompt.slice(0, 80);
+        touchActiveAgentThread();
+        renderAgentThreadList();
+      }
+    }
 
     function getAgentAttachmentName(filePath) {
       return String(filePath || '').split(/[/\\]/).pop() || filePath || 'file';
@@ -6699,8 +7311,16 @@
     }
 
     function setAgentStatus(message, isError = false) {
-      agentStatus.textContent = message || '';
+      const statusText = message || '';
+      agentStatus.textContent = statusText;
       agentStatus.classList.toggle('error', !!isError);
+      const thread = getActiveAgentThread();
+      if (thread) {
+        thread.last_status = statusText;
+        thread.last_status_error = !!isError;
+        touchActiveAgentThread();
+        renderAgentThreadList();
+      }
     }
 
     function renderAgentConnectionSummary(diagnostics) {
@@ -6737,17 +7357,52 @@
     }
 
     function addAgentMessage(role, text) {
-      const message = document.createElement('div');
-      if (role === 'user') {
-        message.className = 'agent-msg agent-msg-user';
-      } else if (role === 'system') {
-        message.className = 'agent-msg agent-msg-system';
-      } else {
-        message.className = 'agent-msg agent-msg-assistant';
+      const messageText = String(text || '').trim();
+      if (!messageText) return;
+      const thread = getActiveAgentThread();
+      if (!thread) return;
+      thread.messages.push({
+        role: role === 'user' ? 'user' : (role === 'system' ? 'system' : 'assistant'),
+        text: messageText,
+        timestamp: new Date().toISOString()
+      });
+      if (thread.messages.length > AGENT_MAX_MESSAGES_PER_THREAD) {
+        thread.messages = thread.messages.slice(-AGENT_MAX_MESSAGES_PER_THREAD);
       }
-      message.textContent = text;
-      agentChat.appendChild(message);
-      agentChat.scrollTop = agentChat.scrollHeight;
+      touchActiveAgentThread();
+      renderAgentMessages();
+      renderAgentThreadList();
+    }
+
+    function addAgentLiveStepToThread(threadId, text, isError = false) {
+      const stepText = String(text || '').trim();
+      if (!stepText) return;
+      const thread = agentThreads.find((item) => item.id === threadId) || getActiveAgentThread();
+      if (!thread) return;
+      if (!Array.isArray(thread.live_steps)) {
+        thread.live_steps = [];
+      }
+      thread.live_steps.push({
+        text: stepText,
+        is_error: !!isError,
+        timestamp: new Date().toISOString()
+      });
+      if (thread.live_steps.length > AGENT_MAX_STEPS_PER_THREAD) {
+        thread.live_steps = thread.live_steps.slice(-AGENT_MAX_STEPS_PER_THREAD);
+      }
+      thread.updated_at = new Date().toISOString();
+      agentThreads.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      saveAgentThreads();
+      if (thread.id === activeAgentThreadId) {
+        renderAgentLiveLog();
+      }
+      renderAgentThreadList();
+    }
+
+    function addAgentLiveStep(text, isError = false) {
+      const activeThread = getActiveAgentThread();
+      if (!activeThread) return;
+      addAgentLiveStepToThread(activeThread.id, text, isError);
     }
 
     function renderAgentAttachments() {
@@ -6763,6 +7418,7 @@
         `;
         agentAttachmentsEl.appendChild(chip);
       });
+      syncAgentAttachmentsToThread();
     }
 
     async function updateAgentProviderLabel() {
@@ -7014,6 +7670,37 @@
       }
     });
 
+    ipcRenderer.on('agent-execution-progress', (event, payload = {}) => {
+      const runId = String(payload.run_id || '').trim();
+      const threadId = String(payload.thread_id || activeAgentRunThreadId || activeAgentThreadId || '').trim();
+      const status = String(payload.status || '').trim();
+      const isError = !!payload.is_error || status === 'error';
+      const message = String(payload.message || '').trim();
+      if (!threadId || !message) return;
+
+      if (agentBusy) {
+        if (!activeAgentRunThreadId) activeAgentRunThreadId = threadId;
+        if (threadId !== activeAgentRunThreadId) return;
+        if (runId && !activeAgentRunId) {
+          activeAgentRunId = runId;
+        }
+        if (runId && activeAgentRunId && runId !== activeAgentRunId) {
+          return;
+        }
+      }
+
+      addAgentLiveStepToThread(threadId, message, isError);
+      if (threadId === activeAgentThreadId) {
+        if (status === 'error') {
+          setAgentStatus(message, true);
+        } else if (status === 'start') {
+          setAgentStatus(message, false);
+        } else if (status === 'complete') {
+          setAgentStatus(message, false);
+        }
+      }
+    });
+
     async function runAgentCommand() {
       if (agentBusy) return;
       const prompt = agentPromptInput.value.trim();
@@ -7022,19 +7709,46 @@
         return;
       }
 
+      const thread = getActiveAgentThread();
+      if (!thread) {
+        createNewAgentThread();
+      }
+      const runThread = getActiveAgentThread();
+      activeAgentRunThreadId = runThread ? runThread.id : null;
+      activeAgentRunId = null;
+
+      if (runThread) {
+        runThread.live_steps = [];
+      }
+      renderAgentLiveLog();
+
       addAgentMessage('user', prompt);
       agentPromptInput.value = '';
+      maybeSetAgentThreadTitleFromPrompt(prompt);
       agentBusy = true;
       agentRunBtn.disabled = true;
       agentRunBtn.textContent = 'Running...';
       setAgentStatus('Processing command...');
+      const horseEl = document.getElementById('agentHorseRunner');
+      if (horseEl) horseEl.style.display = 'flex';
 
       try {
         // First try execute-command (Claude tool use — requires Anthropic API key)
         const context = getAgentContext();
+        context.thread_id = activeAgentRunThreadId;
+        // Build conversation history from current thread for agent memory
+        const activeThread = getActiveAgentThread();
+        const priorMessages = (activeThread && Array.isArray(activeThread.messages))
+          ? activeThread.messages
+              .slice(0, -1)  // exclude the message we just added above
+              .filter(m => m.role === 'user' || m.role === 'assistant')
+              .slice(-10)    // keep last 10 messages for context window
+              .map(m => ({ role: m.role, content: m.text || '' }))
+          : [];
         const cmdResult = await ipcRenderer.invoke('execute-command', {
           prompt,
-          context
+          context,
+          conversationHistory: priorMessages
         });
 
         if (cmdResult && cmdResult.success) {
@@ -7087,6 +7801,10 @@
         agentBusy = false;
         agentRunBtn.disabled = false;
         agentRunBtn.textContent = 'Run';
+        activeAgentRunId = null;
+        activeAgentRunThreadId = null;
+        const horseEl2 = document.getElementById('agentHorseRunner');
+        if (horseEl2) horseEl2.style.display = 'none';
       }
     }
 
@@ -7103,6 +7821,24 @@
       }
     });
 
+    if (agentThreadList) {
+      agentThreadList.addEventListener('click', (e) => {
+        const button = e.target.closest('button[data-thread-id]');
+        if (!button || agentBusy) return;
+        const threadId = String(button.dataset.threadId || '').trim();
+        if (!threadId || threadId === activeAgentThreadId) return;
+        switchAgentThread(threadId);
+      });
+    }
+
+    if (agentNewThreadBtn) {
+      agentNewThreadBtn.addEventListener('click', () => {
+        if (agentBusy) return;
+        createNewAgentThread();
+        agentPromptInput.focus();
+      });
+    }
+
     agentRunBtn.addEventListener('click', runAgentCommand);
 
     agentPromptInput.addEventListener('keydown', (e) => {
@@ -7113,18 +7849,32 @@
     });
 
     agentClearBtn.addEventListener('click', () => {
+      const thread = getActiveAgentThread();
+      const now = new Date().toISOString();
+      if (thread) {
+        thread.attachments = [];
+        thread.live_steps = [];
+        thread.messages = [{
+          role: 'assistant',
+          text: getDefaultAgentIntro(),
+          timestamp: now
+        }];
+        thread.last_status = 'Ready.';
+        thread.last_status_error = false;
+        thread.updated_at = now;
+      }
       agentAttachments = [];
       renderAgentAttachments();
       agentPromptInput.value = '';
-      agentChat.innerHTML = `
-        <div class="agent-msg agent-msg-assistant">
-          Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.
-        </div>
-      `;
+      renderAgentMessages();
+      renderAgentLiveLog();
+      renderAgentThreadList();
       setAgentStatus('Agent Mode cleared.');
+      saveAgentThreads();
     });
 
-    renderAgentAttachments();
+    loadAgentThreads();
+    switchAgentThread(activeAgentThreadId);
     updateAgentProviderLabel();
 
     // ========== SIGNATURE PACKETS TAB ==========
