@@ -261,7 +261,6 @@ function categorizeFeatureLabel(featureName) {
   if (key.includes('redline')) return 'Redlines';
   if (key === 'email') return 'Email Search';
   if (key === 'collate') return 'Collate';
-  if (key === 'timetrack') return 'Time Tracking';
   if (key === 'update_checklist') return 'Checklist Updates';
   if (key === 'generate_punchlist' || key === 'punchlist') return 'Punchlists';
   if (key === 'signature_packets' || key === 'packet_shell' || key === 'execution_version' || key === 'sigblocks') {
@@ -2288,7 +2287,6 @@ const AGENT_TABS = new Set([
   'collate',
   'redline',
   'email',
-  'timetrack',
   'updatechecklist',
   'punchlist'
 ]);
@@ -2302,8 +2300,6 @@ const AGENT_TAB_ALIASES = {
   sig_blocks: 'sigblocks',
   checklist: 'updatechecklist',
   update_checklist: 'updatechecklist',
-  activity_summary: 'timetrack',
-  time_tracking: 'timetrack',
   punch_list: 'punchlist',
   email_search: 'email',
   task_detection: 'email'
@@ -2519,17 +2515,6 @@ function buildAgentFallbackPlan(commandText, attachments) {
       required_extensions: ['docx'],
       missing_requirements: [],
       user_message: 'Opened Generate Punchlist.'
-    };
-  }
-
-  if (/time|activity summary|timeline/.test(prompt)) {
-    return {
-      action: 'open_tab',
-      target_tab: 'timetrack',
-      run_now: false,
-      required_extensions: ['csv'],
-      missing_requirements: [],
-      user_message: 'Opened Activity Summary.'
     };
   }
 
@@ -3676,8 +3661,8 @@ const COMMAND_TOOLS = [
       properties: {
         tab: {
           type: 'string',
-          enum: ['packets', 'packetshell', 'execution', 'sigblocks', 'timetrack', 'email', 'updatechecklist', 'punchlist', 'collate', 'redline'],
-          description: 'The tab to navigate to. packets=Signature Packets, packetshell=Packet Shell, execution=Execution, sigblocks=Signature Blocks, timetrack=Time Tracking, email=Email Search, updatechecklist=Update Checklist, punchlist=Punchlist Generator, collate=Collate Comments, redline=Redline Documents'
+          enum: ['packets', 'packetshell', 'execution', 'sigblocks', 'email', 'updatechecklist', 'punchlist', 'collate', 'redline'],
+          description: 'The tab to navigate to. packets=Signature Packets, packetshell=Packet Shell, execution=Execution, sigblocks=Signature Blocks, email=Email Search, updatechecklist=Update Checklist, punchlist=Punchlist Generator, collate=Collate Comments, redline=Redline Documents'
         }
       },
       required: ['tab']
@@ -3879,6 +3864,60 @@ const IMANAGE_PS_BOOTSTRAP = `
 $global:IManageProgId = ''
 $global:IManageCOMType = ''  # 'IManDMS', 'WorkObjectFactory', 'WorkSite'
 
+function Get-IManageMethodNames($obj) {
+  try {
+    return @($obj.PSObject.Methods | ForEach-Object { $_.Name } | Sort-Object -Unique)
+  } catch {
+    return @()
+  }
+}
+
+function Get-IManagePropertyNames($obj) {
+  try {
+    return @($obj.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object -Unique)
+  } catch {
+    return @()
+  }
+}
+
+function Test-IManageDMSCapabilities($obj) {
+  $methods = Get-IManageMethodNames $obj
+  $properties = Get-IManagePropertyNames $obj
+
+  $hasCreateProfileSearch = ($methods -contains 'CreateProfileSearchParameters')
+  $hasDmsSessionSignals = (($properties -contains 'Sessions') -or ($properties -contains 'Databases'))
+  $hasLegacyFactorySignals =
+    ($methods -contains 'FindProfiles') -or
+    ($methods -contains 'GetFiles') -or
+    ($methods -contains 'SaveAsFiles') -or
+    ($methods -contains 'CheckOutFiles')
+
+  # Some iManage Work 10 COM wrappers expose DMS APIs even under WorkObjectFactory ProgIDs.
+  if ($hasCreateProfileSearch -and $hasDmsSessionSignals) { return $true }
+  if ($hasCreateProfileSearch -and -not $hasLegacyFactorySignals) { return $true }
+  return $false
+}
+
+function Resolve-IManageCOMType($obj, $progId) {
+  try {
+    if (Test-IManageDMSCapabilities $obj) { return 'IManDMS' }
+  } catch {}
+
+  if ($progId -match 'WorkSite') { return 'WorkSite' }
+  return 'WorkObjectFactory'
+}
+
+function Use-IManageDMSApi($wof) {
+  if ($global:IManageCOMType -eq 'IManDMS') { return $true }
+  try {
+    if (Test-IManageDMSCapabilities $wof) {
+      $global:IManageCOMType = 'IManDMS'
+      return $true
+    }
+  } catch {}
+  return $false
+}
+
 function Get-IManageWorkObjectFactory {
   $progIds = @(
     'iManage.COMAPILib.IManDMS',
@@ -3897,13 +3936,7 @@ function Get-IManageWorkObjectFactory {
       $obj = New-Object -ComObject $progId
       if ($null -ne $obj) {
         $global:IManageProgId = $progId
-        if ($progId -match 'IManDMS') {
-          $global:IManageCOMType = 'IManDMS'
-        } elseif ($progId -match 'WorkSite') {
-          $global:IManageCOMType = 'WorkSite'
-        } else {
-          $global:IManageCOMType = 'WorkObjectFactory'
-        }
+        $global:IManageCOMType = Resolve-IManageCOMType $obj $progId
         return $obj
       }
     } catch {
@@ -4894,7 +4927,7 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     # IManDMS: browse documents using correct COM API
     $session = Get-IManDMSSession $wof
     $db = Get-IManDMSDatabase $session
@@ -5022,7 +5055,7 @@ try {
     exit 0
   }
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     # IManDMS session-based save
     ${normalizedAction === 'new_version' ? `
     # New version via IManDMS — find document, then use Set-IManDMSDocCheckin helper
@@ -5075,9 +5108,35 @@ try {
       $entry = New-IManageQueryFile($profileId)
       $files.Add($entry)
       $saved = $false
+      $savedAction = 'new_version'
+      $savedNote = ''
       if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath, ${showDialogPs}); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path,dialog): ' + $_.Exception.Message) } }
       if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files, $sourcePath); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref,path): ' + $_.Exception.Message) } }
       if (-not $saved) { try { $wof.SaveAsNewVersion([ref]$files); $saved = $true } catch { $saveErrors += ('SaveAsNewVersion(ref): ' + $_.Exception.Message) } }
+      if (-not $saved) { try { $wof.CheckInFiles([ref]$files, $sourcePath); $saved = $true } catch { $saveErrors += ('CheckInFiles(ref,path): ' + $_.Exception.Message) } }
+      if (-not $saved) { try { $wof.SaveFiles([ref]$files, $sourcePath); $saved = $true } catch { $saveErrors += ('SaveFiles(ref,path): ' + $_.Exception.Message) } }
+      if (-not $saved) {
+        try {
+          $savedDoc = $wof.ImportDocument($sourcePath)
+          if ($null -ne $savedDoc) {
+            $files.Add($savedDoc)
+            $saved = $true
+            $savedAction = 'new_document'
+            $savedNote = 'Saved as new document (new-version methods unavailable for this iManage COM API).'
+          }
+        } catch { $saveErrors += ('ImportDocument(path): ' + $_.Exception.Message) }
+      }
+      if (-not $saved) {
+        try {
+          $savedDoc = $wof.AddDocument($sourcePath)
+          if ($null -ne $savedDoc) {
+            $files.Add($savedDoc)
+            $saved = $true
+            $savedAction = 'new_document'
+            $savedNote = 'Saved as new document (new-version methods unavailable for this iManage COM API).'
+          }
+        } catch { $saveErrors += ('AddDocument(path): ' + $_.Exception.Message) }
+      }
       if (-not $saved) { throw ('Could not save new version. Methods tried: ' + ($saveErrors -join ' | ')) }
       $savedFiles = @()
       foreach ($f in $files) {
@@ -5087,7 +5146,7 @@ try {
         try { $info.version = $f.Version } catch {}
         $savedFiles += $info
       }
-      $json = @{ success = $true; action = "new_version"; profileId = $profileId; files = $savedFiles } | ConvertTo-Json -Compress -Depth 4
+      $json = @{ success = $true; action = $savedAction; note = $savedNote; profileId = $profileId; files = $savedFiles } | ConvertTo-Json -Compress -Depth 4
       Write-Output "###JSON_START###$json###JSON_END###"
     } else {
       Write-Output ('###JSON_START###{"error":"Could not find iManage profile for this file (' + ($saveErrors -join '; ') + '). Try saving as new document instead."}###JSON_END###')
@@ -5099,6 +5158,10 @@ try {
     if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath, ${showDialogPs}); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path,dialog): ' + $_.Exception.Message) } }
     if (-not $saveSuccess) { try { $wof.SaveAsFiles([ref]$files, $sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(ref,path): ' + $_.Exception.Message) } }
     if (-not $saveSuccess) { try { $wof.SaveAsFiles($sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveAsFiles(path): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { try { $savedDoc = $wof.ImportDocument($sourcePath); if ($null -ne $savedDoc) { $files.Add($savedDoc) }; $saveSuccess = $true } catch { $saveErrors += ('ImportDocument(path): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { try { $savedDoc = $wof.AddDocument($sourcePath); if ($null -ne $savedDoc) { $files.Add($savedDoc) }; $saveSuccess = $true } catch { $saveErrors += ('AddDocument(path): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { try { $wof.SaveDocument($sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveDocument(path): ' + $_.Exception.Message) } }
+    if (-not $saveSuccess) { try { $wof.SaveFile($sourcePath); $saveSuccess = $true } catch { $saveErrors += ('SaveFile(path): ' + $_.Exception.Message) } }
     if (-not $saveSuccess) { throw ('Could not save to iManage. Methods tried: ' + ($saveErrors -join ' | ')) }
     $results = @()
     foreach ($f in $files) {
@@ -5139,7 +5202,7 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     # IManDMS: get document and enumerate Versions collection
     $doc = Get-IManDMSDocById $wof '${escapedId}' $null
     $results = @()
@@ -5286,7 +5349,7 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     # IManDMS: find document via search, then download with GetCopy
     $doc = Get-IManDMSDocById $wof '${escapedId}' ${versionNumber === null ? '$null' : versionNumber}
     $checkoutDir = '${escapedCheckoutPath}'
@@ -5378,7 +5441,7 @@ try {
   Ensure-IManageLogin $wof
   $sourcePath = '${escapedPath}'
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     # IManDMS: extract doc number from filename, find document, check in with correct API
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourcePath)
     $docNumMatch = [regex]::Match($baseName, '(\d{4,})')
@@ -5454,7 +5517,7 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     # IManDMS session-based search
     $docs = Search-IManDMSDocs $wof '${escapedQuery}' 25
     $results = @()
@@ -5556,14 +5619,18 @@ $comErrors = @()
 $wof = $null
 foreach ($progId in $progIds) {
   try {
-    $wof = New-Object -ComObject $progId
-    if ($null -ne $wof) {
-      $diag.com_created = $true
-      $diag.com_progid = $progId
-      try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
-      if ($progId -match 'IManDMS') { $diag.com_api_type = 'IManDMS' }
-      elseif ($progId -match 'WorkSite') { $diag.com_api_type = 'WorkSite' }
-      else { $diag.com_api_type = 'WorkObjectFactory' }
+      $wof = New-Object -ComObject $progId
+      if ($null -ne $wof) {
+        $diag.com_created = $true
+        $diag.com_progid = $progId
+        try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
+      try {
+        $diag.com_api_type = Resolve-IManageCOMType $wof $progId
+      } catch {
+        if ($progId -match 'IManDMS') { $diag.com_api_type = 'IManDMS' }
+        elseif ($progId -match 'WorkSite') { $diag.com_api_type = 'WorkSite' }
+        else { $diag.com_api_type = 'WorkObjectFactory' }
+      }
       break
     }
   } catch { $comErrors += ($progId + ': ' + $_.Exception.Message) }
@@ -5689,6 +5756,7 @@ if ($null -ne $db -and $null -ne $wof) {
 
 # ── Step 7: Check for key methods ──
 $diag.key_checks = @{
+  dms_capability_detected = (Use-IManageDMSApi $wof)
   dms_CreateProfileSearchParameters = ($diag.dms_members.methods -contains 'CreateProfileSearchParameters')
   db_SearchDocuments = ($diag.database_members.methods -contains 'SearchDocuments')
   db_CreateDocument = ($diag.database_members.methods -contains 'CreateDocument')
@@ -5747,7 +5815,7 @@ try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
 
-  if ($global:IManageCOMType -eq 'IManDMS') {
+  if (Use-IManageDMSApi $wof) {
     $folder = Create-IManDMSFolder $wof '${escapedName}' '${escapedParent}'
     $info = @{}
     try { $info.name = $folder.Name } catch { $info.name = '${escapedName}' }
@@ -5763,6 +5831,9 @@ try {
     $created = $false
     if (-not $created) { try { $wof.CreateFolder('${escapedName}'); $created = $true } catch { $createErrors += ('CreateFolder: ' + $_.Exception.Message) } }
     if (-not $created) { try { $wof.MakeFolder('${escapedName}'); $created = $true } catch { $createErrors += ('MakeFolder: ' + $_.Exception.Message) } }
+    if (-not $created) { try { $wof.NewFolder('${escapedName}'); $created = $true } catch { $createErrors += ('NewFolder: ' + $_.Exception.Message) } }
+    if (-not $created) { try { $wof.AddFolder('${escapedName}'); $created = $true } catch { $createErrors += ('AddFolder: ' + $_.Exception.Message) } }
+    if (-not $created) { try { $wof.CreateWorkspace('${escapedName}'); $created = $true } catch { $createErrors += ('CreateWorkspace(name): ' + $_.Exception.Message) } }
     if (-not $created -and '${escapedParent}') {
       try {
         $files = New-Object System.Collections.Generic.List[System.Object]
@@ -5771,6 +5842,8 @@ try {
         $wof.FindProfiles([ref]$files)
         if ($files.Count -gt 0) {
           try { $wof.CreateFolder('${escapedName}', $files[0]); $created = $true } catch { $createErrors += ('CreateFolder(name,parent): ' + $_.Exception.Message) }
+          if (-not $created) { try { $wof.MakeFolder('${escapedName}', $files[0]); $created = $true } catch { $createErrors += ('MakeFolder(name,parent): ' + $_.Exception.Message) } }
+          if (-not $created) { try { $wof.CreateWorkspace('${escapedName}', $files[0]); $created = $true } catch { $createErrors += ('CreateWorkspace(name,parent): ' + $_.Exception.Message) } }
         }
       } catch { $createErrors += ('FindParent: ' + $_.Exception.Message) }
     }
@@ -9182,7 +9255,6 @@ ipcMain.handle('agent-plan', async (event, payload) => {
       'collate: Collate Documents',
       'redline: Redline Documents',
       'email: Email Search',
-      'timetrack: Activity Summary',
       'updatechecklist: Update Checklist',
       'punchlist: Generate Punchlist'
     ];
@@ -9207,7 +9279,7 @@ Allowed actions:
 - no_op
 
 Allowed target_tab values:
-packets, packetshell, execution, sigblocks, collate, redline, email, timetrack, updatechecklist, punchlist
+packets, packetshell, execution, sigblocks, collate, redline, email, updatechecklist, punchlist
 
 App capabilities:
 ${capabilities.join('\n')}
@@ -9221,7 +9293,7 @@ ${attachmentSummary}
 Return JSON only with this exact shape:
 {
   "action": "run_signature_packets|run_packet_shell|run_redline|run_collate|run_update_checklist|run_generate_punchlist|run_email_ai_search|run_general_llm_chat|open_tab|no_op",
-  "target_tab": "packets|packetshell|execution|sigblocks|collate|redline|email|timetrack|updatechecklist|punchlist|null",
+  "target_tab": "packets|packetshell|execution|sigblocks|collate|redline|email|updatechecklist|punchlist|null",
   "run_now": true,
   "required_extensions": ["pdf"],
   "missing_requirements": [],
@@ -10114,125 +10186,6 @@ ${JSON.stringify(emailContext, null, 2)}`;
         resolve(result);
       } else if (!result) {
         reject(new Error('Task detection failed with code ' + code));
-      }
-    });
-
-    proc.on('error', reject);
-  });
-});
-
-// ========== TIME TRACKING ==========
-
-ipcMain.handle('generate-time-summary', async (event, config) => {
-  const timeModuleName = 'time_tracker';
-  const processorPath = getProcessorPath(timeModuleName);
-
-  // In development, use simplified local processing
-  if (!processorPath) {
-    try {
-      const emails = config.emails || [];
-      const period = config.period || 'day';
-
-      // Simple summary without calendar
-      const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
-
-      // Filter emails for today/this week
-      const filteredEmails = emails.filter(email => {
-        const dateStr = email.date_sent || email.date_received;
-        if (!dateStr) return false;
-        try {
-          const emailDate = new Date(dateStr);
-          if (period === 'day') {
-            return emailDate.toISOString().split('T')[0] === todayStr;
-          } else {
-            const weekAgo = new Date(today);
-            weekAgo.setDate(weekAgo.getDate() - 7);
-            return emailDate >= weekAgo;
-          }
-        } catch (e) {
-          return false;
-        }
-      });
-
-      // Simple categorization
-      const byMatter = {};
-      filteredEmails.forEach(email => {
-        const subject = email.subject || '';
-        // Simple extraction - look for [brackets] or first few words
-        let matter = 'General';
-        const bracketMatch = subject.match(/\[([^\]]+)\]/);
-        if (bracketMatch) {
-          matter = bracketMatch[1];
-        } else if (subject.startsWith('Re:') || subject.startsWith('RE:')) {
-          matter = subject.substring(4, 30).trim() || 'General';
-        }
-
-        if (!byMatter[matter]) {
-          byMatter[matter] = { emails: 0, minutes: 0 };
-        }
-        byMatter[matter].emails++;
-        byMatter[matter].minutes += 3; // Assume 3 min per email
-      });
-
-      const totalMinutes = filteredEmails.length * 3;
-      const mattersArray = Object.entries(byMatter).map(([name, data]) => ({
-        name,
-        hours: Math.round(data.minutes / 60 * 10) / 10,
-        percent: Math.round(data.minutes / Math.max(totalMinutes, 1) * 100),
-        emails_sent: Math.floor(data.emails / 2),
-        emails_received: Math.ceil(data.emails / 2),
-        meetings: 0
-      })).sort((a, b) => b.hours - a.hours);
-
-      return {
-        success: true,
-        summary: {
-          period,
-          date: todayStr,
-          total_active_hours: Math.round(totalMinutes / 60 * 10) / 10,
-          total_meetings: 0,
-          total_emails: filteredEmails.length,
-          by_matter: mattersArray,
-          timeline: []
-        }
-      };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  }
-
-  // Production: Use Python processor
-  const configPath = path.join(app.getPath('temp'), `timetrack_config_${Date.now()}.json`);
-  fs.writeFileSync(configPath, JSON.stringify(config));
-
-  return new Promise((resolve, reject) => {
-    const proc = spawnTracked(processorPath, [timeModuleName, configPath]);
-    let result = null;
-
-    proc.stdout.on('data', (data) => {
-      const lines = data.toString().split('\n').filter(l => l.trim());
-      for (const line of lines) {
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'progress') {
-            mainWindow.webContents.send('timetrack-progress', msg);
-          } else if (msg.type === 'result') {
-            result = msg;
-          } else if (msg.type === 'error') {
-            reject(new Error(msg.message));
-          }
-        } catch (e) {}
-      }
-    });
-
-    proc.on('close', (code) => {
-      try { fs.unlinkSync(configPath); } catch (e) {}
-
-      if (code === 0 && result) {
-        resolve(result);
-      } else if (!result) {
-        reject(new Error('Time tracking failed with code ' + code));
       }
     });
 

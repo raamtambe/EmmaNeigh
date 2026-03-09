@@ -417,6 +417,34 @@
       overflow: hidden;
     }
 
+    .workspace-resizer {
+      width: 8px;
+      flex: 0 0 8px;
+      align-self: stretch;
+      cursor: col-resize;
+      border-radius: 999px;
+      background: transparent;
+      position: relative;
+      -webkit-app-region: no-drag;
+    }
+
+    .workspace-resizer::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 0;
+      transform: translateX(-50%);
+      width: 2px;
+      height: 100%;
+      background: #1f1f1f;
+      border-radius: 999px;
+    }
+
+    .workspace-resizer:hover::after,
+    .workspace-layout.is-resizing .workspace-resizer::after {
+      background: #3b82f6;
+    }
+
     .manual-panel {
       flex: 1 1 auto;
       min-width: 0;
@@ -582,6 +610,34 @@
       overflow: hidden;
     }
 
+    .agent-shell-resizer {
+      width: 8px;
+      flex: 0 0 8px;
+      align-self: stretch;
+      cursor: col-resize;
+      border-radius: 999px;
+      background: transparent;
+      position: relative;
+      -webkit-app-region: no-drag;
+    }
+
+    .agent-shell-resizer::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 0;
+      transform: translateX(-50%);
+      width: 2px;
+      height: 100%;
+      background: #1f1f1f;
+      border-radius: 999px;
+    }
+
+    .agent-shell-resizer:hover::after,
+    .agent-shell.is-resizing .agent-shell-resizer::after {
+      background: #3b82f6;
+    }
+
     .agent-shell {
       display: flex;
       flex: 1;
@@ -656,6 +712,16 @@
       display: flex;
       flex-direction: column;
       min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 2px;
+    }
+
+    .agent-thread-main.agent-drop-active {
+      border: 1px dashed #3b82f6;
+      border-radius: 10px;
+      background: rgba(59, 130, 246, 0.08);
+      box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.25);
     }
 
     .agent-panel-header {
@@ -728,8 +794,9 @@
       flex-wrap: wrap;
       gap: 6px;
       margin-bottom: 10px;
-      min-height: 0;
-      max-height: 92px;
+      min-height: 40px;
+      max-height: 220px;
+      resize: vertical;
       overflow-y: auto;
     }
 
@@ -769,12 +836,15 @@
     }
 
     .agent-chat {
-      flex: 1;
+      flex: 0 0 auto;
+      height: 240px;
       min-height: 120px;
+      max-height: 520px;
       border: 1px solid #222;
       border-radius: 10px;
       background: #0a0a0a;
       padding: 10px;
+      resize: vertical;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
@@ -826,7 +896,8 @@
       border-radius: 8px;
       background: #0d0d0d;
       min-height: 56px;
-      max-height: 120px;
+      max-height: 260px;
+      resize: vertical;
       overflow-y: auto;
       padding: 8px;
       font-size: 11px;
@@ -873,6 +944,11 @@
         flex-direction: column;
       }
 
+      .workspace-resizer,
+      .agent-shell-resizer {
+        display: none;
+      }
+
       .agent-panel {
         width: 100%;
         min-width: 0;
@@ -889,6 +965,10 @@
         max-width: none;
         min-width: 0;
         max-height: 150px;
+      }
+
+      .agent-chat {
+        height: 220px;
       }
     }
 
@@ -3199,106 +3279,6 @@
       user-select: none;
     }
 
-    /* Time Tracking Tab Styles */
-    #timetrackTab {
-      overflow-y: auto;
-      flex: 1;
-      padding-bottom: 40px;
-    }
-
-    .timetrack-summary-stats {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
-    }
-
-    .timetrack-matters {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .matter-item {
-      background: #111;
-      border-radius: 8px;
-      padding: 12px;
-    }
-
-    .matter-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-
-    .matter-name {
-      font-size: 14px;
-      font-weight: 500;
-    }
-
-    .matter-hours {
-      font-size: 14px;
-      color: #22c55e;
-    }
-
-    .matter-bar {
-      height: 4px;
-      background: #222;
-      border-radius: 2px;
-      overflow: hidden;
-      margin-bottom: 8px;
-    }
-
-    .matter-bar-fill {
-      height: 100%;
-      background: #22c55e;
-    }
-
-    .matter-details {
-      font-size: 11px;
-      color: #666;
-    }
-
-    .timetrack-timeline {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      max-height: 200px;
-      overflow-y: auto;
-    }
-
-    .timeline-item {
-      display: flex;
-      gap: 12px;
-      font-size: 12px;
-      padding: 8px;
-      background: #111;
-      border-radius: 6px;
-    }
-
-    .timeline-time {
-      color: #888;
-      min-width: 70px;
-    }
-
-    .timeline-icon {
-      width: 16px;
-      text-align: center;
-    }
-
-    .timeline-desc {
-      flex: 1;
-      color: #ccc;
-    }
-
-    .timetrack-options {
-      display: flex;
-      align-items: center;
-    }
-
-    .timetrack-options input {
-      -webkit-app-region: no-drag;
-    }
   </style>
 </head>
 <body>
@@ -3773,19 +3753,7 @@
           </div>
         </div>
 
-        <!-- Group 2: Time Management -->
-        <div class="nav-category">
-          <button class="nav-category-header">
-            <span class="icon">⏱️</span>
-            <span>Time Management</span>
-            <span class="arrow">▼</span>
-          </button>
-          <div class="nav-items">
-            <button class="nav-item" data-tab="timetrack">Activity Summary</button>
-          </div>
-        </div>
-
-        <!-- Group 3: Project Management -->
+        <!-- Group 2: Project Management -->
         <div class="nav-category">
           <button class="nav-category-header">
             <span class="icon">📋</span>
@@ -3799,7 +3767,7 @@
           </div>
         </div>
 
-        <!-- Group 4: Document Processing -->
+        <!-- Group 3: Document Processing -->
         <div class="nav-category">
           <button class="nav-category-header">
             <span class="icon">📄</span>
@@ -4667,127 +4635,6 @@
       </div>
     </div><!-- End emailTab -->
 
-    <!-- Time Tracking Tab -->
-    <div id="timetrackTab" style="display: none;">
-      <div class="timetrack-setup" id="timetrackSetup">
-        <h3 style="font-size: 14px; color: #888; margin-bottom: 16px;">Generate Activity Summary</h3>
-
-        <!-- Email CSV Input -->
-        <div class="input-section" id="timetrackEmailDrop">
-          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
-          </svg>
-          <p class="input-label">Upload Email CSV</p>
-          <p class="input-hint">Outlook email export</p>
-          <p class="input-selected" id="timetrackEmailSelected"></p>
-        </div>
-
-        <!-- Calendar Input -->
-        <div class="input-section" id="timetrackCalendarDrop" style="margin-top: 12px;">
-          <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/>
-          </svg>
-          <p class="input-label">Upload Calendar (Optional)</p>
-          <p class="input-hint">.ics or .csv from Outlook/Google</p>
-          <p class="input-selected" id="timetrackCalendarSelected"></p>
-        </div>
-
-        <!-- Period Selection -->
-        <div class="timetrack-options" style="margin-top: 16px;">
-          <label style="font-size: 13px; color: #888;">
-            <input type="radio" name="timetrackPeriod" value="day" checked> Today
-          </label>
-          <label style="font-size: 13px; color: #888; margin-left: 16px;">
-            <input type="radio" name="timetrackPeriod" value="week"> This Week
-          </label>
-        </div>
-
-        <div id="timetrackReadyMsg" style="display: none; margin-top: 12px; padding: 10px 14px; background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.3); border-radius: 8px; font-size: 12px; color: #4ade80;">
-          <span id="timetrackReadyText"></span>
-        </div>
-
-        <div class="btn-row" style="margin-top: 16px;">
-          <button class="btn btn-primary" id="timetrackGenerateBtn" disabled>Generate Summary</button>
-        </div>
-      </div>
-
-      <!-- Processing -->
-      <div class="processing" id="timetrackProcessing">
-        <div class="horse-container">
-          <div class="horse">
-            <svg viewBox="0 0 100 62" xmlns="http://www.w3.org/2000/svg">
-              <ellipse cx="50" cy="35" rx="28" ry="16"/>
-              <path d="M 70 28 Q 82 18 85 8 Q 90 16 84 28 Q 78 32 70 32 Z"/>
-              <ellipse cx="88" cy="8" rx="11" ry="7"/>
-              <path d="M 94 2 L 97 -4 L 96 3 Z"/>
-              <circle cx="92" cy="6" r="1.5" fill="#0a0a0a"/>
-              <path d="M 84 10 Q 78 4 76 14 Q 72 8 70 18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
-              <path class="tail" d="M 22 35 Q 10 32 6 42 Q 12 38 14 46" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-              <rect class="front-leg-1" x="62" y="46" width="5" height="14" rx="2"/>
-              <rect class="front-leg-2" x="54" y="46" width="5" height="14" rx="2"/>
-              <rect class="back-leg-1" x="38" y="46" width="5" height="14" rx="2"/>
-              <rect class="back-leg-2" x="30" y="46" width="5" height="14" rx="2"/>
-            </svg>
-          </div>
-          <div class="dust">
-            <div class="dust-particle"></div>
-            <div class="dust-particle"></div>
-            <div class="dust-particle"></div>
-            <div class="dust-particle"></div>
-          </div>
-        </div>
-        <p class="progress-text" id="timetrackProgressText">Analyzing activity...</p>
-        <div class="progress-bar">
-          <div class="progress-fill" id="timetrackProgressFill" style="width: 0%"></div>
-        </div>
-      </div>
-
-      <!-- Results -->
-      <div class="timetrack-results" id="timetrackResults" style="display: none;">
-        <h3 style="font-size: 16px; margin-bottom: 16px;">
-          <span id="timetrackResultsTitle">Activity Summary</span>
-        </h3>
-
-        <!-- Summary Stats -->
-        <div class="timetrack-summary-stats">
-          <div class="stat-box">
-            <div class="stat-value" id="ttTotalHours">0</div>
-            <div class="stat-label">Active Hours</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-value" id="ttTotalMeetings">0</div>
-            <div class="stat-label">Meetings</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-value" id="ttTotalEmails">0</div>
-            <div class="stat-label">Emails</div>
-          </div>
-        </div>
-
-        <!-- By Matter -->
-        <h4 style="font-size: 13px; color: #888; margin: 20px 0 12px;">By Matter</h4>
-        <div class="timetrack-matters" id="timetrackMatters"></div>
-
-        <!-- Timeline -->
-        <h4 style="font-size: 13px; color: #888; margin: 20px 0 12px;">Timeline</h4>
-        <div class="timetrack-timeline" id="timetrackTimeline"></div>
-
-        <div class="btn-row" style="margin-top: 20px;">
-          <button class="btn btn-secondary" id="timetrackResetBtn">New Summary</button>
-        </div>
-      </div>
-
-      <!-- Error State -->
-      <div class="error" id="timetrackError">
-        <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
-        </svg>
-        <h2>Error</h2>
-        <p id="timetrackErrorText">Something went wrong</p>
-        <button class="btn btn-secondary" id="timetrackRetryBtn">Try Again</button>
-      </div>
-    </div><!-- End timetrackTab -->
-
     <!-- Update Checklist Tab -->
     <div id="updatechecklistTab" style="display: none;">
       <div class="checklist-setup" id="checklistSetup">
@@ -4973,6 +4820,8 @@
         </div><!-- End main-layout -->
       </div><!-- End manual-panel -->
 
+      <div class="workspace-resizer" id="workspaceResizer" aria-label="Resize agent panel" role="separator"></div>
+
       <aside class="agent-panel" id="agentPanel">
         <div class="agent-panel-header">
           <div>
@@ -4984,10 +4833,12 @@
         </div>
 
         <div class="agent-shell">
-          <div class="agent-thread-sidebar">
+          <div class="agent-thread-sidebar" id="agentThreadSidebar">
             <button class="btn btn-secondary" id="agentNewThreadBtn" style="margin-top: 0; padding: 6px 10px; font-size: 11px;">+ New Thread</button>
             <div class="agent-thread-list" id="agentThreadList"></div>
           </div>
+
+          <div class="agent-shell-resizer" id="agentShellResizer" aria-label="Resize thread sidebar" role="separator"></div>
 
           <div class="agent-thread-main">
             <div class="agent-status" id="agentStatus">
@@ -6994,7 +6845,6 @@
     const collateTab = document.getElementById('collateTab');
     const redlineTab = document.getElementById('redlineTab');
     const emailTab = document.getElementById('emailTab');
-    const timetrackTab = document.getElementById('timetrackTab');
     const updatechecklistTab = document.getElementById('updatechecklistTab');
     const punchlistTab = document.getElementById('punchlistTab');
 
@@ -7021,7 +6871,6 @@
       collateTab.style.display = tabName === 'collate' ? 'block' : 'none';
       redlineTab.style.display = tabName === 'redline' ? 'block' : 'none';
       emailTab.style.display = tabName === 'email' ? 'block' : 'none';
-      timetrackTab.style.display = tabName === 'timetrack' ? 'block' : 'none';
       updatechecklistTab.style.display = tabName === 'updatechecklist' ? 'block' : 'none';
       punchlistTab.style.display = tabName === 'punchlist' ? 'block' : 'none';
     }
@@ -7035,6 +6884,13 @@
     });
 
     // ========== AGENT MODE ==========
+    const agentPanel = document.getElementById('agentPanel');
+    const agentThreadMain = agentPanel ? agentPanel.querySelector('.agent-thread-main') : null;
+    const workspaceLayout = document.querySelector('.workspace-layout');
+    const workspaceResizer = document.getElementById('workspaceResizer');
+    const agentShell = agentPanel ? agentPanel.querySelector('.agent-shell') : null;
+    const agentThreadSidebar = document.getElementById('agentThreadSidebar');
+    const agentShellResizer = document.getElementById('agentShellResizer');
     const agentProviderLabel = document.getElementById('agentProviderLabel');
     const agentConnectionLabel = document.getElementById('agentConnectionLabel');
     const agentStatus = document.getElementById('agentStatus');
@@ -7056,7 +6912,6 @@
       collate: 'Collate Documents',
       redline: 'Redline Documents',
       email: 'Email Search',
-      timetrack: 'Activity Summary',
       updatechecklist: 'Update Checklist',
       punchlist: 'Generate Punchlist'
     };
@@ -7072,6 +6927,7 @@
     let activeAgentThreadId = null;
     let activeAgentRunId = null;
     let activeAgentRunThreadId = null;
+    let agentDragDepth = 0;
 
     function getDefaultAgentIntro() {
       return 'Agent Mode can route commands to EmmaNeigh workflows and run supported actions directly.';
@@ -7310,6 +7166,189 @@
       return dot > 0 ? fileName.slice(dot + 1) : '';
     }
 
+    function addAgentAttachmentsFromPaths(paths, sourceLabel = 'picker') {
+      const incoming = Array.isArray(paths) ? paths : [];
+      const existing = new Set(agentAttachments.map((file) => String(file.path || '').toLowerCase()));
+      let added = 0;
+      let skippedDuplicates = 0;
+      let skippedUnsupported = 0;
+
+      incoming.forEach((rawPath) => {
+        const filePath = String(rawPath || '').trim();
+        if (!filePath) return;
+        const ext = getAgentAttachmentExt(filePath);
+        if (!AGENT_UPLOAD_EXTENSIONS.includes(ext)) {
+          skippedUnsupported += 1;
+          return;
+        }
+        const key = filePath.toLowerCase();
+        if (existing.has(key)) {
+          skippedDuplicates += 1;
+          return;
+        }
+        existing.add(key);
+        agentAttachments.push({
+          path: filePath,
+          name: getAgentAttachmentName(filePath),
+          ext
+        });
+        added += 1;
+      });
+
+      if (added > 0) {
+        renderAgentAttachments();
+        let status = `${agentAttachments.length} file(s) attached for Agent Mode.`;
+        if (sourceLabel === 'drag_drop') {
+          status = `${added} file(s) added via drag and drop. Total attached: ${agentAttachments.length}.`;
+        }
+        if (skippedUnsupported > 0) {
+          status += ` Skipped ${skippedUnsupported} unsupported file(s).`;
+        }
+        if (skippedDuplicates > 0) {
+          status += ` Ignored ${skippedDuplicates} duplicate file(s).`;
+        }
+        setAgentStatus(status);
+        return;
+      }
+
+      if (incoming.length > 0) {
+        let message = 'No new files were added.';
+        if (skippedUnsupported > 0) {
+          message = `No supported files were added. Skipped ${skippedUnsupported} unsupported file(s).`;
+        } else if (skippedDuplicates > 0) {
+          message = `All dropped files are already attached (${skippedDuplicates} duplicate file(s)).`;
+        }
+        setAgentStatus(message, true);
+      }
+    }
+
+    function getDroppedFilePaths(event) {
+      const files = Array.from((event && event.dataTransfer && event.dataTransfer.files) || []);
+      return files
+        .map((file) => (file && file.path ? String(file.path) : ''))
+        .filter((filePath) => !!filePath);
+    }
+
+    function setAgentDropActive(active) {
+      if (!agentThreadMain) return;
+      agentThreadMain.classList.toggle('agent-drop-active', !!active);
+    }
+
+    function clampNumber(value, min, max) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return min;
+      return Math.max(min, Math.min(max, num));
+    }
+
+    function applyAgentPanelWidth(widthPx) {
+      if (!agentPanel || !workspaceLayout) return;
+      const layoutRect = workspaceLayout.getBoundingClientRect();
+      const minWidth = 380;
+      const maxWidth = Math.max(minWidth, Math.min(980, layoutRect.width - 280));
+      const clamped = clampNumber(widthPx, minWidth, maxWidth);
+      agentPanel.style.width = `${clamped}px`;
+    }
+
+    function applyAgentSidebarWidth(widthPx) {
+      if (!agentThreadSidebar || !agentShell) return;
+      const shellRect = agentShell.getBoundingClientRect();
+      const minWidth = 130;
+      const maxWidth = Math.max(minWidth, shellRect.width - 320);
+      const clamped = clampNumber(widthPx, minWidth, maxWidth);
+      agentThreadSidebar.style.width = `${clamped}px`;
+      agentThreadSidebar.style.minWidth = `${minWidth}px`;
+      agentThreadSidebar.style.maxWidth = `${Math.max(clamped, maxWidth)}px`;
+    }
+
+    function installAgentPanelResizers() {
+      if (!workspaceLayout || !workspaceResizer || !agentPanel || !agentShell || !agentThreadSidebar || !agentShellResizer) {
+        return;
+      }
+
+      const panelStorageKey = 'emmaneigh_agent_panel_width_v1';
+      const sidebarStorageKey = 'emmaneigh_agent_sidebar_width_v1';
+
+      const restoreSavedSizes = () => {
+        if (window.innerWidth <= 1200) return;
+        try {
+          const savedPanel = localStorage.getItem(panelStorageKey);
+          if (savedPanel) {
+            applyAgentPanelWidth(Number(savedPanel));
+          }
+          const savedSidebar = localStorage.getItem(sidebarStorageKey);
+          if (savedSidebar) {
+            applyAgentSidebarWidth(Number(savedSidebar));
+          }
+        } catch (_) {}
+      };
+
+      let dragMode = null;
+      const onMouseMove = (e) => {
+        if (!dragMode) return;
+        if (window.innerWidth <= 1200) return;
+        e.preventDefault();
+        if (dragMode === 'panel') {
+          const layoutRect = workspaceLayout.getBoundingClientRect();
+          const desiredWidth = layoutRect.right - e.clientX;
+          applyAgentPanelWidth(desiredWidth);
+          applyAgentSidebarWidth(agentThreadSidebar.getBoundingClientRect().width);
+        } else if (dragMode === 'sidebar') {
+          const shellRect = agentShell.getBoundingClientRect();
+          const desiredWidth = e.clientX - shellRect.left;
+          applyAgentSidebarWidth(desiredWidth);
+        }
+      };
+
+      const stopDrag = () => {
+        if (!dragMode) return;
+        workspaceLayout.classList.remove('is-resizing');
+        agentShell.classList.remove('is-resizing');
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+        try {
+          if (dragMode === 'panel') {
+            localStorage.setItem(panelStorageKey, String(Math.round(agentPanel.getBoundingClientRect().width)));
+          } else if (dragMode === 'sidebar') {
+            localStorage.setItem(sidebarStorageKey, String(Math.round(agentThreadSidebar.getBoundingClientRect().width)));
+          }
+        } catch (_) {}
+        dragMode = null;
+      };
+
+      workspaceResizer.addEventListener('mousedown', (e) => {
+        if (window.innerWidth <= 1200) return;
+        e.preventDefault();
+        dragMode = 'panel';
+        workspaceLayout.classList.add('is-resizing');
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+      });
+
+      agentShellResizer.addEventListener('mousedown', (e) => {
+        if (window.innerWidth <= 1200) return;
+        e.preventDefault();
+        dragMode = 'sidebar';
+        agentShell.classList.add('is-resizing');
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+      });
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', stopDrag);
+      window.addEventListener('resize', () => {
+        if (window.innerWidth <= 1200) {
+          agentPanel.style.width = '';
+          agentThreadSidebar.style.width = '';
+          agentThreadSidebar.style.minWidth = '';
+          agentThreadSidebar.style.maxWidth = '';
+          return;
+        }
+        restoreSavedSizes();
+      });
+
+      restoreSavedSizes();
+    }
+
     function setAgentStatus(message, isError = false) {
       const statusText = message || '';
       agentStatus.textContent = statusText;
@@ -7442,18 +7481,7 @@
     async function addAgentAttachmentsFromPicker() {
       const selectedPaths = await ipcRenderer.invoke('select-files', AGENT_UPLOAD_EXTENSIONS);
       if (!selectedPaths || selectedPaths.length === 0) return;
-
-      const existing = new Set(agentAttachments.map(file => file.path));
-      selectedPaths.forEach(filePath => {
-        if (existing.has(filePath)) return;
-        agentAttachments.push({
-          path: filePath,
-          name: getAgentAttachmentName(filePath),
-          ext: getAgentAttachmentExt(filePath)
-        });
-      });
-      renderAgentAttachments();
-      setAgentStatus(`${agentAttachments.length} file(s) attached for Agent Mode.`);
+      addAgentAttachmentsFromPaths(selectedPaths, 'picker');
     }
 
     async function executeAgentPlan(plan, originalPrompt) {
@@ -7810,6 +7838,48 @@
 
     agentAttachBtn.addEventListener('click', addAgentAttachmentsFromPicker);
 
+    if (agentPanel) {
+      agentPanel.addEventListener('dragenter', (e) => {
+        if (!e.dataTransfer || !e.dataTransfer.types || !Array.from(e.dataTransfer.types).includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        agentDragDepth += 1;
+        setAgentDropActive(true);
+      });
+
+      agentPanel.addEventListener('dragover', (e) => {
+        if (!e.dataTransfer || !e.dataTransfer.types || !Array.from(e.dataTransfer.types).includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        setAgentDropActive(true);
+      });
+
+      agentPanel.addEventListener('dragleave', (e) => {
+        if (!e.dataTransfer || !e.dataTransfer.types || !Array.from(e.dataTransfer.types).includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        agentDragDepth = Math.max(0, agentDragDepth - 1);
+        if (agentDragDepth === 0) {
+          setAgentDropActive(false);
+        }
+      });
+
+      agentPanel.addEventListener('drop', (e) => {
+        if (!e.dataTransfer || !e.dataTransfer.types || !Array.from(e.dataTransfer.types).includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        agentDragDepth = 0;
+        setAgentDropActive(false);
+        if (agentBusy) {
+          setAgentStatus('Agent is running. Wait for completion before attaching more files.', true);
+          return;
+        }
+        const droppedPaths = getDroppedFilePaths(e);
+        addAgentAttachmentsFromPaths(droppedPaths, 'drag_drop');
+      });
+    }
+
     agentAttachmentsEl.addEventListener('click', (e) => {
       const button = e.target.closest('button[data-agent-remove-index]');
       if (!button) return;
@@ -7873,6 +7943,7 @@
       saveAgentThreads();
     });
 
+    installAgentPanelResizers();
     loadAgentThreads();
     switchAgentThread(activeAgentThreadId);
     updateAgentProviderLabel();
@@ -10442,192 +10513,6 @@
       }
     }
 
-    // ========== TIME TRACKING TAB ==========
-    const timetrackEmailDrop = document.getElementById('timetrackEmailDrop');
-    const timetrackEmailSelected = document.getElementById('timetrackEmailSelected');
-    const timetrackCalendarDrop = document.getElementById('timetrackCalendarDrop');
-    const timetrackCalendarSelected = document.getElementById('timetrackCalendarSelected');
-    const timetrackGenerateBtn = document.getElementById('timetrackGenerateBtn');
-    const timetrackSetup = document.getElementById('timetrackSetup');
-    const timetrackProcessing = document.getElementById('timetrackProcessing');
-    const timetrackResults = document.getElementById('timetrackResults');
-    const timetrackError = document.getElementById('timetrackError');
-    const timetrackProgressText = document.getElementById('timetrackProgressText');
-    const timetrackProgressFill = document.getElementById('timetrackProgressFill');
-    const timetrackErrorText = document.getElementById('timetrackErrorText');
-    const timetrackRetryBtn = document.getElementById('timetrackRetryBtn');
-    const timetrackResetBtn = document.getElementById('timetrackResetBtn');
-    const timetrackResultsTitle = document.getElementById('timetrackResultsTitle');
-    const timetrackMatters = document.getElementById('timetrackMatters');
-    const timetrackTimeline = document.getElementById('timetrackTimeline');
-    const ttTotalHours = document.getElementById('ttTotalHours');
-    const ttTotalMeetings = document.getElementById('ttTotalMeetings');
-    const ttTotalEmails = document.getElementById('ttTotalEmails');
-
-    let ttEmailData = [];
-    let ttEmailPath = null;
-    let ttCalendarPath = null;
-
-    function showTimetrackState(state) {
-      timetrackSetup.style.display = state === 'idle' ? 'block' : 'none';
-      timetrackProcessing.classList.toggle('visible', state === 'processing');
-      timetrackResults.style.display = state === 'results' ? 'block' : 'none';
-      timetrackError.classList.toggle('visible', state === 'error');
-    }
-
-    function updateTimetrackButton() {
-      const ready = ttEmailData.length > 0;
-      timetrackGenerateBtn.disabled = !ready;
-      const readyMsg = document.getElementById('timetrackReadyMsg');
-      const readyText = document.getElementById('timetrackReadyText');
-      if (ready) {
-        readyText.textContent = `${ttEmailData.length} emails loaded. Click "Generate Summary" to analyze your activity.`;
-        readyMsg.style.display = 'block';
-      } else {
-        readyMsg.style.display = 'none';
-      }
-    }
-
-    // Email drop for time tracking
-    timetrackEmailDrop.addEventListener('click', async () => {
-      const result = await ipcRenderer.invoke('select-file', {
-        title: 'Select Email CSV',
-        filters: [{ name: 'CSV Files', extensions: ['csv'] }]
-      });
-      if (result) {
-        ttEmailPath = result;
-        timetrackEmailSelected.textContent = result.split(/[/\\]/).pop();
-        timetrackEmailDrop.classList.add('selected');
-
-        // Parse emails
-        try {
-          const parseResult = await ipcRenderer.invoke('parse-email-csv', result);
-          if (parseResult.success) {
-            ttEmailData = parseResult.emails;
-            updateTimetrackButton();
-          }
-        } catch (e) {
-          console.error('Failed to parse emails:', e);
-        }
-      }
-    });
-
-    // Calendar drop
-    timetrackCalendarDrop.addEventListener('click', async () => {
-      const result = await ipcRenderer.invoke('select-file', {
-        title: 'Select Calendar File',
-        filters: [{ name: 'Calendar Files', extensions: ['ics', 'csv'] }]
-      });
-      if (result) {
-        ttCalendarPath = result;
-        timetrackCalendarSelected.textContent = result.split(/[/\\]/).pop();
-        timetrackCalendarDrop.classList.add('selected');
-      }
-    });
-
-    // Generate summary
-    timetrackGenerateBtn.addEventListener('click', async () => {
-      if (ttEmailData.length === 0) return;
-
-      document.getElementById('timetrackReadyMsg').style.display = 'none';
-      showTimetrackState('processing');
-      const startTime = Date.now();
-
-      const period = document.querySelector('input[name="timetrackPeriod"]:checked').value;
-
-      try {
-        const result = await ipcRenderer.invoke('generate-time-summary', {
-          emails: ttEmailData,
-          calendar_path: ttCalendarPath,
-          period: period
-        });
-
-        if (result.success) {
-          const summary = result.summary;
-
-          // Update title
-          const dateStr = new Date(summary.date).toLocaleDateString('en-US', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          });
-          timetrackResultsTitle.textContent = period === 'week' ? `Week of ${dateStr}` : dateStr;
-
-          // Update stats
-          ttTotalHours.textContent = summary.total_active_hours + 'h';
-          ttTotalMeetings.textContent = summary.total_meetings;
-          ttTotalEmails.textContent = summary.total_emails;
-
-          // Render matters
-          timetrackMatters.innerHTML = '';
-          summary.by_matter.forEach(matter => {
-            const item = document.createElement('div');
-            item.className = 'matter-item';
-            item.innerHTML = `
-              <div class="matter-header">
-                <span class="matter-name">${matter.name}</span>
-                <span class="matter-hours">${matter.hours}h (${matter.percent}%)</span>
-              </div>
-              <div class="matter-bar">
-                <div class="matter-bar-fill" style="width: ${matter.percent}%"></div>
-              </div>
-              <div class="matter-details">
-                ${matter.emails_sent + matter.emails_received} emails · ${matter.meetings} meetings
-              </div>
-            `;
-            timetrackMatters.appendChild(item);
-          });
-
-          // Render timeline
-          timetrackTimeline.innerHTML = '';
-          summary.timeline.forEach(item => {
-            const el = document.createElement('div');
-            el.className = 'timeline-item';
-            const icon = item.type === 'meeting' ? '📅' : '✉️';
-            el.innerHTML = `
-              <span class="timeline-time">${item.time}</span>
-              <span class="timeline-icon">${icon}</span>
-              <span class="timeline-desc">${item.description}</span>
-            `;
-            timetrackTimeline.appendChild(el);
-          });
-
-          // Log usage
-          await logUsage('timetrack', 'generate', ttEmailData.length, 1, Date.now() - startTime);
-
-          showTimetrackState('results');
-        } else {
-          timetrackErrorText.textContent = result.error || 'Failed to generate summary';
-          showTimetrackState('error');
-        }
-      } catch (err) {
-        timetrackErrorText.textContent = err.message;
-        showTimetrackState('error');
-      }
-    });
-
-    function resetTimetrackState() {
-      ttEmailData = [];
-      ttEmailPath = null;
-      ttCalendarPath = null;
-      timetrackEmailSelected.textContent = '';
-      timetrackCalendarSelected.textContent = '';
-      timetrackEmailDrop.classList.remove('selected');
-      timetrackCalendarDrop.classList.remove('selected');
-      updateTimetrackButton();
-      showTimetrackState('idle');
-    }
-
-    timetrackResetBtn.addEventListener('click', resetTimetrackState);
-    timetrackRetryBtn.addEventListener('click', resetTimetrackState);
-
-    // Listen for timetrack progress
-    ipcRenderer.on('timetrack-progress', (event, data) => {
-      timetrackProgressText.textContent = data.message;
-      timetrackProgressFill.style.width = data.percent + '%';
-    });
-
     // ========== UPDATE CHECKLIST TAB ==========
     const checklistDocDrop = document.getElementById('checklistDocDrop');
     const checklistEmailDrop = document.getElementById('checklistEmailDrop');
@@ -10931,7 +10816,6 @@
       collateProcessing: resetCollateState,
       redlineProcessing: resetRedlineState,
       emailProcessing: resetEmailState,
-      timetrackProcessing: resetTimetrackState,
       checklistProcessing: resetChecklistState,
       punchlistProcessing: resetPunchlistState
     };
