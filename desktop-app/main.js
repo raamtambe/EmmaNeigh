@@ -3863,6 +3863,8 @@ const IMANAGE_PS_BOOTSTRAP = `
 # Global COM type tracking — set by Get-IManageWorkObjectFactory
 $global:IManageProgId = ''
 $global:IManageCOMType = ''  # 'IManDMS', 'WorkObjectFactory', 'WorkSite'
+$global:IManageCandidateDiagnostics = @()
+$global:IManageSelectionDetails = @{}
 
 function Get-IManageMethodNames($obj) {
   try {
@@ -3907,6 +3909,78 @@ function Resolve-IManageCOMType($obj, $progId) {
   return 'WorkObjectFactory'
 }
 
+function Get-IManageCapabilitySnapshot($obj, $progId) {
+  $methods = Get-IManageMethodNames $obj
+  $properties = Get-IManagePropertyNames $obj
+
+  $searchMethodSet = @('FindProfiles', 'SearchProfiles', 'CreateProfileSearchParameters', 'GetFiles')
+  $writeMethodSet = @('SaveAsFiles', 'SaveAsNewVersion', 'SaveFiles', 'ImportDocument', 'AddDocument', 'CheckInFiles')
+  $folderMethodSet = @('CreateFolder', 'MakeFolder', 'NewFolder', 'AddFolder', 'CreateWorkspace')
+  $keyMethodSet = @(
+    'CreateProfileSearchParameters',
+    'FindProfiles',
+    'GetFiles',
+    'SaveAsFiles',
+    'SaveAsNewVersion',
+    'SaveFiles',
+    'CheckOutFiles',
+    'CheckInFiles',
+    'ImportDocument',
+    'AddDocument',
+    'CreateFolder',
+    'MakeFolder',
+    'NewFolder',
+    'AddFolder',
+    'CreateWorkspace'
+  )
+  $keyPropertySet = @('Sessions', 'Databases', 'Connected', 'HasLogin')
+
+  $keyMethods = @($methods | Where-Object { $_ -in $keyMethodSet })
+  $keyProperties = @($properties | Where-Object { $_ -in $keyPropertySet })
+
+  $hasDmsCapability = $false
+  try { $hasDmsCapability = Test-IManageDMSCapabilities $obj } catch { $hasDmsCapability = $false }
+
+  $hasSearchOps = @($methods | Where-Object { $_ -in $searchMethodSet }).Count -gt 0
+  $hasWriteOps = @($methods | Where-Object { $_ -in $writeMethodSet }).Count -gt 0
+  $hasFolderOps = @($methods | Where-Object { $_ -in $folderMethodSet }).Count -gt 0
+
+  $score = 0
+  if ($hasDmsCapability) { $score += 500 }
+  if ($progId -match 'IManDMS') { $score += 250 }
+  if ($methods -contains 'CreateProfileSearchParameters') { $score += 150 }
+  if (($properties -contains 'Sessions') -or ($properties -contains 'Databases')) { $score += 120 }
+  if ($hasSearchOps) { $score += 90 }
+  if ($hasWriteOps) { $score += 120 }
+  if ($hasFolderOps) { $score += 80 }
+  if ($methods.Count -ge 20) { $score += 60 }
+  if ($methods.Count -le 8) { $score -= 220 }
+  if ($progId -match 'iwComWrapper') { $score -= 200 }
+
+  return @{
+    score = [int]$score
+    method_count = [int]$methods.Count
+    property_count = [int]$properties.Count
+    has_dms_capability = [bool]$hasDmsCapability
+    has_search_ops = [bool]$hasSearchOps
+    has_write_ops = [bool]$hasWriteOps
+    has_folder_ops = [bool]$hasFolderOps
+    key_methods = $keyMethods
+    key_properties = $keyProperties
+  }
+}
+
+function Test-IManageLimitedApiSurface($snapshot, $apiType, $progId) {
+  if ($null -eq $snapshot) { return $true }
+  if ($apiType -eq 'IManDMS') { return $false }
+  if ($snapshot.has_write_ops -or $snapshot.has_folder_ops -or $snapshot.has_search_ops) {
+    if ($snapshot.method_count -gt 8) { return $false }
+  }
+  if (($progId -match 'iwComWrapper') -and ($snapshot.method_count -le 10)) { return $true }
+  if ($snapshot.method_count -le 8) { return $true }
+  return $false
+}
+
 function Use-IManageDMSApi($wof) {
   if ($global:IManageCOMType -eq 'IManDMS') { return $true }
   try {
@@ -3916,6 +3990,32 @@ function Use-IManageDMSApi($wof) {
     }
   } catch {}
   return $false
+}
+
+function Assert-IManageOperationSupport($wof, $operationName) {
+  if (Use-IManageDMSApi $wof) { return }
+
+  $methods = Get-IManageMethodNames $wof
+  $requirements = @{
+    browse = @('FindProfiles', 'GetFiles', 'SearchProfiles')
+    search = @('FindProfiles', 'SearchProfiles')
+    save = @('SaveAsFiles', 'SaveAsNewVersion', 'SaveFiles', 'ImportDocument', 'AddDocument', 'CheckInFiles')
+    checkout = @('GetFiles', 'CheckOutFiles', 'CopyFiles')
+    checkin = @('CheckInFiles', 'SaveFiles', 'SaveAsFiles', 'ImportDocument', 'AddDocument')
+    versions = @('GetDocumentVersions', 'FindProfiles', 'GetFiles')
+    create_folder = @('CreateFolder', 'MakeFolder', 'NewFolder', 'AddFolder', 'CreateWorkspace')
+  }
+
+  $requiredMethods = $requirements[$operationName]
+  if ($null -eq $requiredMethods -or $requiredMethods.Count -eq 0) { return }
+
+  $availableRequiredMethods = @($methods | Where-Object { $_ -in $requiredMethods })
+  if ($availableRequiredMethods.Count -gt 0) { return }
+
+  $progId = if ($global:IManageProgId) { $global:IManageProgId } else { 'unknown' }
+  $previewMethods = @($methods | Select-Object -First 12)
+  $preview = if ($previewMethods.Count -gt 0) { $previewMethods -join ', ' } else { 'none' }
+  throw ("iManage COM is connected through a limited API surface ($progId) that does not support '$operationName'. Available methods: $preview. Open iManage Work Desktop and sign in, then retry. If this persists, repair/reinstall iManage Work Desktop COM integration so IManDMS or full WorkObjectFactory methods are available.")
 }
 
 function Get-IManageWorkObjectFactory {
@@ -3930,19 +4030,65 @@ function Get-IManageWorkObjectFactory {
     'iManage.WorkSiteObjects.WorkObjectFactory',
     'iManage.Integrations.WorkObjectFactory'
   )
+
   $errors = @()
+  $candidates = @()
+  $bestObj = $null
+  $bestMeta = $null
+  $global:IManageCandidateDiagnostics = @()
+  $global:IManageSelectionDetails = @{}
+
   foreach ($progId in $progIds) {
     try {
       $obj = New-Object -ComObject $progId
       if ($null -ne $obj) {
-        $global:IManageProgId = $progId
-        $global:IManageCOMType = Resolve-IManageCOMType $obj $progId
-        return $obj
+        $apiType = Resolve-IManageCOMType $obj $progId
+        $snapshot = Get-IManageCapabilitySnapshot $obj $progId
+        $limitedSurface = Test-IManageLimitedApiSurface $snapshot $apiType $progId
+        $candidateMeta = @{
+          prog_id = $progId
+          api_type = $apiType
+          score = [int]$snapshot.score
+          method_count = [int]$snapshot.method_count
+          property_count = [int]$snapshot.property_count
+          key_methods = $snapshot.key_methods
+          key_properties = $snapshot.key_properties
+          limited_surface = [bool]$limitedSurface
+        }
+        $candidates += $candidateMeta
+
+        $useCandidate = $false
+        if ($null -eq $bestMeta) {
+          $useCandidate = $true
+        } elseif ($snapshot.score -gt $bestMeta.score) {
+          $useCandidate = $true
+        } elseif (($snapshot.score -eq $bestMeta.score) -and ($snapshot.method_count -gt $bestMeta.method_count)) {
+          $useCandidate = $true
+        }
+
+        if ($useCandidate) {
+          if ($null -ne $bestObj -and $bestObj -ne $obj) {
+            try { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($bestObj) | Out-Null } catch {}
+          }
+          $bestObj = $obj
+          $bestMeta = $candidateMeta
+        } else {
+          try { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($obj) | Out-Null } catch {}
+        }
       }
     } catch {
       $errors += ($progId + ': ' + $_.Exception.Message)
     }
   }
+
+  $global:IManageCandidateDiagnostics = $candidates
+  if ($null -ne $bestObj) {
+    $global:IManageProgId = $bestMeta.prog_id
+    $global:IManageCOMType = $bestMeta.api_type
+    $global:IManageSelectionDetails = $bestMeta
+    return $bestObj
+  }
+
   throw ('Unable to create iManage COM object. Tried: ' + ($progIds -join ', ') + '. Errors: ' + ($errors -join ' | ') + '. Ensure iManage Work Desktop is installed and running.')
 }
 
@@ -4926,6 +5072,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'browse'
 
   if (Use-IManageDMSApi $wof) {
     # IManDMS: browse documents using correct COM API
@@ -5048,6 +5195,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'save'
   $sourcePath = '${resolvedPath.replace(/'/g, "''")}'
   if (-not (Test-Path $sourcePath)) {
     $json = @{ error = "File not found: $sourcePath" } | ConvertTo-Json -Compress
@@ -5201,6 +5349,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'versions'
 
   if (Use-IManageDMSApi $wof) {
     # IManDMS: get document and enumerate Versions collection
@@ -5348,6 +5497,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'checkout'
 
   if (Use-IManageDMSApi $wof) {
     # IManDMS: find document via search, then download with GetCopy
@@ -5439,6 +5589,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'checkin'
   $sourcePath = '${escapedPath}'
 
   if (Use-IManageDMSApi $wof) {
@@ -5516,6 +5667,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'search'
 
   if (Use-IManageDMSApi $wof) {
     # IManDMS session-based search
@@ -5589,6 +5741,9 @@ $diag = @{
   com_progid = ''
   com_type = ''
   com_api_type = ''
+  com_candidates = @()
+  selected_candidate = @{}
+  limited_api_surface = $false
   login_status = 'unknown'
   dms_members = @{}
   session_members = @{}
@@ -5604,39 +5759,29 @@ try {
 } catch {}
 
 # ── Step 1: Create COM object ──
-$progIds = @(
-  'iManage.COMAPILib.IManDMS',
-  'iManage.Work.WorkObjectFactory',
-  'Com.iManage.Work.WorkObjectFactory',
-  'WorkSite.Application',
-  'iManage.WorkSite.Application',
-  'iManage.iwComWrapper.WorkObjectFactory',
-  'iManage.WorkSiteObjects.iwComWrapper.WorkObjectFactory',
-  'iManage.WorkSiteObjects.WorkObjectFactory',
-  'iManage.Integrations.WorkObjectFactory'
-)
-$comErrors = @()
 $wof = $null
-foreach ($progId in $progIds) {
-  try {
-      $wof = New-Object -ComObject $progId
-      if ($null -ne $wof) {
-        $diag.com_created = $true
-        $diag.com_progid = $progId
-        try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
-      try {
-        $diag.com_api_type = Resolve-IManageCOMType $wof $progId
-      } catch {
-        if ($progId -match 'IManDMS') { $diag.com_api_type = 'IManDMS' }
-        elseif ($progId -match 'WorkSite') { $diag.com_api_type = 'WorkSite' }
-        else { $diag.com_api_type = 'WorkObjectFactory' }
-      }
-      break
-    }
-  } catch { $comErrors += ($progId + ': ' + $_.Exception.Message) }
+try {
+  $wof = Get-IManageWorkObjectFactory
+  if ($null -ne $wof) {
+    $diag.com_created = $true
+    $diag.com_progid = $global:IManageProgId
+    try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
+    $diag.com_api_type = $global:IManageCOMType
+    try { $diag.selected_candidate = $global:IManageSelectionDetails } catch {}
+    try { $diag.limited_api_surface = [bool]$global:IManageSelectionDetails.limited_surface } catch {}
+  }
+} catch {
+  $diag.error = $_.Exception.Message
+}
+try {
+  if ($global:IManageCandidateDiagnostics) {
+    $diag.com_candidates = $global:IManageCandidateDiagnostics
+  }
+} catch {}
+if (-not $diag.com_created -and -not $diag.error) {
+  $diag.error = 'No iManage COM object created.'
 }
 if (-not $diag.com_created) {
-  $diag.error = 'No iManage COM object created. Tried: ' + ($progIds -join ', ') + '. Errors: ' + ($comErrors -join ' | ')
   $json = $diag | ConvertTo-Json -Compress -Depth 4
   Write-Output "###JSON_START###$json###JSON_END###"
   exit 0
@@ -5814,6 +5959,7 @@ $ErrorActionPreference = 'Stop'
 try {
   $wof = Get-IManageWorkObjectFactory
   Ensure-IManageLogin $wof
+  Assert-IManageOperationSupport $wof 'create_folder'
 
   if (Use-IManageDMSApi $wof) {
     $folder = Create-IManDMSFolder $wof '${escapedName}' '${escapedParent}'
