@@ -1966,6 +1966,7 @@ async function callAnthropicPrompt({ apiKey, prompt, maxTokens }) {
 async function fetchOpenAICompatibleModels({ baseUrl, apiKey }) {
   const headers = {};
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  // Try OpenAI-compatible /v1/models first
   const response = await requestHttps({
     baseUrl,
     path: '/v1/models',
@@ -1973,11 +1974,25 @@ async function fetchOpenAICompatibleModels({ baseUrl, apiKey }) {
     headers,
     timeoutMs: 15000
   });
-  if (response.statusCode !== 200) return [];
-  const entries = Array.isArray(response.jsonBody?.data) ? response.jsonBody.data : [];
-  return entries
-    .map(item => String(item?.id || '').trim())
-    .filter(Boolean);
+  if (response.statusCode === 200) {
+    const entries = Array.isArray(response.jsonBody?.data) ? response.jsonBody.data : [];
+    const models = entries.map(item => String(item?.id || '').trim()).filter(Boolean);
+    if (models.length > 0) return models;
+  }
+  // Fallback: Ollama native /api/tags endpoint (for older Ollama versions)
+  try {
+    const tagsResponse = await requestHttps({
+      baseUrl,
+      path: '/api/tags',
+      method: 'GET',
+      headers: {},
+      timeoutMs: 15000
+    });
+    if (tagsResponse.statusCode === 200 && Array.isArray(tagsResponse.jsonBody?.models)) {
+      return tagsResponse.jsonBody.models.map(m => String(m?.name || '').trim()).filter(Boolean);
+    }
+  } catch (_) {}
+  return [];
 }
 
 async function callOpenAICompatiblePrompt({ baseUrl, apiKey, prompt, maxTokens, modelCandidates, providerLabel }) {
@@ -1996,6 +2011,7 @@ async function callOpenAICompatiblePrompt({ baseUrl, apiKey, prompt, maxTokens, 
       model: modelName,
       max_tokens: maxTokens,
       temperature: 0,
+      stream: false,
       messages: [{ role: 'user', content: prompt }]
     });
 
@@ -2082,20 +2098,56 @@ async function callHarveyPrompt({ apiKey, prompt, maxTokens }) {
 }
 
 async function callOllamaPrompt({ apiKey, prompt, maxTokens }) {
+  const ollamaBase = getOllamaBaseUrl();
   const modelCandidates = [
     getOllamaModel(),
     DEFAULT_OLLAMA_MODEL,
     'llama3.1:8b',
     'qwen2.5:7b'
   ];
-  return callOpenAICompatiblePrompt({
-    baseUrl: getOllamaBaseUrl(),
+
+  // Try OpenAI-compatible endpoint first (preferred, works with Ollama 0.1.24+)
+  const openaiResult = await callOpenAICompatiblePrompt({
+    baseUrl: ollamaBase,
     apiKey,
     prompt,
     maxTokens,
     modelCandidates,
     providerLabel: 'Ollama'
   });
+  if (openaiResult.success) return openaiResult;
+
+  // Fallback: Ollama native /api/chat endpoint (for older versions or when /v1 fails)
+  const discovered = await fetchOpenAICompatibleModels({ baseUrl: ollamaBase, apiKey });
+  const allCandidates = Array.from(new Set([...modelCandidates, ...discovered]));
+  let lastError = openaiResult.error || 'Unknown error';
+
+  for (const modelName of allCandidates) {
+    try {
+      const response = await requestHttps({
+        baseUrl: ollamaBase,
+        path: '/api/chat',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: modelName,
+          stream: false,
+          messages: [{ role: 'user', content: prompt }],
+          options: maxTokens ? { num_predict: maxTokens } : {}
+        }),
+        timeoutMs: 90000
+      });
+      if (response.statusCode === 200 && response.jsonBody?.message?.content) {
+        return { success: true, text: String(response.jsonBody.message.content).trim(), modelUsed: modelName };
+      }
+      if (response.statusCode === 404) continue; // Model not found, try next
+      lastError = getErrorDetail(response);
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+
+  return { success: false, error: `Ollama is not responding. Ensure Ollama is running (ollama serve) and a model is pulled. Last error: ${lastError}` };
 }
 
 async function callLmStudioPrompt({ apiKey, prompt, maxTokens }) {
@@ -3572,6 +3624,26 @@ const COMMAND_TOOLS = [
     }
   },
   {
+    name: 'imanage_redline_versions',
+    description: 'Redline two versions of an iManage document using Litera Compare and optionally email the result. Checks out both versions from iManage, runs a Litera full-document comparison, and can send the redline via Outlook. Use when the user wants to compare version 1 to version 2 (or any two versions) of an iManage document.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        profile_id: { type: 'string', description: 'The iManage profile ID (document number) to redline' },
+        version_1: { type: 'string', description: 'Version number for the original/older side (e.g. "1"). If omitted, auto-detects the earliest version.' },
+        version_2: { type: 'string', description: 'Version number for the modified/newer side (e.g. "2"). If omitted, auto-detects the latest version.' },
+        email_to: { type: 'string', description: 'Email recipient(s) to send the redline to (semicolon-separated). If omitted, the redline is saved locally without emailing.' },
+        email_cc: { type: 'string', description: 'CC recipients (semicolon-separated)' },
+        email_subject: { type: 'string', description: 'Custom email subject. If omitted, auto-generates from document name and versions.' },
+        email_body: { type: 'string', description: 'Custom email body (HTML). If omitted, auto-generates.' },
+        output_format: { type: 'string', enum: ['pdf', 'docx'], description: 'Output format for the redline. Default: pdf.' },
+        output_folder: { type: 'string', description: 'Local folder to save the redline to. Default: Downloads/EmmaNeigh_Redlines.' },
+        change_pages_only: { type: 'boolean', description: 'If true, generates a Change Pages Only (CPO) redline — only pages with differences are included. Default: false (full document redline).' }
+      },
+      required: ['profile_id']
+    }
+  },
+  {
     name: 'run_redline',
     description: 'Compare two documents to produce a redline showing differences. Supports Word, PDF, Excel, and PowerPoint.',
     input_schema: {
@@ -3579,7 +3651,8 @@ const COMMAND_TOOLS = [
       properties: {
         original: { type: 'string', description: 'File path of the original document' },
         modified: { type: 'string', description: 'File path of the modified/revised document' },
-        engine: { type: 'string', enum: ['auto', 'litera', 'emmaneigh'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to EmmaNeigh).' }
+        engine: { type: 'string', enum: ['auto', 'litera', 'emmaneigh'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to EmmaNeigh).' },
+        change_pages_only: { type: 'boolean', description: 'If true, generates a Change Pages Only (CPO) redline — only pages with differences. Default: false.' }
       },
       required: ['original', 'modified']
     }
@@ -3774,6 +3847,24 @@ const COMMAND_TOOLS = [
       },
       required: ['to', 'subject', 'body']
     }
+  },
+  {
+    name: 'outlook_reply_email',
+    description: 'Reply (or reply-all) to an existing Outlook email thread. Use when the user wants to respond to a specific email. Requires the entry_id from a previous outlook_search or outlook_read_email result.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entry_id: { type: 'string', description: 'The Outlook EntryID of the email to reply to' },
+        body: { type: 'string', description: 'Reply body text (HTML supported). This will be prepended above the original message.' },
+        reply_all: { type: 'boolean', description: 'If true, reply to all recipients. Default: false (reply to sender only).' },
+        attachments: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of local file paths to attach to the reply'
+        }
+      },
+      required: ['entry_id', 'body']
+    }
   }
 ];
 
@@ -3963,71 +4054,159 @@ function Get-IManageComInfo($wof) {
 }
 
 # ── IManDMS session-based helpers (iManage Work 10.x) ──────────────────
+# Uses the actual iManage COM API: IManDMS → Sessions → Database → SearchDocuments
+
+# ── iManage COM enum constants ──
+# imProfileAttributeID enum values (for CreateProfileSearchParameters.Add)
+$script:imProfileDocnum     = 1
+$script:imProfileVersion    = 2
+$script:imProfileName       = 3
+$script:imProfileDescription = 4
+$script:imProfileAuthor     = 5
+# imGetCopyOptions enum
+$script:imNativeFormat      = 0
+# imCheckinDisposition enum
+$script:imCheckinNewVersion = 1
+$script:imCheckinNewDocument = 0
+# imCheckinOptions enum
+$script:imDontKeepCheckedOut = 0
+$script:imKeepCheckedOut     = 1
+# Try to load actual enum types from the COM type library
+try { $script:imProfileDocnum = [int][iManage.imProfileAttributeID]::imProfileDocnum } catch {}
+try { $script:imProfileName = [int][iManage.imProfileAttributeID]::imProfileName } catch {}
+try { $script:imProfileDescription = [int][iManage.imProfileAttributeID]::imProfileDescription } catch {}
+try { $script:imNativeFormat = [int][iManage.imGetCopyOptions]::imNativeFormat } catch {}
+try { $script:imCheckinNewVersion = [int][iManage.imCheckinDisposition]::imCheckinNewVersion } catch {}
 
 function Get-IManDMSSession($dms) {
+  $errors = @()
+  # Try 1: Enumerate existing sessions (iManage Desktop should provide one)
   try {
     $sessions = $dms.Sessions
-    if ($null -ne $sessions -and $sessions.Count -gt 0) {
-      for ($i = 1; $i -le $sessions.Count; $i++) {
-        try {
-          $s = $sessions.Item($i)
+    if ($null -ne $sessions) {
+      # Try PowerShell-native foreach enumeration first (most reliable for COM)
+      try {
+        foreach ($s in $sessions) {
           if ($null -ne $s) { return $s }
-        } catch {}
-      }
+        }
+      } catch { $errors += ('foreach Sessions: ' + $_.Exception.Message) }
+      # Try 1-based COM index
+      try {
+        $cnt = $sessions.Count
+        if ($cnt -gt 0) {
+          for ($i = 1; $i -le $cnt; $i++) {
+            try {
+              $s = $sessions.Item($i)
+              if ($null -ne $s) { return $s }
+            } catch {}
+          }
+        }
+      } catch { $errors += ('Sessions.Item: ' + $_.Exception.Message) }
     }
-  } catch {}
+  } catch { $errors += ('Sessions access: ' + $_.Exception.Message) }
+  # Try 2: Add a new session (may need server name — try empty first)
+  try {
+    $session = $dms.Sessions.Add('')
+    if ($null -ne $session) {
+      try { $session.TrustedLogin() } catch {}
+      return $session
+    }
+  } catch { $errors += ('Sessions.Add(empty): ' + $_.Exception.Message) }
   try {
     $session = $dms.Sessions.Add()
     if ($null -ne $session) {
       try { $session.TrustedLogin() } catch {}
       return $session
     }
-  } catch {}
-  throw "Could not get or create iManage DMS session. Ensure iManage Work Desktop is running and you are signed in."
+  } catch { $errors += ('Sessions.Add(): ' + $_.Exception.Message) }
+  throw ('Could not get or create iManage DMS session. Methods tried: ' + ($errors -join ' | ') + '. Ensure iManage Work Desktop is running and you are signed in.')
 }
 
 function Get-IManDMSDatabase($session) {
-  try {
-    $wa = $session.WorkArea
-    if ($null -ne $wa) { return $wa }
-  } catch {}
+  $errors = @()
+  # Try 1: Enumerate Databases collection with foreach
   try {
     $dbs = $session.Databases
-    if ($null -ne $dbs -and $dbs.Count -gt 0) {
-      for ($i = 1; $i -le $dbs.Count; $i++) {
-        try {
-          $db = $dbs.Item($i)
+    if ($null -ne $dbs) {
+      try {
+        foreach ($db in $dbs) {
           if ($null -ne $db) { return $db }
-        } catch {}
-      }
+        }
+      } catch { $errors += ('foreach Databases: ' + $_.Exception.Message) }
+      # Try 1-based COM index
+      try {
+        $cnt = $dbs.Count
+        if ($cnt -gt 0) {
+          for ($i = 1; $i -le $cnt; $i++) {
+            try {
+              $db = $dbs.Item($i)
+              if ($null -ne $db) { return $db }
+            } catch {}
+          }
+        }
+      } catch { $errors += ('Databases.Item: ' + $_.Exception.Message) }
     }
-  } catch {}
+  } catch { $errors += ('Databases access: ' + $_.Exception.Message) }
+  # Try 2: PreferredDatabase property
   try {
     $pdb = $session.PreferredDatabase
     if ($null -ne $pdb) { return $pdb }
-  } catch {}
-  throw "Could not access iManage database. Ensure you are connected to an iManage library."
+  } catch { $errors += ('PreferredDatabase: ' + $_.Exception.Message) }
+  # Try 3: WorkArea property
+  try {
+    $wa = $session.WorkArea
+    if ($null -ne $wa) { return $wa }
+  } catch { $errors += ('WorkArea: ' + $_.Exception.Message) }
+  throw ('Could not access iManage database. Methods tried: ' + ($errors -join ' | ') + '. Ensure you are connected to an iManage library.')
 }
 
 function Get-IManDMSDocById($dms, $docNumber, $versionNum) {
   $session = Get-IManDMSSession $dms
   $db = Get-IManDMSDatabase $session
   $errors = @()
+  # Try 1: Search using CreateProfileSearchParameters on DMS object (correct API)
+  try {
+    $params = $dms.CreateProfileSearchParameters()
+    if ($null -ne $params) {
+      $params.Add($script:imProfileDocnum, [string]$docNumber)
+      $found = $db.SearchDocuments($params, $true)
+      if ($null -ne $found) {
+        foreach ($doc in $found) {
+          if ($null -ne $doc) {
+            # If specific version requested, try to access it
+            if ($null -ne $versionNum -and $versionNum -gt 0) {
+              try {
+                $versions = $doc.Versions
+                if ($null -ne $versions) {
+                  foreach ($v in $versions) {
+                    try {
+                      if ($null -ne $v -and $v.Version -eq $versionNum) { return $v }
+                    } catch {}
+                  }
+                }
+              } catch {}
+            }
+            return $doc
+          }
+        }
+      }
+    }
+  } catch { $errors += ('CreateProfileSearchParameters+SearchDocuments: ' + $_.Exception.Message) }
+  # Try 2: GetDocument on database (older API, may work on some installations)
   if ($null -ne $versionNum -and $versionNum -gt 0) {
     try {
-      $doc = $db.GetDocument($docNumber, $versionNum)
+      $doc = $db.GetDocument([int]$docNumber, [int]$versionNum)
       if ($null -ne $doc) { return $doc }
     } catch { $errors += ('GetDocument(num,ver): ' + $_.Exception.Message) }
   }
   try {
-    $doc = $db.GetDocument($docNumber)
-    if ($null -ne $doc) { return $doc }
-  } catch { $errors += ('GetDocument(num): ' + $_.Exception.Message) }
-  try {
-    $numInt = [int]$docNumber
-    $doc = $db.GetDocument($numInt)
+    $doc = $db.GetDocument([int]$docNumber)
     if ($null -ne $doc) { return $doc }
   } catch { $errors += ('GetDocument(int): ' + $_.Exception.Message) }
+  try {
+    $doc = $db.GetDocument([string]$docNumber)
+    if ($null -ne $doc) { return $doc }
+  } catch { $errors += ('GetDocument(str): ' + $_.Exception.Message) }
   throw ('Could not retrieve document ' + $docNumber + '. Errors: ' + ($errors -join ' | '))
 }
 
@@ -4036,34 +4215,45 @@ function Search-IManDMSDocs($dms, $queryText, $maxResults) {
   $session = Get-IManDMSSession $dms
   $db = Get-IManDMSDatabase $session
   $errors = @()
+  # Try 1: CreateProfileSearchParameters on DMS object (correct API)
   try {
-    $params = $db.CreateSearchParameters()
+    $params = $dms.CreateProfileSearchParameters()
     if ($null -ne $params) {
-      try { $params.Add('DESCRIPTION', $queryText) } catch {}
-      try { $params.Add('DOCNAME', $queryText) } catch {
-        try { $params.Add('NAME', $queryText) } catch {}
-      }
-      $found = $db.SearchDocuments($params, $maxResults)
+      # Add search criteria — try description and name fields
+      try { $params.Add($script:imProfileDescription, $queryText) } catch {}
+      try { $params.Add($script:imProfileName, $queryText) } catch {}
+      $found = $db.SearchDocuments($params, $true)
       if ($null -ne $found) {
         $results = @()
-        foreach ($doc in $found) { $results += $doc }
+        foreach ($doc in $found) { if ($null -ne $doc) { $results += $doc } }
         if ($results.Count -gt 0) { return $results }
       }
     }
-  } catch { $errors += ('SearchDocuments(params): ' + $_.Exception.Message) }
+  } catch { $errors += ('DMS.CreateProfileSearchParameters: ' + $_.Exception.Message) }
+  # Try 2: CreateSearchParameters on Database (some older versions)
   try {
-    $found = $db.SearchDocuments($queryText)
-    if ($null -ne $found) {
-      $results = @()
-      foreach ($doc in $found) { $results += $doc }
-      if ($results.Count -gt 0) { return $results }
+    $params = $db.CreateSearchParameters()
+    if ($null -ne $params) {
+      try { $params.Add($script:imProfileDescription, $queryText) } catch {
+        try { $params.Add('DESCRIPTION', $queryText) } catch {}
+      }
+      try { $params.Add($script:imProfileName, $queryText) } catch {
+        try { $params.Add('NAME', $queryText) } catch {}
+      }
+      $found = $db.SearchDocuments($params, $true)
+      if ($null -ne $found) {
+        $results = @()
+        foreach ($doc in $found) { if ($null -ne $doc) { $results += $doc } }
+        if ($results.Count -gt 0) { return $results }
+      }
     }
-  } catch { $errors += ('SearchDocuments(string): ' + $_.Exception.Message) }
+  } catch { $errors += ('db.CreateSearchParameters: ' + $_.Exception.Message) }
+  # Try 3: QuickSearch on database
   try {
     $found = $db.QuickSearch($queryText, $maxResults)
     if ($null -ne $found) {
       $results = @()
-      foreach ($doc in $found) { $results += $doc }
+      foreach ($doc in $found) { if ($null -ne $doc) { $results += $doc } }
       if ($results.Count -gt 0) { return $results }
     }
   } catch { $errors += ('QuickSearch: ' + $_.Exception.Message) }
@@ -4073,26 +4263,96 @@ function Search-IManDMSDocs($dms, $queryText, $maxResults) {
   return @()
 }
 
+function Get-IManDMSDocCopy($doc, $destPath) {
+  # Download a document to a local path using the correct COM API
+  $errors = @()
+  # Try 1: GetCopy with native format option (correct API)
+  try {
+    $doc.GetCopy($destPath, $script:imNativeFormat)
+    if (Test-Path $destPath) { return $true }
+  } catch { $errors += ('GetCopy(path,format): ' + $_.Exception.Message) }
+  # Try 2: GetCopy with single param
+  try {
+    $doc.GetCopy($destPath)
+    if (Test-Path $destPath) { return $true }
+  } catch { $errors += ('GetCopy(path): ' + $_.Exception.Message) }
+  # Try 3: CheckOut methods (may work on some versions)
+  try {
+    $doc.CheckOut($destPath, 1)
+    if (Test-Path $destPath) { return $true }
+  } catch { $errors += ('CheckOut(path,mode): ' + $_.Exception.Message) }
+  try {
+    $doc.CheckOut($destPath)
+    if (Test-Path $destPath) { return $true }
+  } catch { $errors += ('CheckOut(path): ' + $_.Exception.Message) }
+  # Try 4: Copy method
+  try {
+    $doc.Copy($destPath)
+    if (Test-Path $destPath) { return $true }
+  } catch { $errors += ('Copy: ' + $_.Exception.Message) }
+  throw ('Could not download document. Methods tried: ' + ($errors -join ' | '))
+}
+
+function Set-IManDMSDocCheckin($doc, $sourcePath, $comment) {
+  # Check in a document using the correct COM API
+  if (-not $comment) { $comment = 'Checked in via EmmaNeigh' }
+  $errors = @()
+  # Try 1: CheckInWithResults (correct iManage COM API)
+  try {
+    $result = $doc.CheckInWithResults($sourcePath, $script:imCheckinNewVersion, $script:imDontKeepCheckedOut)
+    return $true
+  } catch { $errors += ('CheckInWithResults: ' + $_.Exception.Message) }
+  # Try 2: CheckInEx (extended checkin with full params)
+  try {
+    $checkInResults = $null
+    $doc.CheckInEx($sourcePath, $script:imCheckinNewVersion, $script:imDontKeepCheckedOut, 0, 'EmmaNeigh', $comment, $sourcePath, [ref]$checkInResults)
+    return $true
+  } catch { $errors += ('CheckInEx: ' + $_.Exception.Message) }
+  # Try 3: Simple CheckIn (older API variants)
+  try {
+    $doc.CheckIn($sourcePath, $comment)
+    return $true
+  } catch { $errors += ('CheckIn(path,comment): ' + $_.Exception.Message) }
+  try {
+    $doc.CheckIn($sourcePath)
+    return $true
+  } catch { $errors += ('CheckIn(path): ' + $_.Exception.Message) }
+  # Try 4: UpdateFromFile
+  try {
+    $doc.UpdateFromFile($sourcePath)
+    return $true
+  } catch { $errors += ('UpdateFromFile: ' + $_.Exception.Message) }
+  throw ('Could not check in document. Methods tried: ' + ($errors -join ' | '))
+}
+
 function Import-IManDMSDoc($dms, $localPath) {
   $session = Get-IManDMSSession $dms
   $db = Get-IManDMSDatabase $session
   $errors = @()
-  try {
-    $doc = $db.ImportDocument($localPath)
-    if ($null -ne $doc) { return $doc }
-  } catch { $errors += ('db.ImportDocument: ' + $_.Exception.Message) }
+  # Try 1: CreateDocument + set properties + CheckInWithResults
   try {
     $doc = $db.CreateDocument()
     if ($null -ne $doc) {
       $fileName = [System.IO.Path]::GetFileNameWithoutExtension($localPath)
       $ext = [System.IO.Path]::GetExtension($localPath).TrimStart('.')
-      try { $doc.Name = $fileName } catch {}
-      try { $doc.Extension = $ext } catch {}
-      try { $doc.Type = $ext } catch {}
-      $doc.UpdateFromFile($localPath)
-      return $doc
+      try { $doc.SetAttributeByID($script:imProfileName, $fileName) } catch {
+        try { $doc.Name = $fileName } catch {}
+      }
+      try { $doc.Type = $ext } catch {
+        try { $doc.Extension = $ext } catch {}
+      }
+      try {
+        Set-IManDMSDocCheckin $doc $localPath 'Imported via EmmaNeigh'
+        return $doc
+      } catch { $errors += ('CreateDocument+Checkin: ' + $_.Exception.Message) }
     }
-  } catch { $errors += ('CreateDocument+UpdateFromFile: ' + $_.Exception.Message) }
+  } catch { $errors += ('CreateDocument: ' + $_.Exception.Message) }
+  # Try 2: ImportDocument on database
+  try {
+    $doc = $db.ImportDocument($localPath)
+    if ($null -ne $doc) { return $doc }
+  } catch { $errors += ('db.ImportDocument: ' + $_.Exception.Message) }
+  # Try 3: AddDocument
   try {
     $doc = $db.AddDocument($localPath)
     if ($null -ne $doc) { return $doc }
@@ -4113,6 +4373,8 @@ function Extract-IManDocInfo($doc) {
   try { $info.author = $doc.Author } catch { $info.author = '' }
   try { $info.description = $doc.Description } catch { $info.description = '' }
   try { $info.path = $doc.Path } catch { $info.path = '' }
+  try { $info.class_name = $doc.Class } catch { $info.class_name = '' }
+  try { $info.database = $doc.Database } catch { $info.database = '' }
   return $info
 }
 
@@ -4633,26 +4895,41 @@ try {
   Ensure-IManageLogin $wof
 
   if ($global:IManageCOMType -eq 'IManDMS') {
-    # IManDMS session-based path — list recent workspace documents
+    # IManDMS: browse documents using correct COM API
     $session = Get-IManDMSSession $wof
     $db = Get-IManDMSDatabase $session
     $docs = @()
     $browseErrors = @()
-    # Try RecentDocuments
+    # Try 1: CreateProfileSearchParameters on DMS + SearchDocuments (correct API)
     try {
-      $recent = $db.RecentDocuments
-      if ($null -ne $recent) { foreach ($d in $recent) { $docs += $d } }
-    } catch { $browseErrors += ('RecentDocuments: ' + $_.Exception.Message) }
-    # Try SearchDocuments with wildcard if no recent docs
+      $params = $wof.CreateProfileSearchParameters()
+      if ($null -ne $params) {
+        try { $params.Add($script:imProfileName, '*') } catch {
+          try { $params.Add(3, '*') } catch {}
+        }
+        $found = $db.SearchDocuments($params, $true)
+        if ($null -ne $found) { foreach ($d in $found) { if ($null -ne $d) { $docs += $d } } }
+      }
+    } catch { $browseErrors += ('DMS.CreateProfileSearchParameters: ' + $_.Exception.Message) }
+    # Try 2: RecentDocuments (property on database)
+    if ($docs.Count -eq 0) {
+      try {
+        $recent = $db.RecentDocuments
+        if ($null -ne $recent) { foreach ($d in $recent) { if ($null -ne $d) { $docs += $d } } }
+      } catch { $browseErrors += ('RecentDocuments: ' + $_.Exception.Message) }
+    }
+    # Try 3: Fallback CreateSearchParameters on database (older API)
     if ($docs.Count -eq 0) {
       try {
         $params = $db.CreateSearchParameters()
         if ($null -ne $params) {
-          try { $params.Add('DOCNAME', '*') } catch {}
-          $found = $db.SearchDocuments($params, 25)
-          if ($null -ne $found) { foreach ($d in $found) { $docs += $d } }
+          try { $params.Add($script:imProfileName, '*') } catch {
+            try { $params.Add('NAME', '*') } catch {}
+          }
+          $found = $db.SearchDocuments($params, $true)
+          if ($null -ne $found) { foreach ($d in $found) { if ($null -ne $d) { $docs += $d } } }
         }
-      } catch { $browseErrors += ('SearchDocuments(*): ' + $_.Exception.Message) }
+      } catch { $browseErrors += ('db.CreateSearchParameters: ' + $_.Exception.Message) }
     }
     if ($docs.Count -eq 0 -and $browseErrors.Count -gt 0) {
       throw ('Could not browse iManage documents. Methods tried: ' + ($browseErrors -join ' | '))
@@ -4748,7 +5025,7 @@ try {
   if ($global:IManageCOMType -eq 'IManDMS') {
     # IManDMS session-based save
     ${normalizedAction === 'new_version' ? `
-    # New version via IManDMS — find document, then CheckIn / UpdateFromFile
+    # New version via IManDMS — find document, then use Set-IManDMSDocCheckin helper
     $saveErrors = @()
     $docSaved = $false
     # Try to get document number from file name pattern (e.g. 12345_1.doc)
@@ -4759,8 +5036,11 @@ try {
       try {
         $doc = Get-IManDMSDocById $wof $docNum $null
         if ($null -ne $doc) {
-          try { $doc.CheckIn($sourcePath); $docSaved = $true } catch { $saveErrors += ('CheckIn: ' + $_.Exception.Message) }
-          if (-not $docSaved) { try { $doc.UpdateFromFile($sourcePath); $docSaved = $true } catch { $saveErrors += ('UpdateFromFile: ' + $_.Exception.Message) } }
+          try {
+            Set-IManDMSDocCheckin $doc $sourcePath 'New version via EmmaNeigh'
+            $docSaved = $true
+            try { $doc.Refresh() } catch {}
+          } catch { $saveErrors += ('Set-IManDMSDocCheckin: ' + $_.Exception.Message) }
           if ($docSaved) {
             $info = Extract-IManDocInfo $doc
             $json = @{ success = $true; action = "new_version"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
@@ -4774,11 +5054,11 @@ try {
       # Fall back to import as new document
       $doc = Import-IManDMSDoc $wof $sourcePath
       $info = Extract-IManDocInfo $doc
-      $json = @{ success = $true; action = "new_document"; note = "Saved as new document (could not save as new version)"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+      $json = @{ success = $true; action = "new_document"; note = "Saved as new document (could not save as new version). Errors: " + ($saveErrors -join " | "); files = @($info) } | ConvertTo-Json -Compress -Depth 4
       Write-Output "###JSON_START###\$json###JSON_END###"
     }
     ` : `
-    # New document via IManDMS — import
+    # New document via IManDMS — import using bootstrap helper
     $doc = Import-IManDMSDoc $wof $sourcePath
     $info = Extract-IManDocInfo $doc
     $json = @{ success = $true; action = "new_document"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
@@ -4864,17 +5144,25 @@ try {
     $doc = Get-IManDMSDocById $wof '${escapedId}' $null
     $results = @()
     $versionsErrors = @()
-    # Try Versions collection
+
+    # Try to get latest version number for reference
+    $latestVersionNum = $null
+    try { $latestVersionNum = $doc.LatestVersion } catch {}
+    if ($null -eq $latestVersionNum) { try { $latestVersionNum = $doc.Version } catch {} }
+
+    # Try Versions collection (primary approach)
     try {
       $versions = $doc.Versions
       if ($null -ne $versions) {
         foreach ($v in $versions) {
           $info = Extract-IManDocInfo $v
-          try { $info.date = $v.EditDate } catch { try { $info.date = $v.Date } catch { $info.date = '' } }
+          try { $info.date = $v.EditDate } catch { try { $info.date = $v.EditProfileDate } catch { try { $info.date = $v.Date } catch { $info.date = '' } } }
+          try { $info.is_latest = ($v.Version -eq $latestVersionNum) } catch { $info.is_latest = $false }
           $results += $info
         }
       }
     } catch { $versionsErrors += ('doc.Versions: ' + $_.Exception.Message) }
+
     # Fallback: try GetVersions method
     if ($results.Count -eq 0) {
       try {
@@ -4882,19 +5170,44 @@ try {
         if ($null -ne $versions) {
           foreach ($v in $versions) {
             $info = Extract-IManDocInfo $v
-            try { $info.date = $v.EditDate } catch { $info.date = '' }
+            try { $info.date = $v.EditDate } catch { try { $info.date = $v.Date } catch { $info.date = '' } }
+            try { $info.is_latest = ($v.Version -eq $latestVersionNum) } catch { $info.is_latest = $false }
             $results += $info
           }
         }
       } catch { $versionsErrors += ('GetVersions(): ' + $_.Exception.Message) }
     }
-    # Fallback: just return the document itself as a single version
+
+    # Fallback: search for all versions by document number
+    if ($results.Count -eq 0) {
+      try {
+        $session = Get-IManDMSSession $wof
+        $db = Get-IManDMSDatabase $session
+        $params = $wof.CreateProfileSearchParameters()
+        $params.Add($script:imProfileDocnum, '${escapedId}')
+        $searchResults = $db.SearchDocuments($params, $true)
+        if ($null -ne $searchResults) {
+          foreach ($v in $searchResults) {
+            $info = Extract-IManDocInfo $v
+            try { $info.date = $v.EditDate } catch { try { $info.date = $v.Date } catch { $info.date = '' } }
+            $results += $info
+          }
+        }
+      } catch { $versionsErrors += ('SearchDocuments fallback: ' + $_.Exception.Message) }
+    }
+
+    # Final fallback: just return the document itself as a single version
     if ($results.Count -eq 0) {
       $info = Extract-IManDocInfo $doc
       try { $info.date = $doc.EditDate } catch { $info.date = '' }
+      $info.is_latest = $true
       $results += $info
     }
-    $json = $results | ConvertTo-Json -Compress -Depth 3
+
+    $output = @{ versions = $results }
+    if ($versionsErrors.Count -gt 0) { $output.diagnostics = $versionsErrors }
+    if ($null -ne $latestVersionNum) { $output.latest_version = $latestVersionNum }
+    $json = $output | ConvertTo-Json -Compress -Depth 4
     Write-Output "###JSON_START###$json###JSON_END###"
   } else {
     # WorkObjectFactory path
@@ -4941,7 +5254,11 @@ try {
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
   if (failure) return failure;
-  return { success: true, versions: normalizeIManageArrayPayload(result.data, 'versions') };
+  const versions = normalizeIManageArrayPayload(result.data, 'versions');
+  const output = { success: true, versions };
+  if (result.data && result.data.latest_version != null) output.latest_version = result.data.latest_version;
+  if (result.data && Array.isArray(result.data.diagnostics) && result.data.diagnostics.length > 0) output.diagnostics = result.data.diagnostics;
+  return output;
 }
 
 async function imanageCheckout(profileId, checkoutPath, version = null) {
@@ -4970,7 +5287,7 @@ try {
   Ensure-IManageLogin $wof
 
   if ($global:IManageCOMType -eq 'IManDMS') {
-    # IManDMS: get document by ID and checkout/copy to local
+    # IManDMS: find document via search, then download with GetCopy
     $doc = Get-IManDMSDocById $wof '${escapedId}' ${versionNumber === null ? '$null' : versionNumber}
     $checkoutDir = '${escapedCheckoutPath}'
     if (-not $checkoutDir) { $checkoutDir = [System.IO.Path]::GetTempPath() }
@@ -4982,16 +5299,8 @@ try {
     if ($docExt -and -not $docName.EndsWith(".$docExt")) { $docName = "$docName.$docExt" }
     $destPath = [System.IO.Path]::Combine($checkoutDir, $docName)
     if (-not (Test-Path $checkoutDir)) { New-Item -ItemType Directory -Path $checkoutDir -Force | Out-Null }
-    $coErrors = @()
-    $coSuccess = $false
-    # Try CheckOut
-    try { $doc.CheckOut($destPath, 1); $coSuccess = $true } catch { $coErrors += ('CheckOut(path,mode): ' + $_.Exception.Message) }
-    if (-not $coSuccess) { try { $doc.CheckOut($destPath); $coSuccess = $true } catch { $coErrors += ('CheckOut(path): ' + $_.Exception.Message) } }
-    # Try GetCopy (download without lock)
-    if (-not $coSuccess) { try { $doc.GetCopy($destPath); $coSuccess = $true } catch { $coErrors += ('GetCopy: ' + $_.Exception.Message) } }
-    # Try Copy
-    if (-not $coSuccess) { try { $doc.Copy($destPath); $coSuccess = $true } catch { $coErrors += ('Copy: ' + $_.Exception.Message) } }
-    if (-not $coSuccess) { throw ('Could not checkout document. Methods tried: ' + ($coErrors -join ' | ')) }
+    # Use Get-IManDMSDocCopy (tries GetCopy, CheckOut, Copy in correct order)
+    Get-IManDMSDocCopy $doc $destPath
     $info = Extract-IManDocInfo $doc
     $info.path = $destPath
     $json = @{ success = $true; files = @($info); requested_version = ${versionNumber === null ? '""' : versionNumber} } | ConvertTo-Json -Compress -Depth 4
@@ -5070,27 +5379,25 @@ try {
   $sourcePath = '${escapedPath}'
 
   if ($global:IManageCOMType -eq 'IManDMS') {
-    # IManDMS: extract doc number from filename, get document, check in
+    # IManDMS: extract doc number from filename, find document, check in with correct API
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourcePath)
     $docNumMatch = [regex]::Match($baseName, '(\d{4,})')
-    $ciErrors = @()
     $ciSuccess = $false
     if ($docNumMatch.Success) {
       $docNum = $docNumMatch.Groups[1].Value
       try {
         $doc = Get-IManDMSDocById $wof $docNum $null
         if ($null -ne $doc) {
-          try { $doc.CheckIn($sourcePath, 'Checked in via EmmaNeigh'); $ciSuccess = $true } catch { $ciErrors += ('CheckIn(path,comment): ' + $_.Exception.Message) }
-          if (-not $ciSuccess) { try { $doc.CheckIn($sourcePath); $ciSuccess = $true } catch { $ciErrors += ('CheckIn(path): ' + $_.Exception.Message) } }
-          if (-not $ciSuccess) { try { $doc.UpdateFromFile($sourcePath); $ciSuccess = $true } catch { $ciErrors += ('UpdateFromFile: ' + $_.Exception.Message) } }
-          if ($ciSuccess) {
-            $info = Extract-IManDocInfo $doc
-            $json = @{ success = $true; message = "File checked in successfully"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
-            Write-Output "###JSON_START###$json###JSON_END###"
-            exit 0
-          }
+          # Use Set-IManDMSDocCheckin (tries CheckInWithResults, CheckInEx, CheckIn, UpdateFromFile)
+          Set-IManDMSDocCheckin $doc $sourcePath 'Checked in via EmmaNeigh'
+          $ciSuccess = $true
+          try { $doc.Refresh() } catch {}
+          $info = Extract-IManDocInfo $doc
+          $json = @{ success = $true; message = "File checked in successfully"; files = @($info) } | ConvertTo-Json -Compress -Depth 4
+          Write-Output "###JSON_START###$json###JSON_END###"
+          exit 0
         }
-      } catch { $ciErrors += ('GetDoc: ' + $_.Exception.Message) }
+      } catch {}
     }
     if (-not $ciSuccess) {
       # Fallback: import as new document
@@ -5196,27 +5503,44 @@ try {
  */
 async function imanageTestConnection() {
   const script = `
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
+
+function Get-ObjectMembers($obj, $label, $maxMembers) {
+  if (-not $maxMembers) { $maxMembers = 80 }
+  $info = @{ label = $label; methods = @(); properties = @(); error = '' }
+  if ($null -eq $obj) { $info.error = 'null object'; return $info }
+  try {
+    $info.methods = @($obj.PSObject.Methods | ForEach-Object { $_.Name } | Sort-Object -Unique | Select-Object -First $maxMembers)
+  } catch { $info.error = 'methods: ' + $_.Exception.Message }
+  try {
+    $info.properties = @($obj.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object -Unique | Select-Object -First $maxMembers)
+  } catch { if (-not $info.error) { $info.error = 'properties: ' + $_.Exception.Message } }
+  return $info
+}
+
 $diag = @{
   platform = $env:OS
   powershell_version = $PSVersionTable.PSVersion.ToString()
-  architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+  architecture = 'unknown'
   com_created = $false
   com_progid = ''
   com_type = ''
+  com_api_type = ''
   login_status = 'unknown'
-  available_methods = @()
-  available_properties = @()
+  dms_members = @{}
+  session_members = @{}
+  database_members = @{}
+  document_members = @{}
+  sessions_info = @{ count = 0; error = '' }
+  databases_info = @{ count = 0; names = @(); error = '' }
   error = ''
 }
 
 try {
   $diag.architecture = if ([System.IntPtr]::Size -eq 8) { '64-bit' } else { '32-bit' }
-} catch {
-  $diag.architecture = 'unknown'
-}
+} catch {}
 
-# Try to create COM object
+# ── Step 1: Create COM object ──
 $progIds = @(
   'iManage.COMAPILib.IManDMS',
   'iManage.Work.WorkObjectFactory',
@@ -5228,7 +5552,6 @@ $progIds = @(
   'iManage.WorkSiteObjects.WorkObjectFactory',
   'iManage.Integrations.WorkObjectFactory'
 )
-
 $comErrors = @()
 $wof = $null
 foreach ($progId in $progIds) {
@@ -5238,72 +5561,151 @@ foreach ($progId in $progIds) {
       $diag.com_created = $true
       $diag.com_progid = $progId
       try { $diag.com_type = $wof.GetType().FullName } catch { $diag.com_type = 'unknown' }
-      # Classify COM type
-      if ($progId -match 'IManDMS') {
-        $diag.com_api_type = 'IManDMS'
-      } elseif ($progId -match 'WorkSite') {
-        $diag.com_api_type = 'WorkSite'
-      } else {
-        $diag.com_api_type = 'WorkObjectFactory'
-      }
+      if ($progId -match 'IManDMS') { $diag.com_api_type = 'IManDMS' }
+      elseif ($progId -match 'WorkSite') { $diag.com_api_type = 'WorkSite' }
+      else { $diag.com_api_type = 'WorkObjectFactory' }
       break
     }
-  } catch {
-    $comErrors += ($progId + ': ' + $_.Exception.Message)
-  }
+  } catch { $comErrors += ($progId + ': ' + $_.Exception.Message) }
 }
-
 if (-not $diag.com_created) {
-  $diag.error = 'No iManage COM object could be created. Tried: ' + ($progIds -join ', ') + '. Errors: ' + ($comErrors -join ' | ')
-  $json = $diag | ConvertTo-Json -Compress -Depth 3
+  $diag.error = 'No iManage COM object created. Tried: ' + ($progIds -join ', ') + '. Errors: ' + ($comErrors -join ' | ')
+  $json = $diag | ConvertTo-Json -Compress -Depth 4
   Write-Output "###JSON_START###$json###JSON_END###"
   exit 0
 }
 
-# Enumerate methods and properties
-try {
-  $diag.available_methods = @($wof.PSObject.Methods | ForEach-Object { $_.Name } | Sort-Object -Unique | Select-Object -First 50)
-} catch {}
-try {
-  $diag.available_properties = @($wof.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object -Unique | Select-Object -First 50)
-} catch {}
+# ── Step 2: Enumerate DMS object methods/properties ──
+$diag.dms_members = Get-ObjectMembers $wof 'DMS'
 
-# Check login
+# ── Step 3: Check login / sessions ──
 try {
-  $hasLoginMember = $false
   $hasLogin = $false
-
-  try {
-    $prop = $wof.PSObject.Properties['HasLogin']
-    if ($null -ne $prop) { $hasLoginMember = $true; $hasLogin = [bool]$wof.HasLogin }
-  } catch {}
-  if (-not $hasLoginMember) {
+  try { if ($wof.PSObject.Properties['HasLogin']) { $hasLogin = [bool]$wof.HasLogin } }
+  catch {}
+  if (-not $hasLogin) {
+    try { if ($wof.PSObject.Properties['Connected']) { $hasLogin = [bool]$wof.Connected } }
+    catch {}
+  }
+  if (-not $hasLogin) {
     try {
-      $prop = $wof.PSObject.Properties['Connected']
-      if ($null -ne $prop) { $hasLoginMember = $true; $hasLogin = [bool]$wof.Connected }
+      $sess = $wof.Sessions
+      if ($null -ne $sess -and $sess.Count -gt 0) { $hasLogin = $true }
     } catch {}
   }
-  if (-not $hasLoginMember) {
-    try {
-      $sessions = $wof.Sessions
-      if ($null -ne $sessions) { $hasLoginMember = $true; $hasLogin = ($sessions.Count -gt 0) }
-    } catch {}
-  }
+  $diag.login_status = if ($hasLogin) { 'logged_in' } else { 'not_logged_in' }
+} catch { $diag.login_status = 'error: ' + $_.Exception.Message }
 
-  if ($hasLoginMember) {
-    $diag.login_status = if ($hasLogin) { 'logged_in' } else { 'not_logged_in' }
-  } else {
-    $diag.login_status = 'no_login_property'
+# ── Step 4: Enumerate Sessions ──
+$session = $null
+try {
+  $sessions = $wof.Sessions
+  if ($null -ne $sessions) {
+    try { $diag.sessions_info.count = $sessions.Count } catch {}
+    # Get first session
+    try { foreach ($s in $sessions) { if ($null -ne $s) { $session = $s; break } } }
+    catch {
+      try {
+        if ($sessions.Count -gt 0) { $session = $sessions.Item(1) }
+      } catch {}
+    }
   }
-} catch {
-  $diag.login_status = 'error: ' + $_.Exception.Message
+} catch { $diag.sessions_info.error = $_.Exception.Message }
+
+if ($null -ne $session) {
+  $diag.session_members = Get-ObjectMembers $session 'Session'
 }
 
-$json = $diag | ConvertTo-Json -Compress -Depth 3
+# ── Step 5: Enumerate Databases ──
+$db = $null
+if ($null -ne $session) {
+  try {
+    $dbs = $session.Databases
+    if ($null -ne $dbs) {
+      try { $diag.databases_info.count = $dbs.Count } catch {}
+      $dbNames = @()
+      try {
+        foreach ($d in $dbs) {
+          if ($null -ne $d) {
+            if ($null -eq $db) { $db = $d }
+            try { $dbNames += $d.Name } catch {}
+          }
+        }
+      } catch {
+        try {
+          $cnt = $dbs.Count
+          for ($i = 1; $i -le $cnt; $i++) {
+            try {
+              $d = $dbs.Item($i)
+              if ($null -ne $d) {
+                if ($null -eq $db) { $db = $d }
+                try { $dbNames += $d.Name } catch {}
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+      $diag.databases_info.names = $dbNames
+    }
+  } catch { $diag.databases_info.error = $_.Exception.Message }
+}
+
+if ($null -ne $db) {
+  $diag.database_members = Get-ObjectMembers $db 'Database'
+}
+
+# ── Step 6: Try to find a Document to enumerate ──
+if ($null -ne $db -and $null -ne $wof) {
+  $sampleDoc = $null
+  # Try CreateProfileSearchParameters on DMS
+  try {
+    $params = $wof.CreateProfileSearchParameters()
+    if ($null -ne $params) {
+      $diag.has_CreateProfileSearchParameters = $true
+      try { $params.Add(3, '*') } catch { try { $params.Add('NAME', '*') } catch {} }
+      try {
+        $found = $db.SearchDocuments($params, $true)
+        if ($null -ne $found) {
+          foreach ($doc in $found) { if ($null -ne $doc) { $sampleDoc = $doc; break } }
+        }
+      } catch {}
+    }
+  } catch { $diag.has_CreateProfileSearchParameters = $false }
+  # Fallback: try RecentDocuments
+  if ($null -eq $sampleDoc) {
+    try {
+      $recent = $db.RecentDocuments
+      if ($null -ne $recent) {
+        foreach ($doc in $recent) { if ($null -ne $doc) { $sampleDoc = $doc; break } }
+      }
+    } catch {}
+  }
+  if ($null -ne $sampleDoc) {
+    $diag.document_members = Get-ObjectMembers $sampleDoc 'Document'
+    try { $diag.sample_doc_name = $sampleDoc.Name } catch {}
+    try { $diag.sample_doc_number = $sampleDoc.Number } catch {}
+  }
+}
+
+# ── Step 7: Check for key methods ──
+$diag.key_checks = @{
+  dms_CreateProfileSearchParameters = ($diag.dms_members.methods -contains 'CreateProfileSearchParameters')
+  db_SearchDocuments = ($diag.database_members.methods -contains 'SearchDocuments')
+  db_CreateDocument = ($diag.database_members.methods -contains 'CreateDocument')
+  db_GetDocument = ($diag.database_members.methods -contains 'GetDocument')
+  doc_GetCopy = ($diag.document_members.methods -contains 'GetCopy')
+  doc_CheckInWithResults = ($diag.document_members.methods -contains 'CheckInWithResults')
+  doc_CheckInEx = ($diag.document_members.methods -contains 'CheckInEx')
+  doc_CheckOut = ($diag.document_members.methods -contains 'CheckOut')
+  doc_Versions = ($diag.document_members.properties -contains 'Versions')
+  doc_LatestVersion = ($diag.document_members.properties -contains 'LatestVersion')
+}
+
+$json = $diag | ConvertTo-Json -Compress -Depth 5
 Write-Output "###JSON_START###$json###JSON_END###"
   `;
 
-  const result = await imanageRunPowerShell(script, { timeoutMs: 30000 });
+  const result = await imanageRunPowerShell(script, { timeoutMs: 45000 });
   if (!result || !result.success) {
     return {
       success: false,
@@ -5316,11 +5718,15 @@ Write-Output "###JSON_START###$json###JSON_END###"
     };
   }
   const data = result.data || {};
+  const checks = data.key_checks || {};
+  const checkSummary = Object.entries(checks)
+    .map(([k, v]) => `${k}: ${v ? 'YES' : 'no'}`)
+    .join(', ');
   return {
     success: !!data.com_created,
     diagnostics: data,
     message: data.com_created
-      ? `iManage COM connected via ${data.com_progid} [API: ${data.com_api_type || 'unknown'}] (${data.login_status}). ${data.available_methods.length} methods available.`
+      ? `iManage COM connected via ${data.com_progid} [API: ${data.com_api_type || 'unknown'}] (${data.login_status}). Sessions: ${data.sessions_info?.count || 0}. Databases: ${data.databases_info?.count || 0} (${(data.databases_info?.names || []).join(', ')}). Key methods: ${checkSummary}`
       : `iManage COM could not be loaded. ${data.error || ''}`
   };
 }
@@ -5647,6 +6053,206 @@ async function runAgentChecklistPrecedentRedlines(config = {}) {
     results,
     message: summaryMessage
   };
+}
+
+// ========== iMANAGE VERSION REDLINE (LITERA + EMAIL) ==========
+
+/**
+ * Checkout two versions of an iManage document, run a Litera redline, and
+ * optionally email the result via Outlook COM.
+ *
+ * @param {string} profileId     iManage document number / profile ID
+ * @param {number|string} v1     Version number for the "original" (older) side
+ * @param {number|string} v2     Version number for the "modified" (newer) side
+ * @param {object}  opts
+ * @param {string}  [opts.email_to]       Recipients for the redline (semicolon-separated)
+ * @param {string}  [opts.email_cc]       CC recipients
+ * @param {string}  [opts.email_subject]  Custom subject (default auto-generated)
+ * @param {string}  [opts.email_body]     Custom body (default auto-generated)
+ * @param {string}  [opts.output_format]  'pdf' (default) or 'docx'
+ * @param {string}  [opts.output_folder]  Custom output folder (default: Downloads)
+ */
+async function imanageRedlineVersions(profileId, v1, v2, opts = {}) {
+  if (process.platform !== 'win32') {
+    return { success: false, error: 'iManage + Litera redlining requires Windows.' };
+  }
+
+  const normalizedProfileId = normalizeIManageProfileId(profileId);
+  if (!normalizedProfileId) {
+    return { success: false, error: 'A valid iManage profile ID (document number) is required.' };
+  }
+
+  const version1 = parseIManageVersionNumber(v1);
+  const version2 = parseIManageVersionNumber(v2);
+
+  // If versions are not explicitly provided, auto-detect V1 and latest
+  let autoDetected = false;
+  let resolvedV1 = version1;
+  let resolvedV2 = version2;
+
+  if (resolvedV1 === null || resolvedV2 === null) {
+    const versionsResult = await imanageGetVersions(normalizedProfileId);
+    if (!versionsResult.success) {
+      return {
+        success: false,
+        error: versionsResult.error || `Failed to retrieve version history for document ${normalizedProfileId}.`
+      };
+    }
+    const versionList = versionsResult.versions || [];
+    if (versionList.length < 2) {
+      return {
+        success: false,
+        error: `Document ${normalizedProfileId} only has ${versionList.length} version(s). Need at least 2 versions to redline.`
+      };
+    }
+    const selected = pickIManagePrecedentAndCurrentVersions(versionList);
+    if (!selected || !selected.precedent || !selected.latest) {
+      return { success: false, error: 'Could not determine which versions to compare.' };
+    }
+    if (resolvedV1 === null) resolvedV1 = selected.precedent.version_number;
+    if (resolvedV2 === null) resolvedV2 = selected.latest.version_number;
+    autoDetected = true;
+  }
+
+  if (resolvedV1 === resolvedV2) {
+    return { success: false, error: `Both versions are the same (V${resolvedV1}). Provide two different version numbers.` };
+  }
+
+  // Ensure V1 < V2 so the diff direction is correct (older → newer)
+  const origVersion = Math.min(resolvedV1, resolvedV2);
+  const modVersion = Math.max(resolvedV1, resolvedV2);
+
+  // Create temp checkout folders
+  const timestamp = Date.now();
+  const checkoutRoot = path.join(app.getPath('temp'), `emmaneigh_version_redline_${timestamp}`);
+  const v1Folder = path.join(checkoutRoot, `v${origVersion}`);
+  const v2Folder = path.join(checkoutRoot, `v${modVersion}`);
+  fs.mkdirSync(v1Folder, { recursive: true });
+  fs.mkdirSync(v2Folder, { recursive: true });
+
+  // Step 1: Checkout version 1 (older)
+  const v1Checkout = await imanageCheckout(normalizedProfileId, v1Folder, origVersion);
+  if (!v1Checkout.success) {
+    return {
+      success: false,
+      error: `Failed to check out V${origVersion}: ${v1Checkout.error || 'Unknown error'}`
+    };
+  }
+
+  // Step 2: Checkout version 2 (newer)
+  const v2Checkout = await imanageCheckout(normalizedProfileId, v2Folder, modVersion);
+  if (!v2Checkout.success) {
+    return {
+      success: false,
+      error: `Failed to check out V${modVersion}: ${v2Checkout.error || 'Unknown error'}`
+    };
+  }
+
+  // Resolve actual file paths from checkout results
+  const docNameHint = (v1Checkout.files && v1Checkout.files[0] && v1Checkout.files[0].name) || normalizedProfileId;
+  const v1Path = resolveIManageCheckoutFilePath(v1Checkout, v1Folder, docNameHint);
+  const v2Path = resolveIManageCheckoutFilePath(v2Checkout, v2Folder, docNameHint);
+
+  if (!v1Path || !fs.existsSync(v1Path)) {
+    return { success: false, error: `Could not locate the checked-out V${origVersion} file on disk.` };
+  }
+  if (!v2Path || !fs.existsSync(v2Path)) {
+    return { success: false, error: `Could not locate the checked-out V${modVersion} file on disk.` };
+  }
+
+  // Step 3: Check Litera is installed
+  const literaPath = findLiteraInstallation();
+  if (!literaPath) {
+    return {
+      success: false,
+      error: 'Litera Compare is not installed. Install Litera Compare to enable version redlines.',
+      v1_path: v1Path,
+      v2_path: v2Path
+    };
+  }
+
+  // Determine output path
+  const outputFormat = String(opts.output_format || 'pdf').toLowerCase();
+  const cpo = !!opts.change_pages_only;
+  const literaOptions = {
+    output_format: outputFormat === 'docx' ? 'docx' : 'pdf',
+    change_pages_only: cpo
+  };
+  const outputExt = getLiteraOutputExtension(v1Path, literaOptions);
+  const defaultOutputFolder = normalizeLocalPath(opts.output_folder || '')
+    || path.join(app.getPath('downloads'), 'EmmaNeigh_Redlines');
+  fs.mkdirSync(defaultOutputFolder, { recursive: true });
+  const outputFileName = buildRedlineOutputFilename(v1Path, v2Path, outputExt);
+  const outputPath = path.join(defaultOutputFolder, outputFileName);
+
+  // Step 4: Run Litera comparison
+  let redlineResult;
+  try {
+    redlineResult = await runLiteraComparison(v1Path, v2Path, outputPath, literaOptions);
+  } catch (err) {
+    return {
+      success: false,
+      error: `Litera comparison failed: ${err.message}`,
+      v1_path: v1Path,
+      v2_path: v2Path
+    };
+  }
+
+  if (!redlineResult || !redlineResult.success) {
+    return {
+      success: false,
+      error: (redlineResult && redlineResult.error) || 'Litera comparison did not produce output.',
+      v1_path: v1Path,
+      v2_path: v2Path
+    };
+  }
+
+  const redlinePath = redlineResult.output_path || outputPath;
+  const resultPayload = {
+    success: true,
+    profile_id: normalizedProfileId,
+    version_original: origVersion,
+    version_modified: modVersion,
+    auto_detected_versions: autoDetected,
+    v1_path: v1Path,
+    v2_path: v2Path,
+    redline_path: redlinePath,
+    output_format: literaOptions.output_format,
+    change_pages_only: cpo
+  };
+
+  // Step 5: Optionally email the redline
+  const emailTo = String(opts.email_to || '').trim();
+  if (emailTo) {
+    const docDisplayName = docNameHint || normalizedProfileId;
+    const subject = opts.email_subject
+      || `Redline: ${docDisplayName} V${origVersion} → V${modVersion}`;
+    const body = opts.email_body
+      || `<p>Please find attached the redline comparison of <b>${docDisplayName}</b>, ` +
+         `comparing Version ${origVersion} to Version ${modVersion}.</p>` +
+         `<p>Generated by EmmaNeigh (Litera Compare).</p>`;
+    const cc = opts.email_cc || '';
+
+    if (!fs.existsSync(redlinePath)) {
+      resultPayload.email_sent = false;
+      resultPayload.email_error = 'Redline output file not found for attachment.';
+    } else {
+      const emailResult = await outlookSendEmail(emailTo, subject, body, cc, [redlinePath]);
+      if (emailResult.success) {
+        resultPayload.email_sent = true;
+        resultPayload.email_to = emailTo;
+        resultPayload.message = `Redline V${origVersion}→V${modVersion} created and emailed to ${emailTo}.`;
+      } else {
+        resultPayload.email_sent = false;
+        resultPayload.email_error = emailResult.error || 'Failed to send email via Outlook.';
+        resultPayload.message = `Redline created at ${redlinePath} but email failed: ${resultPayload.email_error}`;
+      }
+    }
+  } else {
+    resultPayload.message = `Redline V${origVersion}→V${modVersion} created: ${redlinePath}`;
+  }
+
+  return resultPayload;
 }
 
 // ========== WORD COM TOOLS ==========
@@ -6073,6 +6679,80 @@ try {
   return { success: true, message: `Email sent to ${normalizedTo}` };
 }
 
+/**
+ * Reply to an existing Outlook email thread (or reply-all).
+ *
+ * @param {string} entryId     The Outlook EntryID of the email to reply to
+ * @param {string} body        Reply body (HTML supported)
+ * @param {boolean} replyAll   If true, use Reply All instead of Reply
+ * @param {string[]} attachments  Optional file paths to attach
+ */
+async function outlookReplyEmail(entryId, body, replyAll = false, attachments = []) {
+  if (process.platform !== 'win32') return { success: false, error: 'Outlook COM is only available on Windows.' };
+  const normalizedEntryId = String(entryId || '').trim();
+  if (!normalizedEntryId) return { success: false, error: 'entry_id is required to reply to an Outlook email.' };
+  const normalizedBody = String(body || '');
+  if (!normalizedBody.trim()) return { success: false, error: 'body is required for the reply.' };
+  const escapedId = normalizedEntryId.replace(/'/g, "''");
+  const bodyB64 = Buffer.from(normalizedBody, 'utf8').toString('base64');
+  const rawAttachPaths = Array.isArray(attachments) ? attachments : [];
+  const attachPaths = [];
+  for (const attachPath of rawAttachPaths) {
+    const resolvedAttachment = resolveExistingLocalPath(attachPath);
+    if (!resolvedAttachment || !fs.existsSync(resolvedAttachment)) {
+      return { success: false, error: `Attachment file not found: ${attachPath}` };
+    }
+    attachPaths.push(resolvedAttachment);
+  }
+  const attachLines = attachPaths.map(p => `$reply.Attachments.Add('${p.replace(/'/g, "''")}') | Out-Null`).join('\n  ');
+  const replyMethod = replyAll ? 'ReplyAll' : 'Reply';
+  const script = `
+$ErrorActionPreference = 'Stop'
+$outlook = $null
+$ns = $null
+$item = $null
+$reply = $null
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $ns = $outlook.GetNamespace("MAPI")
+  try { $null = $ns.Logon("", "", $false, $false) } catch {}
+  $item = $ns.GetItemFromID('${escapedId}')
+  if ($null -eq $item) { throw "Outlook item not found for EntryID." }
+  if ($item.Class -ne 43) { throw "Outlook item is not an email message." }
+  $reply = $item.${replyMethod}()
+  $bodyBytes = [Convert]::FromBase64String('${bodyB64}')
+  $newBody = [System.Text.Encoding]::UTF8.GetString($bodyBytes)
+  $reply.HTMLBody = $newBody + $reply.HTMLBody
+  ${attachLines}
+  $reply.Send()
+  $result = @{
+    success = $true
+    replied_to_subject = $item.Subject
+    reply_type = '${replyMethod.toLowerCase()}'
+  }
+  $json = $result | ConvertTo-Json -Compress -Depth 3
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($reply -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($reply) | Out-Null } } catch {}
+  try { if ($item -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null } } catch {}
+  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
+}`;
+  const result = await imanageRunPowerShell(script);
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
+  const data = result.data && typeof result.data === 'object' ? result.data : {};
+  return {
+    success: true,
+    replied_to_subject: data.replied_to_subject || '',
+    reply_type: data.reply_type || replyMethod.toLowerCase(),
+    message: `${replyAll ? 'Reply-all' : 'Reply'} sent to thread: "${data.replied_to_subject || 'email'}"`
+  };
+}
+
 // ========== COMMAND TOOL DISPATCHER ==========
 
 function getToolUsageEvent(toolName, input = {}, toolResult = null) {
@@ -6184,6 +6864,28 @@ async function dispatchTool(toolName, input, session = {}) {
       result = await imanageCreateFolder(safeInput.folder_name, safeInput.parent_path || '');
       break;
 
+    case 'imanage_redline_versions': {
+      if (!safeInput.profile_id) {
+        result = { success: false, error: 'profile_id is required for iManage version redline.' };
+        break;
+      }
+      result = await imanageRedlineVersions(
+        safeInput.profile_id,
+        safeInput.version_1 || null,
+        safeInput.version_2 || null,
+        {
+          email_to: safeInput.email_to,
+          email_cc: safeInput.email_cc,
+          email_subject: safeInput.email_subject,
+          email_body: safeInput.email_body,
+          output_format: safeInput.output_format,
+          output_folder: safeInput.output_folder,
+          change_pages_only: !!safeInput.change_pages_only
+        }
+      );
+      break;
+    }
+
     case 'run_redline': {
       const originalPath = resolveToolFilePath({ file_path: safeInput.original }, loadedFiles, 0);
       const modifiedPath = resolveToolFilePath({ file_path: safeInput.modified }, loadedFiles, 1);
@@ -6200,7 +6902,9 @@ async function dispatchTool(toolName, input, session = {}) {
         engine,
         originalPath,
         modifiedPath,
-        literaOptions: {}
+        literaOptions: {
+          change_pages_only: !!safeInput.change_pages_only
+        }
       };
       // Send to renderer to trigger the redline
       if (mainWindow && mainWindow.webContents) {
@@ -6350,6 +7054,23 @@ async function dispatchTool(toolName, input, session = {}) {
         sendAttachments = loadedFiles.map((file) => file.path).filter(Boolean);
       }
       result = await outlookSendEmail(safeInput.to, safeInput.subject, sendBody, safeInput.cc, sendAttachments);
+      break;
+    }
+
+    case 'outlook_reply_email': {
+      if (!safeInput.entry_id) {
+        result = { success: false, error: 'entry_id is required to reply to an Outlook email.' };
+        break;
+      }
+      if (!safeInput.body) {
+        result = { success: false, error: 'body is required for the reply.' };
+        break;
+      }
+      let replyAttachments = safeInput.attachments;
+      if (!Array.isArray(replyAttachments) && loadedFiles && loadedFiles.length > 0) {
+        replyAttachments = loadedFiles.map((file) => file.path).filter(Boolean);
+      }
+      result = await outlookReplyEmail(safeInput.entry_id, safeInput.body, !!safeInput.reply_all, replyAttachments);
       break;
     }
 
@@ -8673,15 +9394,18 @@ function convertToolsToOpenAIFormat(tools) {
 
 // Resolve which provider + config to use for the agent command bar
 function resolveAgentProvider() {
-  const proxyUrl = getAgentProxyUrl();
-  if (proxyUrl) {
-    // Proxy mode — forward everything to the proxy server which holds the real API key
-    return { mode: 'proxy', proxyUrl, proxyToken: getAgentProxyToken() };
-  }
-
   const provider = getAIProvider();
   const apiKey = getApiKey();
   const isLocal = provider === 'ollama' || provider === 'lmstudio';
+
+  // Local providers (Ollama, LM Studio) bypass proxy — they run on localhost
+  if (!isLocal) {
+    const proxyUrl = getAgentProxyUrl();
+    if (proxyUrl) {
+      // Proxy mode — forward everything to the proxy server which holds the real API key
+      return { mode: 'proxy', proxyUrl, proxyToken: getAgentProxyToken() };
+    }
+  }
 
   if (provider === 'anthropic' || (!isLocal && apiKey && apiKey.startsWith('sk-ant-'))) {
     return { mode: 'anthropic', apiKey, provider: 'anthropic' };
@@ -8774,8 +9498,23 @@ Current state:
 - Available tabs: Signature Packets, Packet Shell, Execution, Signature Blocks, Time Tracking, Email Search, Update Checklist, Punchlist Generator, Collate Comments, Redline Documents
 
 When the user asks you to perform an action (save to iManage, open a file, navigate, run a redline, etc.), use the appropriate tool.
-You can use tools across multiple steps in one request until the task is complete.
-For checklist-driven precedent workflows, you can use the batch checklist precedent redline tool.
+You can chain multiple tools across steps in one request until the full task is complete.
+
+Common multi-step workflows you should handle:
+- "Save this and redline against precedent" → imanage_save → use the returned profile_id → imanage_redline_versions (auto-detects V1 vs latest)
+- "Redline V1 to V2 and email to someone" → imanage_redline_versions with email_to parameter (handles redline + email in one tool call)
+- "Redline V1 to V2, CPO, and reply to that email thread" → imanage_redline_versions with change_pages_only=true → outlook_reply_email with the redline as attachment
+- "Find document X, check out V3, and compare to V1" → imanage_search → imanage_redline_versions with version_1 and version_2
+- "Run redlines for the whole checklist" → run_checklist_precedent_redlines (batch mode)
+
+Key terminology:
+- "CPO" = Change Pages Only — a Litera mode that outputs only pages with differences. Set change_pages_only=true on imanage_redline_versions or run_redline.
+- "Redline against precedent" = compare V1 (original/precedent) to the latest version.
+
+For imanage_redline_versions: you can omit version_1 and version_2 to auto-detect (V1 vs latest), or specify them explicitly.
+If the user wants to email the result, pass email_to directly to imanage_redline_versions — it handles checkout, Litera comparison, and Outlook email in one call.
+If the user wants to reply to an existing email thread with the redline, first use outlook_search to find the thread, then imanage_redline_versions to create the redline, then outlook_reply_email with the redline_path as an attachment.
+
 If the user reports iManage connection issues, use imanage_test_connection first to diagnose the problem.
 When they ask a question or want advice, respond with helpful text.
 Keep responses concise and practical.
@@ -8812,7 +9551,7 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       return result;
     };
 
-    const maxToolTurns = 8;
+    const maxToolTurns = 12;
 
     // Build initial messages with conversation memory
     const priorHistory = Array.isArray(conversationHistory)
@@ -8998,7 +9737,19 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
 
     // ── OPENAI-COMPATIBLE MODE (Ollama, LM Studio, OpenAI) ──────────
     const openaiTools = convertToolsToOpenAIFormat(COMMAND_TOOLS);
-    const modelCandidates = agentConfig.models || [DEFAULT_OLLAMA_MODEL];
+    const isLocalOllama = agentConfig.provider === 'ollama' || agentConfig.provider === 'lmstudio';
+
+    // Discover available models from the provider (Ollama, LM Studio, OpenAI all support /v1/models)
+    let modelCandidates = agentConfig.models || [DEFAULT_OLLAMA_MODEL];
+    if (isLocalOllama) {
+      try {
+        const discovered = await fetchOpenAICompatibleModels({ baseUrl: agentConfig.baseUrl, apiKey: agentConfig.apiKey });
+        if (discovered.length > 0) {
+          // Merge: preferred models first, then discovered ones
+          modelCandidates = Array.from(new Set([...modelCandidates, ...discovered]));
+        }
+      } catch (_) {}
+    }
     let lastResponse = null;
 
     for (const modelName of modelCandidates) {
@@ -9010,28 +9761,44 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       let lastToolName = null, lastToolInput = null, lastToolResult = null;
       const conversationParts = [];
       let modelUnavailable = false;
+      let toolsDisabled = false; // Track if tools were disabled due to model not supporting them
 
       for (let turn = 0; turn < maxToolTurns; turn += 1) {
         const headers = { 'Content-Type': 'application/json' };
         if (agentConfig.apiKey) headers['Authorization'] = `Bearer ${agentConfig.apiKey}`;
+
+        const requestBody = {
+          model: modelName,
+          max_tokens: 1200,
+          temperature: 0,
+          stream: false, // Explicit: ensure non-streaming response from Ollama/LM Studio
+          messages
+        };
+        // Only include tools if not disabled (some local models don't support tool calling)
+        if (!toolsDisabled) {
+          requestBody.tools = openaiTools;
+        }
 
         const response = await requestHttps({
           baseUrl: agentConfig.baseUrl,
           path: '/v1/chat/completions',
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            model: modelName,
-            max_tokens: 1200,
-            temperature: 0,
-            messages,
-            tools: openaiTools
-          }),
+          body: JSON.stringify(requestBody),
           timeoutMs: 90000
         });
         lastResponse = response;
 
         if (response.statusCode !== 200) {
+          // If tools caused the error (common with local models), retry without tools
+          if (!toolsDisabled && isLocalOllama && (response.statusCode === 400 || response.statusCode === 500)) {
+            const errDetail = getErrorDetail(response).toLowerCase();
+            if (errDetail.includes('tool') || errDetail.includes('function') || errDetail.includes('not supported') || errDetail.includes('invalid') || errDetail.includes('schema')) {
+              console.log(`[execute-command:${agentConfig.provider}] Tool calling not supported by ${modelName}, retrying without tools`);
+              toolsDisabled = true;
+              continue; // Retry same turn without tools
+            }
+          }
           if (isLikelyModelError(response)) { modelUnavailable = true; break; }
           return logAndReturn({
             success: false,
@@ -9050,7 +9817,7 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
         if (text) conversationParts.push(text);
 
         // Extract tool calls (OpenAI format)
-        const toolCalls = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls : [];
+        const toolCalls = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls.filter(tc => tc && tc.function) : [];
         if (!toolCalls.length) {
           return logAndReturn({
             success: true, type: lastToolName ? 'tool_result' : 'text',
@@ -9084,9 +9851,11 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
           try { serialized = JSON.stringify(toolResult); } catch (_) { serialized = '{"success":false,"error":"Serialize error"}'; }
 
           // OpenAI tool result format: role=tool, tool_call_id, content
+          // Generate a fallback ID if Ollama doesn't provide one (some versions omit tc.id)
+          const toolCallId = tc.id || `call_${fnName}_${turn}_${Date.now()}`;
           messages.push({
             role: 'tool',
-            tool_call_id: tc.id,
+            tool_call_id: toolCallId,
             content: serialized
           });
           toolSummaries.push(formatToolSummary(fnName, toolResult));
@@ -9508,17 +10277,56 @@ ipcMain.handle('test-api-key', async (event, payload) => {
 
     let response;
     if (provider === 'ollama') {
+      const ollamaBase = getOllamaBaseUrl();
       response = await requestHttps({
-        baseUrl: getOllamaBaseUrl(),
+        baseUrl: ollamaBase,
         path: '/v1/models',
         method: 'GET',
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
         timeoutMs: 15000
       });
       if (response.statusCode === 200) {
-        return { success: true, message: 'Ollama connection successful', provider };
+        const models = Array.isArray(response.jsonBody?.data)
+          ? response.jsonBody.data.map(m => String(m?.id || '').trim()).filter(Boolean)
+          : [];
+        const configuredModel = getOllamaModel();
+        const modelAvailable = models.length > 0;
+        const configuredModelAvailable = models.includes(configuredModel);
+        const modelNote = models.length === 0
+          ? ' No models found — run "ollama pull llama3.1:8b" to get started.'
+          : configuredModelAvailable
+            ? ` Model "${configuredModel}" is available. ${models.length} model(s) installed.`
+            : ` Configured model "${configuredModel}" not found. Available: ${models.slice(0, 5).join(', ')}${models.length > 5 ? '...' : ''}.`;
+        return {
+          success: modelAvailable,
+          message: `Ollama connection successful at ${ollamaBase}.${modelNote}`,
+          provider,
+          models,
+          configuredModel,
+          configuredModelAvailable
+        };
       }
-      return { success: false, error: `Ollama is not reachable at ${getOllamaBaseUrl()}. ${getErrorDetail(response)}` };
+      // Try Ollama's native /api/tags endpoint as fallback
+      const tagsResponse = await requestHttps({
+        baseUrl: ollamaBase,
+        path: '/api/tags',
+        method: 'GET',
+        headers: {},
+        timeoutMs: 15000
+      });
+      if (tagsResponse.statusCode === 200) {
+        const models = Array.isArray(tagsResponse.jsonBody?.models)
+          ? tagsResponse.jsonBody.models.map(m => String(m?.name || '').trim()).filter(Boolean)
+          : [];
+        return {
+          success: models.length > 0,
+          message: `Ollama is running at ${ollamaBase}. ${models.length} model(s) found${models.length > 0 ? ': ' + models.slice(0, 5).join(', ') : ' — run "ollama pull llama3.1:8b"'}.`,
+          provider,
+          models,
+          note: 'Connected via /api/tags (OpenAI compat endpoint may be unavailable — consider updating Ollama).'
+        };
+      }
+      return { success: false, error: `Ollama is not reachable at ${ollamaBase}. Make sure Ollama is running (ollama serve). ${getErrorDetail(response)}` };
     }
 
     if (provider === 'lmstudio') {

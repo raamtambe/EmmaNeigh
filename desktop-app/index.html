@@ -7733,7 +7733,7 @@
       if (horseEl) horseEl.style.display = 'flex';
 
       try {
-        // First try execute-command (Claude tool use — requires Anthropic API key)
+        // First try execute-command (agent tool use — supports Anthropic, OpenAI, Ollama, LM Studio)
         const context = getAgentContext();
         context.thread_id = activeAgentRunThreadId;
         // Build conversation history from current thread for agent memory
@@ -7756,7 +7756,7 @@
           addAgentMessage('assistant', cmdResult.message || 'Done.');
           const modelInfo = cmdResult.modelUsed ? ` (${cmdResult.modelUsed})` : '';
           const toolInfo = cmdResult.tool ? ` • Tool: ${cmdResult.tool.replace(/_/g, ' ')}` : '';
-          setAgentStatus(`Claude${modelInfo}${toolInfo}`);
+          setAgentStatus(`Agent${modelInfo}${toolInfo}`);
         } else {
           // execute-command failed (no API key, etc.) — fall back to agent-plan
           console.log('[Agent] execute-command unavailable, falling back to agent-plan:', cmdResult?.error);
