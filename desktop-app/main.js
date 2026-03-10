@@ -3981,6 +3981,37 @@ function Test-IManageLimitedApiSurface($snapshot, $apiType, $progId) {
   return $false
 }
 
+function Get-IManageCreateObjectCandidates($factoryObj, $factoryProgId) {
+  $candidates = @()
+  $createMethod = $null
+  try { $createMethod = $factoryObj.PSObject.Methods['CreateObject'] } catch {}
+  if ($null -eq $createMethod) { return @() }
+
+  $targets = @(
+    'iManage.COMAPILib.IManDMS',
+    'iManage.Work.WorkObjectFactory',
+    'Com.iManage.Work.WorkObjectFactory',
+    'iManage.WorkSiteObjects.WorkObjectFactory',
+    'WorkSite.Application',
+    'iManage.WorkSite.Application'
+  )
+
+  foreach ($target in $targets) {
+    try {
+      $obj = $factoryObj.CreateObject($target)
+      if ($null -eq $obj) { continue }
+      $candidates += @{
+        obj = $obj
+        candidate_id = ($factoryProgId + '::CreateObject(' + $target + ')')
+        source_prog_id = $factoryProgId
+        create_target = $target
+      }
+    } catch {}
+  }
+
+  return $candidates
+}
+
 function Use-IManageDMSApi($wof) {
   if ($global:IManageCOMType -eq 'IManDMS') { return $true }
   try {
@@ -4042,38 +4073,56 @@ function Get-IManageWorkObjectFactory {
     try {
       $obj = New-Object -ComObject $progId
       if ($null -ne $obj) {
-        $apiType = Resolve-IManageCOMType $obj $progId
-        $snapshot = Get-IManageCapabilitySnapshot $obj $progId
-        $limitedSurface = Test-IManageLimitedApiSurface $snapshot $apiType $progId
-        $candidateMeta = @{
-          prog_id = $progId
-          api_type = $apiType
-          score = [int]$snapshot.score
-          method_count = [int]$snapshot.method_count
-          property_count = [int]$snapshot.property_count
-          key_methods = $snapshot.key_methods
-          key_properties = $snapshot.key_properties
-          limited_surface = [bool]$limitedSurface
-        }
-        $candidates += $candidateMeta
-
-        $useCandidate = $false
-        if ($null -eq $bestMeta) {
-          $useCandidate = $true
-        } elseif ($snapshot.score -gt $bestMeta.score) {
-          $useCandidate = $true
-        } elseif (($snapshot.score -eq $bestMeta.score) -and ($snapshot.method_count -gt $bestMeta.method_count)) {
-          $useCandidate = $true
-        }
-
-        if ($useCandidate) {
-          if ($null -ne $bestObj -and $bestObj -ne $obj) {
-            try { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($bestObj) | Out-Null } catch {}
+        $candidateObjects = @(
+          @{
+            obj = $obj
+            candidate_id = $progId
+            source_prog_id = ''
+            create_target = ''
           }
-          $bestObj = $obj
-          $bestMeta = $candidateMeta
-        } else {
-          try { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($obj) | Out-Null } catch {}
+        )
+        $viaFactoryObjects = Get-IManageCreateObjectCandidates $obj $progId
+        foreach ($extraCandidate in $viaFactoryObjects) {
+          $candidateObjects += $extraCandidate
+        }
+
+        foreach ($candidate in $candidateObjects) {
+          $candidateObj = $candidate.obj
+          $candidateDisplayId = [string]$candidate.candidate_id
+          $createTarget = [string]$candidate.create_target
+          $resolveProgId = if ($createTarget) { $createTarget } else { $candidateDisplayId }
+          $apiType = Resolve-IManageCOMType $candidateObj $resolveProgId
+          $snapshot = Get-IManageCapabilitySnapshot $candidateObj $resolveProgId
+          $limitedSurface = Test-IManageLimitedApiSurface $snapshot $apiType $resolveProgId
+          $candidateMeta = @{
+            prog_id = $candidateDisplayId
+            resolved_prog_id = $resolveProgId
+            source_prog_id = [string]$candidate.source_prog_id
+            via_create_object = [bool]$createTarget
+            create_target = $createTarget
+            api_type = $apiType
+            score = [int]$snapshot.score
+            method_count = [int]$snapshot.method_count
+            property_count = [int]$snapshot.property_count
+            key_methods = $snapshot.key_methods
+            key_properties = $snapshot.key_properties
+            limited_surface = [bool]$limitedSurface
+          }
+          $candidates += $candidateMeta
+
+          $useCandidate = $false
+          if ($null -eq $bestMeta) {
+            $useCandidate = $true
+          } elseif ($snapshot.score -gt $bestMeta.score) {
+            $useCandidate = $true
+          } elseif (($snapshot.score -eq $bestMeta.score) -and ($snapshot.method_count -gt $bestMeta.method_count)) {
+            $useCandidate = $true
+          }
+
+          if ($useCandidate) {
+            $bestObj = $candidateObj
+            $bestMeta = $candidateMeta
+          }
         }
       }
     } catch {
