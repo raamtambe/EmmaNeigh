@@ -1302,6 +1302,103 @@
       text-align: center;
     }
 
+    .outlook-scope-modal {
+      max-width: 640px;
+    }
+
+    .outlook-scope-form {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .outlook-scope-row label {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    .outlook-scope-input {
+      width: 100%;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #fff;
+      font-size: 13px;
+      -webkit-app-region: no-drag;
+    }
+
+    .outlook-scope-helper {
+      font-size: 11px;
+      color: #666;
+    }
+
+    .outlook-folder-toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .outlook-folder-toolbar .btn {
+      margin-top: 0;
+      width: auto;
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+
+    .outlook-folder-list {
+      border: 1px solid #333;
+      border-radius: 10px;
+      background: #0d0d0d;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 10px;
+    }
+
+    .outlook-folder-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      -webkit-app-region: no-drag;
+    }
+
+    .outlook-folder-item:last-child {
+      border-bottom: none;
+    }
+
+    .outlook-folder-item input {
+      margin-top: 3px;
+    }
+
+    .outlook-folder-item-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .outlook-folder-root {
+      font-size: 10px;
+      color: #8b5cf6;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 2px;
+    }
+
+    .outlook-folder-path {
+      font-size: 12px;
+      color: #ddd;
+      word-break: break-word;
+    }
+
+    .outlook-scope-status {
+      font-size: 12px;
+      color: #f5a623;
+      min-height: 18px;
+    }
+
     /* Login Modal */
     .login-modal {
       position: fixed;
@@ -3377,6 +3474,37 @@
     </div>
   </div>
 
+  <div class="modal-overlay hidden" id="outlookScopeModal">
+    <div class="modal outlook-scope-modal">
+      <h2 id="outlookScopeTitle">Choose Outlook Folders</h2>
+      <div class="modal-content">
+        <p id="outlookScopeDescription">Select the Outlook folders EmmaNeigh should search.</p>
+        <div class="outlook-scope-form">
+          <div class="outlook-scope-row">
+            <label for="outlookScopeDaysInput">Days Back</label>
+            <input type="number" id="outlookScopeDaysInput" class="outlook-scope-input" min="1" max="3650" value="30">
+            <div class="outlook-scope-helper">EmmaNeigh will scan the selected folders and their message history over this period.</div>
+          </div>
+          <div class="outlook-scope-row">
+            <label>Folders</label>
+            <div class="outlook-folder-toolbar">
+              <button class="btn btn-secondary" id="outlookScopeSelectAllBtn" type="button">Select All</button>
+              <button class="btn btn-secondary" id="outlookScopeClearBtn" type="button">Clear</button>
+            </div>
+            <div class="outlook-folder-list" id="outlookScopeFolderList">
+              <div class="no-data-msg">Loading Outlook folders...</div>
+            </div>
+          </div>
+          <div class="outlook-scope-status" id="outlookScopeStatus"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="outlookScopeConfirmBtn" type="button">Use Selected Folders</button>
+        <button class="btn btn-secondary" id="outlookScopeCancelBtn" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- History Modal -->
   <div class="history-modal" id="historyModal">
     <div class="history-content">
@@ -4467,8 +4595,8 @@
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
           </svg>
-          <p class="input-label">Upload Email CSV</p>
-          <p class="input-hint">Export emails from Outlook as CSV</p>
+          <p class="input-label">Import Outlook Emails</p>
+          <p class="input-hint">Click to scan Inbox, Sent Items, and their subfolders, or drop a CSV here if Outlook COM is unavailable</p>
           <p class="input-selected" id="emailCsvSelected"></p>
         </div>
 
@@ -4639,7 +4767,7 @@
     <div id="updatechecklistTab" style="display: none;">
       <div class="checklist-setup" id="checklistSetup">
         <h3 style="font-size: 14px; color: #888; margin-bottom: 16px;">Update Transaction Checklist</h3>
-        <p class="subtitle" style="margin-bottom: 16px;">Upload your email activity CSV and checklist to auto-update document statuses</p>
+        <p class="subtitle" style="margin-bottom: 16px;">Upload your checklist. EmmaNeigh will scan Outlook Inbox, Sent Items, and their subfolders to infer document status updates.</p>
 
         <!-- Checklist Input -->
         <div class="input-section" id="checklistDocDrop">
@@ -4654,13 +4782,13 @@
           </div>
         </div>
 
-        <!-- Email CSV Input -->
+        <!-- Email Activity Source -->
         <div class="input-section" id="checklistEmailDrop" style="margin-top: 12px;">
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
           </svg>
-          <p class="input-label">Upload Email CSV</p>
-          <p class="input-hint">Outlook email export from today's activity</p>
+          <p class="input-label">Outlook Email Activity</p>
+          <p class="input-hint">Optional: click to choose how many days back to scan across Inbox, Sent Items, and their subfolders, or drop a CSV here if Outlook COM is unavailable</p>
           <div class="input-selected-wrapper">
             <p class="input-selected" id="checklistEmailSelected"></p>
             <button class="clear-file-btn" id="clearChecklistEmail">×</button>
@@ -7571,21 +7699,46 @@
       if (action === 'run_update_checklist') {
         const checklistFile = agentAttachments.find(file => file.ext === 'docx');
         const emailFile = agentAttachments.find(file => file.ext === 'csv');
-        if (!checklistFile || !emailFile) {
-          return { message: 'Attach one checklist DOCX and one email CSV to run Update Checklist.' };
+        if (!checklistFile) {
+          return { message: 'Attach one checklist DOCX to run Update Checklist.' };
         }
         resetChecklistState();
         checklistDocPath = checklistFile.path;
-        checklistEmailPath = emailFile.path;
         checklistDocSelected.textContent = checklistFile.name;
-        checklistEmailSelected.textContent = emailFile.name;
         checklistDocDrop.classList.add('selected');
-        checklistEmailDrop.classList.add('selected');
         clearChecklistDoc.classList.add('visible');
-        clearChecklistEmail.classList.add('visible');
+        if (emailFile) {
+          checklistEmailSourceMode = 'csv';
+          checklistEmailPath = emailFile.path;
+          renderChecklistEmailSource();
+          await runChecklistUpdate({
+            checklistPath: checklistDocPath,
+            emailPath: checklistEmailPath
+          }, false);
+          return { message: `Started Update Checklist using ${checklistFile.name} and ${emailFile.name}.` };
+        }
+        const scope = await promptForOutlookScope({
+          title: 'Choose Outlook Folders for Checklist Update',
+          description: 'Select the Outlook folders EmmaNeigh should search before updating the checklist.',
+          defaultDays: checklistEmailLookbackDays,
+          selectedFolders: checklistSelectedOutlookFolders
+        });
+        if (!scope) {
+          return { message: 'Checklist update canceled.' };
+        }
+        checklistEmailSourceMode = 'outlook';
+        checklistEmailLookbackDays = scope.daysBack;
+        checklistSelectedOutlookFolders = scope.folderPaths;
+        checklistEmailPath = null;
+        renderChecklistEmailSource();
         updateChecklistButton();
-        updateChecklistBtn.click();
-        return { message: `Started Update Checklist using ${checklistFile.name} and ${emailFile.name}.` };
+        await runChecklistUpdate({
+          checklistPath: checklistDocPath,
+          useOutlook: true,
+          daysBack: scope.daysBack,
+          folderPaths: checklistSelectedOutlookFolders
+        }, false);
+        return { message: `Started Update Checklist using ${checklistFile.name} and Outlook email folders.` };
       }
 
       if (action === 'run_generate_punchlist') {
@@ -7608,8 +7761,22 @@
         if ((!emailData || emailData.length === 0) && csvAttachment) {
           await processEmailCsv(csvAttachment.path);
         }
+        if ((!emailData || emailData.length === 0) && !csvAttachment) {
+          const scope = await promptForOutlookScope({
+            title: 'Choose Outlook Folders for Agent Email Search',
+            description: 'Select the Outlook folders EmmaNeigh should search to answer this email question.',
+            defaultDays: emailLookbackDays || 30,
+            selectedFolders: emailSelectedOutlookFolders
+          });
+          if (!scope) {
+            return { message: 'Email search canceled.' };
+          }
+          emailLookbackDays = scope.daysBack;
+          emailSelectedOutlookFolders = scope.folderPaths;
+          await processOutlookEmails(scope.daysBack, scope.folderPaths);
+        }
         if (!emailData || emailData.length === 0) {
-          return { message: 'Upload an email CSV (or attach one here) so Agent Mode can answer email questions.' };
+          return { message: 'Agent Mode could not load Outlook email activity. Open Email Search and try importing Outlook emails there.' };
         }
         const query = promptText || 'Summarize key takeaways from the loaded emails.';
         let provider = 'ollama';
@@ -7687,11 +7854,25 @@
     ipcRenderer.on('trigger-email-search', (event, data) => {
       if (data && data.query) {
         switchTab('email');
-        setTimeout(() => {
-          const searchInput = document.getElementById('emailAiInput') || document.getElementById('nlSearchInput');
+        setTimeout(async () => {
+          if ((!emailData || emailData.length === 0) && typeof processOutlookEmails === 'function') {
+            const scope = await promptForOutlookScope({
+              title: 'Choose Outlook Folders for Email Search',
+              description: 'Select the Outlook folders EmmaNeigh should search to answer this question.',
+              defaultDays: emailLookbackDays || 30,
+              selectedFolders: emailSelectedOutlookFolders
+            });
+            if (!scope) return;
+            emailLookbackDays = scope.daysBack;
+            emailSelectedOutlookFolders = scope.folderPaths;
+            await processOutlookEmails(scope.daysBack, scope.folderPaths);
+          }
+          const aiModeBtn = document.getElementById('aiSearchMode');
+          if (aiModeBtn) aiModeBtn.click();
+          const searchInput = document.getElementById('aiSearchInput');
           if (searchInput) {
             searchInput.value = data.query;
-            const searchBtn = document.getElementById('emailAiBtn') || document.getElementById('nlSearchBtn');
+            const searchBtn = document.getElementById('aiSearchBtn');
             if (searchBtn) searchBtn.click();
           }
         }, 300);
@@ -7965,12 +8146,72 @@
     let currentResult = null;
     let currentZipPath = null;
     let packetsPaths = []; // Can be folder path or array of file paths
+    let packetsProgressValue = 0;
+    let packetsProgressTarget = 0;
+    let packetsProgressTimer = null;
 
     function showState(state) {
       dropZone.style.display = state === 'idle' ? 'flex' : 'none';
       processing.classList.toggle('visible', state === 'processing');
       complete.classList.toggle('visible', state === 'complete');
       error.classList.toggle('visible', state === 'error');
+    }
+
+    function stopPacketsProgressAnimation() {
+      if (packetsProgressTimer) {
+        clearInterval(packetsProgressTimer);
+        packetsProgressTimer = null;
+      }
+    }
+
+    function renderPacketsProgress() {
+      progressFill.style.width = `${Math.max(0, Math.min(100, packetsProgressValue))}%`;
+    }
+
+    function resetPacketsProgress(message = 'Preparing documents...') {
+      stopPacketsProgressAnimation();
+      packetsProgressValue = 0;
+      packetsProgressTarget = 0;
+      renderPacketsProgress();
+      progressText.textContent = message;
+    }
+
+    function updatePacketsProgress(message, percent, immediate = false) {
+      if (typeof message === 'string' && message.trim()) {
+        progressText.textContent = message;
+      }
+
+      const numericPercent = Number(percent);
+      const boundedPercent = Number.isFinite(numericPercent)
+        ? Math.max(0, Math.min(100, numericPercent))
+        : packetsProgressTarget;
+
+      packetsProgressTarget = immediate
+        ? boundedPercent
+        : Math.max(packetsProgressTarget, boundedPercent);
+
+      if (immediate) {
+        packetsProgressValue = packetsProgressTarget;
+        renderPacketsProgress();
+        stopPacketsProgressAnimation();
+        return;
+      }
+
+      if (packetsProgressTimer) return;
+
+      packetsProgressTimer = setInterval(() => {
+        if (packetsProgressValue >= packetsProgressTarget) {
+          packetsProgressValue = packetsProgressTarget;
+          renderPacketsProgress();
+          stopPacketsProgressAnimation();
+          return;
+        }
+
+        const remaining = packetsProgressTarget - packetsProgressValue;
+        const step = Math.min(3, Math.max(0.6, remaining * 0.2));
+        packetsProgressValue = Math.min(packetsProgressTarget, packetsProgressValue + step);
+        renderPacketsProgress();
+      }, 90);
     }
 
     function updatePacketsFileCount() {
@@ -8047,19 +8288,43 @@
 
     async function processPackets(input) {
       showState('processing');
-      progressFill.style.width = '0%';
-      progressText.textContent = 'Starting...';
+      resetPacketsProgress('Checking document structure...');
+      updatePacketsProgress('Checking document structure...', 2);
 
       try {
         const startTime = Date.now();
-        // Add output format to the input
         const outputFormat = document.getElementById('packetsOutputFormat').value;
-        input.output_format = outputFormat;
+        const requestInput = { ...input, output_format: outputFormat };
 
-        const result = await ipcRenderer.invoke('process-folder', input);
+        const preflight = await ipcRenderer.invoke('preflight-signature-packets', requestInput);
+        const longAnnexWarnings = Array.isArray(preflight && preflight.longAnnexWarnings)
+          ? preflight.longAnnexWarnings
+          : [];
+
+        if (longAnnexWarnings.length > 0) {
+          const warningLines = longAnnexWarnings
+            .slice(0, 5)
+            .map(item => `- ${item.document}: ${item.pages_after_signature_block} pages after the first signature block`)
+            .join('\n');
+          const additionalCount = longAnnexWarnings.length - Math.min(longAnnexWarnings.length, 5);
+          const additionalText = additionalCount > 0 ? `\n- ${additionalCount} more document(s)` : '';
+          const shouldContinue = confirm(
+            `The annex to this document is quite long, and may take additional time to complete.\n\n${warningLines}${additionalText}\n\nDo you want to continue creating signature packets?`
+          );
+
+          if (!shouldContinue) {
+            resetPacketsProgress();
+            showState('idle');
+            return;
+          }
+        }
+
+        updatePacketsProgress('Initializing signature packet processor...', 5);
+        const result = await ipcRenderer.invoke('process-folder', requestInput);
         currentResult = result;
-        progressText.textContent = 'Creating ZIP file...';
+        updatePacketsProgress('Creating ZIP file...', 98);
         currentZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
+        updatePacketsProgress('Complete!', 100, true);
         resultText.textContent = `Created ${result.packetsCreated} signature packet${result.packetsCreated !== 1 ? 's' : ''}`;
 
         // Log usage
@@ -8067,6 +8332,7 @@
 
         showState('complete');
       } catch (err) {
+        stopPacketsProgressAnimation();
         errorText.textContent = err.message;
         showState('error');
       }
@@ -8078,11 +8344,8 @@
     }
 
     ipcRenderer.on('progress', (event, data) => {
-      // Route to correct progress bar based on active tab
-      const activeTab = document.querySelector('.tab.active').dataset.tab;
-      if (activeTab === 'packets') {
-        progressText.textContent = data.message;
-        progressFill.style.width = data.percent + '%';
+      if (processing.classList.contains('visible')) {
+        updatePacketsProgress(data.message, data.percent);
       } else {
         execProgressText.textContent = data.message;
         execProgressFill.style.width = data.percent + '%';
@@ -8094,6 +8357,7 @@
     });
 
     function resetPacketsState() {
+      resetPacketsProgress();
       currentResult = null;
       currentZipPath = null;
       packetsPaths = [];
@@ -9712,10 +9976,26 @@
     const aiAnswerConfidence = document.getElementById('aiAnswerConfidence');
     const aiRelevantEmails = document.getElementById('aiRelevantEmails');
     const aiEmailList = document.getElementById('aiEmailList');
+    const outlookScopeModal = document.getElementById('outlookScopeModal');
+    const outlookScopeTitle = document.getElementById('outlookScopeTitle');
+    const outlookScopeDescription = document.getElementById('outlookScopeDescription');
+    const outlookScopeDaysInput = document.getElementById('outlookScopeDaysInput');
+    const outlookScopeFolderList = document.getElementById('outlookScopeFolderList');
+    const outlookScopeStatus = document.getElementById('outlookScopeStatus');
+    const outlookScopeSelectAllBtn = document.getElementById('outlookScopeSelectAllBtn');
+    const outlookScopeClearBtn = document.getElementById('outlookScopeClearBtn');
+    const outlookScopeConfirmBtn = document.getElementById('outlookScopeConfirmBtn');
+    const outlookScopeCancelBtn = document.getElementById('outlookScopeCancelBtn');
 
-    let emailData = []; // Parsed emails
-    let emailCsvPath = null;
+    let emailData = [];
+    let emailSourceMode = null;
+    let emailSourceLabel = '';
+    let emailLookbackDays = 30;
+    let emailSelectedOutlookFolders = [];
+    let checklistSelectedOutlookFolders = [];
     let currentSearchMode = 'keyword'; // 'keyword' or 'ai'
+    let availableOutlookFolders = [];
+    let pendingOutlookScopeResolver = null;
 
     function showEmailState(state) {
       emailUpload.style.display = state === 'idle' || state === 'loaded' ? 'block' : 'none';
@@ -9723,7 +10003,194 @@
       emailError.classList.toggle('visible', state === 'error');
     }
 
-    // CSV Drop handlers
+    function renderOutlookScopeFolderList(folders, selectedFolderPaths = []) {
+      const selected = new Set(
+        (Array.isArray(selectedFolderPaths) ? selectedFolderPaths : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      );
+      if (!folders.length) {
+        outlookScopeFolderList.innerHTML = '<div class="no-data-msg">No Outlook folders were found.</div>';
+        return;
+      }
+      outlookScopeFolderList.innerHTML = '';
+      folders.forEach((folder) => {
+        const item = document.createElement('label');
+        item.className = 'outlook-folder-item';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.folderPath = String(folder.path || '').trim();
+        checkbox.checked = selected.has(String(folder.path || '').trim());
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'outlook-folder-item-text';
+
+        const root = document.createElement('div');
+        root.className = 'outlook-folder-root';
+        root.textContent = String(folder.root || 'OUTLOOK');
+
+        const path = document.createElement('div');
+        path.className = 'outlook-folder-path';
+        path.textContent = String(folder.path || folder.name || 'Folder');
+
+        textWrap.appendChild(root);
+        textWrap.appendChild(path);
+        item.appendChild(checkbox);
+        item.appendChild(textWrap);
+        outlookScopeFolderList.appendChild(item);
+      });
+    }
+
+    function getSelectedOutlookFolderPaths() {
+      return Array.from(outlookScopeFolderList.querySelectorAll('input[type="checkbox"]:checked'))
+        .map((input) => String(input.dataset.folderPath || '').trim())
+        .filter(Boolean);
+    }
+
+    function updateOutlookScopeStatus(message = '') {
+      if (message) {
+        outlookScopeStatus.textContent = message;
+        return;
+      }
+      const count = getSelectedOutlookFolderPaths().length;
+      outlookScopeStatus.textContent = count > 0
+        ? `${count} folder${count === 1 ? '' : 's'} selected`
+        : 'Select at least one folder.';
+    }
+
+    function resolveOutlookScopePrompt(result) {
+      if (!pendingOutlookScopeResolver) return;
+      const resolver = pendingOutlookScopeResolver;
+      pendingOutlookScopeResolver = null;
+      outlookScopeModal.classList.add('hidden');
+      resolver(result);
+    }
+
+    async function promptForOutlookScope({
+      title = 'Choose Outlook Folders',
+      description = 'Select the Outlook folders EmmaNeigh should search.',
+      defaultDays = 30,
+      selectedFolders = []
+    } = {}) {
+      if (pendingOutlookScopeResolver) {
+        resolveOutlookScopePrompt(null);
+      }
+
+      outlookScopeTitle.textContent = title;
+      outlookScopeDescription.textContent = description;
+      outlookScopeDaysInput.value = String(defaultDays || 30);
+      outlookScopeFolderList.innerHTML = '<div class="no-data-msg">Loading Outlook folders...</div>';
+      outlookScopeStatus.textContent = 'Loading folders...';
+      outlookScopeModal.classList.remove('hidden');
+      return new Promise(async (resolve) => {
+        pendingOutlookScopeResolver = resolve;
+
+        const folderResult = await ipcRenderer.invoke('list-outlook-folders', {
+          roots: ['Inbox', 'Sent Items'],
+          includeSubfolders: true
+        });
+        if (!pendingOutlookScopeResolver) {
+          return;
+        }
+        if (!folderResult || !folderResult.success) {
+          alert((folderResult && folderResult.error) || 'Unable to load Outlook folders.');
+          resolveOutlookScopePrompt(null);
+          return;
+        }
+
+        availableOutlookFolders = Array.isArray(folderResult.folders) ? folderResult.folders : [];
+        const defaultSelected = (Array.isArray(selectedFolders) && selectedFolders.length)
+          ? selectedFolders
+          : availableOutlookFolders.map((folder) => folder.path);
+        renderOutlookScopeFolderList(availableOutlookFolders, defaultSelected);
+        updateOutlookScopeStatus();
+      });
+    }
+
+    outlookScopeFolderList.addEventListener('change', () => {
+      updateOutlookScopeStatus();
+    });
+
+    outlookScopeSelectAllBtn.addEventListener('click', () => {
+      outlookScopeFolderList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+        input.checked = true;
+      });
+      updateOutlookScopeStatus();
+    });
+
+    outlookScopeClearBtn.addEventListener('click', () => {
+      outlookScopeFolderList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+        input.checked = false;
+      });
+      updateOutlookScopeStatus();
+    });
+
+    outlookScopeCancelBtn.addEventListener('click', () => {
+      resolveOutlookScopePrompt(null);
+    });
+
+    outlookScopeModal.addEventListener('click', (e) => {
+      if (e.target === outlookScopeModal) {
+        resolveOutlookScopePrompt(null);
+      }
+    });
+
+    outlookScopeConfirmBtn.addEventListener('click', () => {
+      const daysBack = Number.parseInt(String(outlookScopeDaysInput.value || '').trim(), 10);
+      if (!Number.isFinite(daysBack) || daysBack <= 0) {
+        updateOutlookScopeStatus('Enter a valid number of days.');
+        return;
+      }
+      const folderPaths = getSelectedOutlookFolderPaths();
+      if (!folderPaths.length) {
+        updateOutlookScopeStatus('Select at least one folder.');
+        return;
+      }
+      resolveOutlookScopePrompt({
+        daysBack: Math.max(1, Math.min(daysBack, 3650)),
+        folderPaths
+      });
+    });
+
+    function renderLoadedEmailResult(result, sourceLabel) {
+      emailData = Array.isArray(result.emails) ? result.emails : [];
+      emailSourceLabel = sourceLabel || '';
+
+      emailTotalCount.textContent = result.summary.total_emails;
+      emailSenderCount.textContent = result.summary.unique_senders;
+
+      if (result.summary.date_range.earliest && result.summary.date_range.latest) {
+        const earliest = new Date(result.summary.date_range.earliest).toLocaleDateString();
+        const latest = new Date(result.summary.date_range.latest).toLocaleDateString();
+        emailDateRange.textContent = `${earliest} - ${latest}`;
+      } else {
+        emailDateRange.textContent = '-';
+      }
+
+      emailStats.style.display = 'grid';
+      searchModeToggle.style.display = 'flex';
+      emailSearchBox.style.display = 'flex';
+      emailFilters.style.display = 'grid';
+      emailPrivacyToggle.style.display = 'block';
+      detectTasksBtn.style.display = 'flex';
+
+      let attachWarning = document.getElementById('attachmentColumnWarning');
+      if (!attachWarning) {
+        attachWarning = document.createElement('div');
+        attachWarning.id = 'attachmentColumnWarning';
+        attachWarning.style.cssText = 'background: #2a2000; border: 1px solid #f5a623; border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 12px; color: #f5a623; display: none;';
+        emailStats.parentNode.insertBefore(attachWarning, emailStats.nextSibling);
+      }
+      if (result.summary.attachment_note) {
+        attachWarning.textContent = '⚠ ' + result.summary.attachment_note;
+        attachWarning.style.display = 'block';
+      } else {
+        attachWarning.style.display = 'none';
+      }
+    }
+
+    // Email source handlers
     emailCsvDrop.addEventListener('dragover', (e) => {
       e.preventDefault();
       emailCsvDrop.classList.add('active');
@@ -9743,17 +10210,21 @@
     });
 
     emailCsvDrop.addEventListener('click', async () => {
-      const result = await ipcRenderer.invoke('select-file', {
-        title: 'Select Email CSV',
-        filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+      const scope = await promptForOutlookScope({
+        title: 'Choose Outlook Folders for Email Search',
+        description: 'Select the Inbox, Sent, and subfolders EmmaNeigh should search for email analysis.',
+        defaultDays: emailLookbackDays,
+        selectedFolders: emailSelectedOutlookFolders
       });
-      if (result) {
-        await processEmailCsv(result);
-      }
+      if (!scope) return;
+      emailLookbackDays = scope.daysBack;
+      emailSelectedOutlookFolders = scope.folderPaths;
+      await processOutlookEmails(scope.daysBack, scope.folderPaths);
     });
 
     async function processEmailCsv(csvPath) {
-      emailCsvPath = csvPath;
+      emailSourceMode = 'csv';
+      emailSourceLabel = csvPath;
       emailCsvSelected.textContent = csvPath.split(/[/\\]/).pop();
       emailCsvDrop.classList.add('selected');
       showEmailState('processing');
@@ -9764,47 +10235,45 @@
         const result = await ipcRenderer.invoke('parse-email-csv', csvPath);
 
         if (result.success) {
-          emailData = result.emails;
-
-          // Update stats
-          emailTotalCount.textContent = result.summary.total_emails;
-          emailSenderCount.textContent = result.summary.unique_senders;
-
-          if (result.summary.date_range.earliest && result.summary.date_range.latest) {
-            const earliest = new Date(result.summary.date_range.earliest).toLocaleDateString();
-            const latest = new Date(result.summary.date_range.latest).toLocaleDateString();
-            emailDateRange.textContent = `${earliest} - ${latest}`;
-          }
-
-          // Show UI elements
-          emailStats.style.display = 'grid';
-          searchModeToggle.style.display = 'flex';
-          emailSearchBox.style.display = 'flex';
-          emailFilters.style.display = 'grid';
-          emailPrivacyToggle.style.display = 'block';
-          detectTasksBtn.style.display = 'flex';
-
-          // Show attachment column warning if applicable
-          let attachWarning = document.getElementById('attachmentColumnWarning');
-          if (!attachWarning) {
-            attachWarning = document.createElement('div');
-            attachWarning.id = 'attachmentColumnWarning';
-            attachWarning.style.cssText = 'background: #2a2000; border: 1px solid #f5a623; border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 12px; color: #f5a623; display: none;';
-            emailStats.parentNode.insertBefore(attachWarning, emailStats.nextSibling);
-          }
-          if (result.summary.attachment_note) {
-            attachWarning.textContent = '⚠ ' + result.summary.attachment_note;
-            attachWarning.style.display = 'block';
-          } else {
-            attachWarning.style.display = 'none';
-          }
-
-          // Log usage
+          renderLoadedEmailResult(result, csvPath);
           await logUsage('email', 'parse', 1, result.summary.total_emails, Date.now() - startTime);
-
           showEmailState('loaded');
         } else {
           emailErrorText.textContent = result.error || 'Failed to parse CSV';
+          showEmailState('error');
+        }
+      } catch (err) {
+        emailErrorText.textContent = err.message;
+        showEmailState('error');
+      }
+    }
+
+    async function processOutlookEmails(daysBack = 30, folderPaths = []) {
+      emailSourceMode = 'outlook';
+      emailLookbackDays = daysBack;
+      emailSelectedOutlookFolders = Array.isArray(folderPaths) ? folderPaths : [];
+      const folderCount = emailSelectedOutlookFolders.length;
+      emailSourceLabel = `Outlook folders (${daysBack} days)`;
+      emailCsvSelected.textContent = `Outlook folders • ${folderCount} selected • last ${daysBack} day${daysBack === 1 ? '' : 's'}`;
+      emailCsvDrop.classList.add('selected');
+      showEmailState('processing');
+
+      const startTime = Date.now();
+
+      try {
+        const result = await ipcRenderer.invoke('load-outlook-emails', {
+          daysBack,
+          folders: ['Inbox', 'Sent Items'],
+          includeSubfolders: true,
+          folderPaths: emailSelectedOutlookFolders
+        });
+
+        if (result.success) {
+          renderLoadedEmailResult(result, emailSourceLabel);
+          await logUsage('email', 'outlook_import', 1, result.summary.total_emails, Date.now() - startTime);
+          showEmailState('loaded');
+        } else {
+          emailErrorText.textContent = result.error || 'Failed to load Outlook emails';
           showEmailState('error');
         }
       } catch (err) {
@@ -10071,7 +10540,7 @@
         emailPreviewContent.textContent = email.body;
         emailPreviewContent.className = 'email-preview-content';
       } else {
-        emailPreviewContent.textContent = 'No email body available in CSV export.';
+        emailPreviewContent.textContent = 'No email body was available for this message.';
         emailPreviewContent.className = 'email-preview-content email-preview-no-body';
       }
 
@@ -10102,7 +10571,9 @@
 
     function resetEmailState() {
       emailData = [];
-      emailCsvPath = null;
+      emailSourceMode = null;
+      emailSourceLabel = '';
+      emailSelectedOutlookFolders = [];
       emailCsvSelected.textContent = '';
       emailCsvDrop.classList.remove('selected');
       emailStats.style.display = 'none';
@@ -10311,7 +10782,7 @@
 
     detectTasksBtn.addEventListener('click', async () => {
       if (!emailData || emailData.length === 0) {
-        alert('Please upload and parse an email CSV first.');
+        alert('Please load Outlook emails first.');
         return;
       }
 
@@ -10406,7 +10877,7 @@
 
             detectedTasksPanel.style.display = 'block';
           } else {
-            detectedTasksList.innerHTML = '<div class="task-no-results">No actionable tasks detected in these emails. Try uploading emails that contain task requests (e.g. "please collate", "run a redline", "prepare signature packets").</div>';
+            detectedTasksList.innerHTML = '<div class="task-no-results">No actionable tasks detected in these emails. Try loading folders that contain task requests (e.g. "please collate", "run a redline", "prepare signature packets").</div>';
             taskCount.textContent = '0';
             detectedTasksPanel.style.display = 'block';
           }
@@ -10535,6 +11006,8 @@
 
     let checklistDocPath = null;
     let checklistEmailPath = null;
+    let checklistEmailSourceMode = 'outlook';
+    let checklistEmailLookbackDays = 30;
     let checklistOutputPath = null;
 
     function showChecklistState(state) {
@@ -10545,7 +11018,26 @@
     }
 
     function updateChecklistButton() {
-      updateChecklistBtn.disabled = !(checklistDocPath && checklistEmailPath);
+      updateChecklistBtn.disabled = !checklistDocPath;
+    }
+
+    function renderChecklistEmailSource() {
+      if (checklistEmailSourceMode === 'csv' && checklistEmailPath) {
+        checklistEmailSelected.textContent = checklistEmailPath.split(/[\\/]/).pop();
+        checklistEmailDrop.classList.add('selected');
+        clearChecklistEmail.classList.add('visible');
+        return;
+      }
+      if (checklistEmailSourceMode === 'outlook') {
+        const folderCount = checklistSelectedOutlookFolders.length;
+        checklistEmailSelected.textContent = `Outlook folders • ${folderCount} selected • last ${checklistEmailLookbackDays} day${checklistEmailLookbackDays === 1 ? '' : 's'}`;
+        checklistEmailDrop.classList.add('selected');
+        clearChecklistEmail.classList.add('visible');
+        return;
+      }
+      checklistEmailSelected.textContent = '';
+      checklistEmailDrop.classList.remove('selected');
+      clearChecklistEmail.classList.remove('visible');
     }
 
     // Checklist doc drop
@@ -10589,14 +11081,18 @@
     // Checklist email drop
     checklistEmailDrop.addEventListener('click', async (e) => {
       if (e.target === clearChecklistEmail) return;
-      const result = await ipcRenderer.invoke('select-file', { filters: [{ name: 'CSV Files', extensions: ['csv'] }] });
-      if (result) {
-        checklistEmailPath = result;
-        checklistEmailSelected.textContent = result.split(/[\\/]/).pop();
-        checklistEmailDrop.classList.add('selected');
-        clearChecklistEmail.classList.add('visible');
-        updateChecklistButton();
-      }
+      const scope = await promptForOutlookScope({
+        title: 'Choose Outlook Folders for Checklist Update',
+        description: 'Select the Outlook folders EmmaNeigh should search before updating the checklist.',
+        defaultDays: checklistEmailLookbackDays,
+        selectedFolders: checklistSelectedOutlookFolders
+      });
+      if (!scope) return;
+      checklistEmailSourceMode = 'outlook';
+      checklistEmailLookbackDays = scope.daysBack;
+      checklistSelectedOutlookFolders = scope.folderPaths;
+      checklistEmailPath = null;
+      renderChecklistEmailSource();
     });
 
     checklistEmailDrop.addEventListener('dragover', (e) => { e.preventDefault(); checklistEmailDrop.classList.add('drag-over'); });
@@ -10606,11 +11102,9 @@
       checklistEmailDrop.classList.remove('drag-over');
       const file = e.dataTransfer.files[0];
       if (file && file.name.toLowerCase().endsWith('.csv')) {
+        checklistEmailSourceMode = 'csv';
         checklistEmailPath = file.path;
-        checklistEmailSelected.textContent = file.name;
-        checklistEmailDrop.classList.add('selected');
-        clearChecklistEmail.classList.add('visible');
-        updateChecklistButton();
+        renderChecklistEmailSource();
       }
     });
 
@@ -10618,29 +11112,48 @@
     clearChecklistEmail.addEventListener('click', (e) => {
       e.stopPropagation();
       checklistEmailPath = null;
+      checklistEmailSourceMode = 'outlook';
+      checklistEmailLookbackDays = 30;
+      checklistSelectedOutlookFolders = [];
       checklistEmailSelected.textContent = '';
       checklistEmailDrop.classList.remove('selected');
       clearChecklistEmail.classList.remove('visible');
-      updateChecklistButton();
     });
 
-    // Update checklist button
-    updateChecklistBtn.addEventListener('click', async () => {
-      if (!checklistDocPath || !checklistEmailPath) return;
-
+    async function runChecklistUpdate(requestConfig, allowExpandedRetry = true) {
       showChecklistState('processing');
       checklistProgressFill.style.width = '0%';
-      checklistProgressText.textContent = 'Analyzing emails...';
+      checklistProgressText.textContent = requestConfig.emailPath
+        ? 'Analyzing checklist and email activity...'
+        : 'Scanning Outlook folders...';
 
       try {
-        const result = await ipcRenderer.invoke('update-checklist', {
-          checklistPath: checklistDocPath,
-          emailPath: checklistEmailPath
-        });
+        const result = await ipcRenderer.invoke('update-checklist', requestConfig);
 
         if (result.success) {
+          if (!requestConfig.emailPath && allowExpandedRetry && Number(result.itemsUpdated || 0) === 0) {
+            const expandedDays = Math.max(90, Number(requestConfig.daysBack || checklistEmailLookbackDays || 30));
+            const retryExpanded = window.confirm(
+              `EmmaNeigh did not find checklist changes in the last ${requestConfig.daysBack || checklistEmailLookbackDays || 30} days of Outlook activity. Would you like to retry using the last ${expandedDays} days?`
+            );
+            if (retryExpanded) {
+              checklistEmailSourceMode = 'outlook';
+              checklistEmailLookbackDays = expandedDays;
+              checklistEmailPath = null;
+              renderChecklistEmailSource();
+              return await runChecklistUpdate({
+                checklistPath: checklistDocPath,
+                useOutlook: true,
+                daysBack: expandedDays,
+                folderPaths: checklistSelectedOutlookFolders
+              }, false);
+            }
+          }
           checklistOutputPath = result.outputPath;
-          checklistResultText.textContent = `Updated ${result.itemsUpdated || 0} checklist items based on email activity`;
+          const sourceText = result.emailSource === 'outlook'
+            ? `Outlook activity from the last ${result.daysBack || requestConfig.daysBack || checklistEmailLookbackDays} day${(result.daysBack || requestConfig.daysBack || checklistEmailLookbackDays) === 1 ? '' : 's'}`
+            : 'the supplied email activity';
+          checklistResultText.textContent = `Updated ${result.itemsUpdated || 0} checklist items based on ${sourceText}`;
           showChecklistState('complete');
           logUsage('update_checklist', 'complete', 2, result.itemsUpdated || 0);
         } else {
@@ -10651,6 +11164,43 @@
         checklistErrorText.textContent = err.message || 'An error occurred';
         showChecklistState('error');
       }
+    }
+
+    // Update checklist button
+    updateChecklistBtn.addEventListener('click', async () => {
+      if (!checklistDocPath) return;
+
+      if (checklistEmailSourceMode === 'csv' && checklistEmailPath) {
+        await runChecklistUpdate({
+          checklistPath: checklistDocPath,
+          emailPath: checklistEmailPath
+        });
+        return;
+      }
+
+      let selectedDays = checklistEmailLookbackDays;
+      if (!checklistEmailDrop.classList.contains('selected')) {
+        const scope = await promptForOutlookScope({
+          title: 'Choose Outlook Folders for Checklist Update',
+          description: 'Select the Outlook folders EmmaNeigh should search before updating the checklist.',
+          defaultDays: checklistEmailLookbackDays,
+          selectedFolders: checklistSelectedOutlookFolders
+        });
+        if (!scope) return;
+        selectedDays = scope.daysBack;
+        checklistEmailSourceMode = 'outlook';
+        checklistEmailLookbackDays = selectedDays;
+        checklistSelectedOutlookFolders = scope.folderPaths;
+        checklistEmailPath = null;
+        renderChecklistEmailSource();
+      }
+
+      await runChecklistUpdate({
+        checklistPath: checklistDocPath,
+        useOutlook: true,
+        daysBack: selectedDays,
+        folderPaths: checklistSelectedOutlookFolders
+      });
     });
 
     downloadChecklistBtn.addEventListener('click', async () => {
@@ -10662,6 +11212,9 @@
     function resetChecklistState() {
       checklistDocPath = null;
       checklistEmailPath = null;
+      checklistEmailSourceMode = 'outlook';
+      checklistEmailLookbackDays = 30;
+      checklistSelectedOutlookFolders = [];
       checklistOutputPath = null;
       checklistDocSelected.textContent = '';
       checklistEmailSelected.textContent = '';

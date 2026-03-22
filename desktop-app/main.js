@@ -2320,7 +2320,6 @@ function buildAgentFallbackPlan(commandText, attachments) {
   const prompt = String(commandText || '').toLowerCase();
   const files = Array.isArray(attachments) ? attachments : [];
   const hasPdf = files.some(file => file.ext === 'pdf');
-  const hasCsv = files.some(file => file.ext === 'csv');
   const docxFiles = files.filter(file => file.ext === 'docx');
   const redlineExts = new Set(['pdf', 'docx', 'doc', 'rtf', 'txt', 'htm', 'html', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'xls', 'xlsx', 'xlsm', 'xlsb']);
   const redlineCandidates = files.filter(file => redlineExts.has(file.ext));
@@ -2359,23 +2358,23 @@ function buildAgentFallbackPlan(commandText, attachments) {
   }
 
   if (/update\s+checklist|checklist\s+update|refresh\s+checklist/.test(prompt)) {
-    if (docxFiles.length > 0 && hasCsv) {
+    if (docxFiles.length > 0) {
       return {
         action: 'run_update_checklist',
         target_tab: 'updatechecklist',
         run_now: true,
-        required_extensions: ['docx', 'csv'],
+        required_extensions: ['docx'],
         missing_requirements: [],
-        user_message: 'Running Update Checklist using the attached checklist and email CSV.'
+        user_message: 'Running Update Checklist using the attached checklist and Outlook email folders.'
       };
     }
     return {
       action: 'open_tab',
       target_tab: 'updatechecklist',
       run_now: false,
-      required_extensions: ['docx', 'csv'],
-      missing_requirements: ['Attach one checklist (.docx) and one email export (.csv).'],
-      user_message: 'Opened Update Checklist. Attach a checklist and email CSV to run.'
+      required_extensions: ['docx'],
+      missing_requirements: ['Attach one checklist (.docx) to run Update Checklist. EmmaNeigh will scan Outlook automatically.'],
+      user_message: 'Opened Update Checklist. Attach a checklist document to run.'
     };
   }
 
@@ -2490,9 +2489,9 @@ function buildAgentFallbackPlan(commandText, attachments) {
       action: 'open_tab',
       target_tab: 'email',
       run_now: false,
-      required_extensions: ['csv'],
+      required_extensions: [],
       missing_requirements: [],
-      user_message: 'Opened Email Search.'
+      user_message: 'Opened Email Search. EmmaNeigh can scan Outlook email folders directly.'
     };
   }
 
@@ -2501,7 +2500,7 @@ function buildAgentFallbackPlan(commandText, attachments) {
       action: 'open_tab',
       target_tab: 'updatechecklist',
       run_now: false,
-      required_extensions: ['docx', 'csv'],
+      required_extensions: ['docx'],
       missing_requirements: [],
       user_message: 'Opened Update Checklist.'
     };
@@ -2560,7 +2559,6 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
   let targetTab = normalizeAgentTabName(candidate.target_tab) || fallback.target_tab || null;
   let runNow = Boolean(candidate.run_now);
   const docxFiles = files.filter(file => file.ext === 'docx');
-  const hasCsv = files.some(file => file.ext === 'csv');
   const redlineExts = new Set(['pdf', 'docx', 'doc', 'rtf', 'txt', 'htm', 'html', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'xls', 'xlsx', 'xlsm', 'xlsb']);
   const redlineCandidates = files.filter(file => redlineExts.has(file.ext));
 
@@ -2603,9 +2601,9 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
     }
   } else if (action === 'run_update_checklist') {
     targetTab = 'updatechecklist';
-    if (!(docxFiles.length > 0 && hasCsv)) {
+    if (docxFiles.length < 1) {
       runNow = false;
-      missingRequirements = ['Attach one checklist (.docx) and one email export (.csv).'];
+      missingRequirements = ['Attach one checklist (.docx) to run Update Checklist. EmmaNeigh will scan Outlook automatically.'];
     }
   } else if (action === 'run_generate_punchlist') {
     targetTab = 'punchlist';
@@ -2872,75 +2870,95 @@ function getProcessorPath(processorName = 'signature_packets') {
   }
 }
 
+function ensureSignaturePacketProcessor(processorPath) {
+  if (!processorPath) {
+    throw new Error('Development mode - please build the app first');
+  }
 
-// Process signature packets
-// Accepts either a folder path string (legacy) or an object { folder: string } or { files: string[] }
-ipcMain.handle('process-folder', async (event, input) => {
+  if (!fs.existsSync(processorPath)) {
+    throw new Error('Processor not found: ' + processorPath);
+  }
+
+  if (process.platform === 'darwin') {
+    try { fs.chmodSync(processorPath, '755'); } catch (e) {}
+  }
+}
+
+function buildSignaturePacketArgs(input, extraConfig = {}) {
+  const config = { ...extraConfig };
+
+  if (typeof input === 'string') {
+    config.folder = input;
+  } else if (input && input.folder) {
+    config.folder = input.folder;
+    if (input.output_format) {
+      config.output_format = input.output_format;
+    }
+  } else if (input && input.files) {
+    config.files = input.files;
+    config.output_format = input.output_format || 'preserve';
+  } else {
+    throw new Error('Invalid input: must be folder path or { folder } or { files }');
+  }
+
+  const configPath = path.join(
+    app.getPath('temp'),
+    `packets-config-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`
+  );
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  return { args: ['--config', configPath], configPath };
+}
+
+function runSignaturePacketProcessor(input, extraConfig = {}, onMessage = null) {
   return new Promise((resolve, reject) => {
-    // Send initial progress
-    mainWindow.webContents.send('progress', { percent: 0, message: 'Initializing signature packet processor...' });
-
     const moduleName = 'signature_packets';
     const processorPath = getProcessorPath(moduleName);
-
-    if (!processorPath) {
-      reject(new Error('Development mode - please build the app first'));
-      return;
-    }
-
-    if (!fs.existsSync(processorPath)) {
-      reject(new Error('Processor not found: ' + processorPath));
-      return;
-    }
-
-    // Make executable on Mac
-    if (process.platform === 'darwin') {
-      try { fs.chmodSync(processorPath, '755'); } catch (e) {}
-    }
-
-    let args;
-    // Handle legacy string input (folder path)
-    if (typeof input === 'string') {
-      args = [input];
-    } else if (input.folder) {
-      // If we have output_format, use config file
-      if (input.output_format) {
-        const configPath = path.join(app.getPath('temp'), `packets-config-${Date.now()}.json`);
-        fs.writeFileSync(configPath, JSON.stringify({
-          folder: input.folder,
-          output_format: input.output_format
-        }));
-        args = ['--config', configPath];
-      } else {
-        args = [input.folder];
-      }
-    } else if (input.files) {
-      // Write config to temp file for multi-file input
-      const configPath = path.join(app.getPath('temp'), `packets-config-${Date.now()}.json`);
-      fs.writeFileSync(configPath, JSON.stringify({
-        files: input.files,
-        output_format: input.output_format || 'preserve'
-      }));
-      args = ['--config', configPath];
-    } else {
-      reject(new Error('Invalid input: must be folder path or { folder } or { files }'));
-      return;
-    }
-
-    const proc = spawnTracked(processorPath, [moduleName, ...args]);
+    let configRef = null;
+    let proc = null;
     let result = null;
+    let settled = false;
+
+    const cleanup = () => {
+      if (!configRef || !configRef.configPath) return;
+      try { fs.unlinkSync(configRef.configPath); } catch (e) {}
+    };
+
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err || 'Signature packet processing failed.')));
+    };
+
+    const succeed = (payload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(payload);
+    };
+
+    try {
+      ensureSignaturePacketProcessor(processorPath);
+      configRef = buildSignaturePacketArgs(input, extraConfig);
+      proc = spawnTracked(processorPath, [moduleName, ...configRef.args]);
+    } catch (err) {
+      fail(err);
+      return;
+    }
 
     proc.stdout.on('data', (data) => {
       const lines = data.toString().split('\n').filter(l => l.trim());
       for (const line of lines) {
         try {
           const msg = JSON.parse(line);
-          if (msg.type === 'progress') {
-            mainWindow.webContents.send('progress', msg);
-          } else if (msg.type === 'result') {
+          if (onMessage) {
+            onMessage(msg);
+          }
+          if (msg.type === 'result') {
             result = msg;
           } else if (msg.type === 'error') {
-            reject(new Error(msg.message));
+            fail(new Error(msg.message));
+            return;
           }
         } catch (e) {}
       }
@@ -2951,16 +2969,41 @@ ipcMain.handle('process-folder', async (event, input) => {
     });
 
     proc.on('close', (code) => {
+      if (settled) return;
       if (code === 0 && result) {
-        resolve(result);
+        succeed(result);
       } else if (!result) {
-        reject(new Error('Processing failed with code ' + code));
+        fail(new Error('Processing failed with code ' + code));
       }
     });
 
     proc.on('error', (err) => {
-      reject(err);
+      fail(err);
     });
+  });
+}
+
+
+// Process signature packets
+// Accepts either a folder path string (legacy) or an object { folder: string } or { files: string[] }
+ipcMain.handle('process-folder', async (event, input) => {
+  mainWindow.webContents.send('progress', { percent: 5, message: 'Initializing signature packet processor...' });
+  return runSignaturePacketProcessor(input, {}, (msg) => {
+    if (msg.type === 'progress') {
+      mainWindow.webContents.send('progress', msg);
+    }
+  });
+});
+
+ipcMain.handle('preflight-signature-packets', async (event, input) => {
+  mainWindow.webContents.send('progress', { percent: 2, message: 'Checking document structure...' });
+  return runSignaturePacketProcessor(input, {
+    preflight_long_annex_check: true,
+    long_annex_threshold: 100
+  }, (msg) => {
+    if (msg.type === 'progress') {
+      mainWindow.webContents.send('progress', msg);
+    }
   });
 });
 
@@ -7021,6 +7064,337 @@ try {
   };
 }
 
+function splitEmailAttachmentNames(rawValue) {
+  if (Array.isArray(rawValue)) {
+    return rawValue
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+  }
+  return String(rawValue || '')
+    .split(/[;,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function normalizeLoadedEmail(record = {}) {
+  const attachments = splitEmailAttachmentNames(record.attachments);
+  return {
+    subject: String(record.subject || '').trim(),
+    from: String(record.from || record.sender || record.sender_name || record.sender_email || '').trim(),
+    to: String(record.to || '').trim(),
+    cc: String(record.cc || '').trim(),
+    date_sent: String(record.date_sent || record.sent || '').trim(),
+    date_received: String(record.date_received || record.received || '').trim(),
+    body: String(record.body || '').trim(),
+    attachments: attachments.join('; '),
+    has_attachments: Boolean(record.has_attachments) || attachments.length > 0,
+    folder: String(record.folder || '').trim(),
+    entry_id: String(record.entry_id || '').trim()
+  };
+}
+
+function buildLoadedEmailSummary(emails = []) {
+  const normalized = Array.isArray(emails) ? emails : [];
+  const uniqueSenders = new Set(
+    normalized
+      .map((email) => String(email.from || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const dateValues = normalized
+    .map((email) => String(email.date_received || email.date_sent || '').trim())
+    .filter(Boolean)
+    .map((value) => {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? { raw: value, ts: parsed } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+
+  return {
+    total_emails: normalized.length,
+    unique_senders: uniqueSenders.size,
+    with_attachments: normalized.filter((email) => email.has_attachments).length,
+    date_range: {
+      earliest: dateValues.length ? dateValues[0].raw : null,
+      latest: dateValues.length ? dateValues[dateValues.length - 1].raw : null
+    }
+  };
+}
+
+function writeTempEmailDataset(emails = []) {
+  const outputPath = path.join(
+    app.getPath('temp'),
+    `emmaneigh_email_activity_${Date.now()}_${Math.floor(Math.random() * 100000)}.json`
+  );
+  fs.writeFileSync(outputPath, JSON.stringify({ emails }, null, 2), 'utf8');
+  return outputPath;
+}
+
+async function listOutlookFolders(options = {}) {
+  if (process.platform !== 'win32') {
+    return { success: false, error: 'Outlook COM is only available on Windows.' };
+  }
+
+  const roots = Array.isArray(options.roots) && options.roots.length
+    ? options.roots.map((value) => String(value || '').trim()).filter(Boolean)
+    : ['Inbox', 'Sent Items'];
+  const includeSubfolders = options.includeSubfolders !== false;
+  const escapedRoots = roots.map((value) => `'${value.replace(/'/g, "''")}'`).join(', ');
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+$outlook = $null
+$ns = $null
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $ns = $outlook.GetNamespace("MAPI")
+  try { $null = $ns.Logon("", "", $false, $false) } catch {}
+
+  $rootNames = @(${escapedRoots})
+  $folders = New-Object System.Collections.Generic.List[Object]
+
+  function Add-FolderTargets($folderObj, $rootName, $targetList, [bool]$includeChildren) {
+    if ($null -eq $folderObj) { return }
+    $folderPath = ''
+    try { $folderPath = $folderObj.FolderPath } catch {}
+    if (-not $folderPath) { $folderPath = $rootName }
+    $folderDisplayName = $folderPath
+    try {
+      if ($folderObj.Name) { $folderDisplayName = $folderObj.Name }
+    } catch {}
+    $targetList.Add(@{
+      path = $folderPath
+      root = $rootName
+      name = $folderDisplayName
+    }) | Out-Null
+    if (-not $includeChildren) { return }
+    try {
+      foreach ($childFolder in $folderObj.Folders) {
+        Add-FolderTargets $childFolder $rootName $targetList $includeChildren
+      }
+    } catch {}
+  }
+
+  foreach ($rootName in $rootNames) {
+    $folderObj = $null
+    switch ($rootName) {
+      'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
+      'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
+      'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
+      'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
+      default { $folderObj = $ns.GetDefaultFolder(6) }
+    }
+    if ($null -eq $folderObj) { continue }
+    Add-FolderTargets $folderObj $rootName $folders ${includeSubfolders ? '$true' : '$false'}
+  }
+
+  $json = $folders | Sort-Object root, path | ConvertTo-Json -Compress -Depth 4
+  if (-not $json) { $json = '[]' }
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
+}`;
+
+  const result = await imanageRunPowerShell(script, { timeoutMs: 60000 });
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
+  const folders = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
+  return { success: true, folders };
+}
+
+async function collectOutlookEmails(options = {}) {
+  if (process.platform !== 'win32') {
+    return { success: false, error: 'Outlook COM is only available on Windows.' };
+  }
+
+  const folders = Array.isArray(options.folders) && options.folders.length
+    ? options.folders.map((value) => String(value || '').trim()).filter(Boolean)
+    : ['Inbox', 'Sent Items'];
+  const folderPaths = Array.isArray(options.folderPaths)
+    ? options.folderPaths.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  const includeSubfolders = options.includeSubfolders !== false;
+  const daysBack = Math.max(1, Math.min(Math.round(Number(options.daysBack || 30)), 3650));
+  const maxResultsPerFolder = Math.max(25, Math.min(Math.round(Number(options.maxResultsPerFolder || 250)), 1000));
+  const maxTotalResults = Math.max(50, Math.min(Math.round(Number(options.maxTotalResults || 600)), 5000));
+  const bodyCharLimit = Math.max(400, Math.min(Math.round(Number(options.bodyCharLimit || 4000)), 20000));
+  const escapedFolders = folders.map((value) => `'${value.replace(/'/g, "''")}'`).join(', ');
+  const escapedFolderPaths = folderPaths.map((value) => `'${value.replace(/'/g, "''")}'`).join(', ');
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+$outlook = $null
+$ns = $null
+try {
+  $outlook = New-Object -ComObject "Outlook.Application"
+  $ns = $outlook.GetNamespace("MAPI")
+  try { $null = $ns.Logon("", "", $false, $false) } catch {}
+
+  $targetFolders = @(${escapedFolders})
+  $selectedFolderPaths = @(${escapedFolderPaths})
+  $cutoffDate = (Get-Date).AddDays(-${daysBack})
+  $emails = New-Object System.Collections.Generic.List[Object]
+  $folderTargets = New-Object System.Collections.Generic.List[Object]
+
+  function Add-FolderTargets($folderObj, $rootName, $targetList, [bool]$includeChildren) {
+    if ($null -eq $folderObj) { return }
+    $folderPath = ''
+    try { $folderPath = $folderObj.FolderPath } catch {}
+    if (-not $folderPath) { $folderPath = $rootName }
+    $targetList.Add(@{
+      Name = $folderPath
+      Root = $rootName
+      Folder = $folderObj
+    }) | Out-Null
+    if (-not $includeChildren) { return }
+    try {
+      foreach ($childFolder in $folderObj.Folders) {
+        Add-FolderTargets $childFolder $rootName $targetList $includeChildren
+      }
+    } catch {}
+  }
+
+  foreach ($folderName in $targetFolders) {
+    $folderObj = $null
+    switch ($folderName) {
+      'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
+      'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
+      'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
+      'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
+      default { $folderObj = $ns.GetDefaultFolder(6) }
+    }
+    if ($null -eq $folderObj) { continue }
+    Add-FolderTargets $folderObj $folderName $folderTargets ${includeSubfolders ? '$true' : '$false'}
+  }
+
+  $totalCount = 0
+  foreach ($folderInfo in $folderTargets) {
+    if ($totalCount -ge ${maxTotalResults}) { break }
+    if ($selectedFolderPaths.Count -gt 0 -and -not ($selectedFolderPaths -contains $folderInfo.Name)) { continue }
+    $folderObj = $folderInfo.Folder
+    $folderName = if ($folderInfo.Name) { $folderInfo.Name } else { $folderInfo.Root }
+    $rootFolderName = $folderInfo.Root
+    $items = $folderObj.Items
+    try {
+      if ($rootFolderName -eq 'Sent Items') {
+        $items.Sort("[SentOn]", $true)
+      } else {
+        $items.Sort("[ReceivedTime]", $true)
+      }
+    } catch {}
+
+    $count = 0
+    foreach ($item in $items) {
+      if ($count -ge ${maxResultsPerFolder} -or $totalCount -ge ${maxTotalResults}) { break }
+      if ($null -eq $item) { continue }
+      if ($item.Class -ne 43) { continue }
+
+      $sentOn = $null
+      $receivedTime = $null
+      try { $sentOn = $item.SentOn } catch {}
+      try { $receivedTime = $item.ReceivedTime } catch {}
+      $msgDate = if ($rootFolderName -eq 'Sent Items') { $sentOn } else { $receivedTime }
+      if ($null -eq $msgDate) { $msgDate = $sentOn }
+      if ($null -eq $msgDate) { $msgDate = $receivedTime }
+      if ($null -ne $msgDate -and $msgDate -lt $cutoffDate) { continue }
+
+      $bodyText = ''
+      try {
+        if ($item.Body) {
+          $bodyText = $item.Body.Substring(0, [Math]::Min(${bodyCharLimit}, $item.Body.Length))
+        }
+      } catch {}
+      $bodyEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($bodyText))
+
+      $attachmentNames = @()
+      try {
+        foreach ($att in $item.Attachments) {
+          if ($att.FileName) { $attachmentNames += $att.FileName }
+        }
+      } catch {}
+
+      $senderName = ''
+      try { if ($item.SenderName) { $senderName = $item.SenderName } } catch {}
+      $senderEmail = ''
+      try { if ($item.SenderEmailAddress) { $senderEmail = $item.SenderEmailAddress } } catch {}
+      if (-not $senderName -and $rootFolderName -eq 'Sent Items') { $senderName = 'Me' }
+
+      $emails.Add(@{
+        entry_id = $item.EntryID
+        folder = $folderName
+        root_folder = $folderInfo.Root
+        subject = if ($item.Subject) { $item.Subject } else { '' }
+        from = $senderName
+        sender_email = $senderEmail
+        to = if ($item.To) { $item.To } else { '' }
+        cc = if ($item.CC) { $item.CC } else { '' }
+        date_sent = if ($sentOn) { $sentOn.ToString("o") } else { '' }
+        date_received = if ($receivedTime) { $receivedTime.ToString("o") } else { '' }
+        body_b64 = $bodyEncoded
+        attachments = $attachmentNames
+        has_attachments = ($attachmentNames.Count -gt 0)
+      }) | Out-Null
+      $count += 1
+      $totalCount += 1
+    }
+  }
+
+  $json = $emails | ConvertTo-Json -Compress -Depth 6
+  if (-not $json) { $json = '[]' }
+  Write-Output "###JSON_START###$json###JSON_END###"
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
+  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
+}`;
+
+  const result = await imanageRunPowerShell(script, { timeoutMs: Math.max(60000, daysBack > 90 ? 120000 : 90000) });
+  const failure = normalizeOfficeComFailure(result, 'Outlook');
+  if (failure) return failure;
+
+  const rawEmails = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
+  const seen = new Set();
+  const emails = rawEmails
+    .map((record) => {
+      const normalized = { ...record };
+      if (normalized.body_b64) {
+        try {
+          normalized.body = Buffer.from(String(normalized.body_b64), 'base64').toString('utf8');
+        } catch (_) {
+          normalized.body = '';
+        }
+        delete normalized.body_b64;
+      }
+      return normalizeLoadedEmail(normalized);
+    })
+    .filter((email) => {
+      const dedupeKey = `${email.entry_id || ''}|${email.folder || ''}`;
+      if (dedupeKey !== '|' && seen.has(dedupeKey)) return false;
+      if (dedupeKey !== '|') seen.add(dedupeKey);
+      return true;
+    })
+    .sort((a, b) => {
+      const aTs = Date.parse(a.date_received || a.date_sent || '') || 0;
+      const bTs = Date.parse(b.date_received || b.date_sent || '') || 0;
+      return bTs - aTs;
+    });
+
+  return {
+    success: true,
+    emails,
+    summary: buildLoadedEmailSummary(emails),
+    daysBack,
+    folders,
+    folderPaths
+  };
+}
+
 // ========== COMMAND TOOL DISPATCHER ==========
 
 function getToolUsageEvent(toolName, input = {}, toolResult = null) {
@@ -9230,6 +9604,50 @@ ipcMain.handle('parse-email-csv', async (event, csvPath) => {
   });
 });
 
+ipcMain.handle('load-outlook-emails', async (event, config = {}) => {
+  try {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('email-progress', { message: 'Connecting to Outlook...', percent: 10 });
+    }
+    const result = await collectOutlookEmails(config || {});
+    if (!result.success) {
+      return result;
+    }
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('email-progress', {
+      message: `Loaded ${result.emails.length} Outlook email(s) from Inbox, Sent Items, and subfolders.`,
+        percent: 100
+      });
+    }
+    return {
+      success: true,
+      emails: result.emails,
+      summary: result.summary,
+      daysBack: result.daysBack,
+      folders: result.folders,
+      folderPaths: result.folderPaths,
+      source: 'outlook'
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('list-outlook-folders', async (event, config = {}) => {
+  try {
+    const result = await listOutlookFolders(config || {});
+    if (!result.success) {
+      return result;
+    }
+    return {
+      success: true,
+      folders: Array.isArray(result.folders) ? result.folders : []
+    };
+  } catch (e) {
+    return { success: false, error: e.message, folders: [] };
+  }
+});
+
 // ========== NATURAL LANGUAGE EMAIL SEARCH ==========
 
 ipcMain.handle('nl-search-emails', async (event, config) => {
@@ -9466,9 +9884,9 @@ Allowed actions:
 - run_packet_shell (requires PDF/DOC/DOCX attachments)
 - run_redline (requires two compatible document attachments)
 - run_collate (requires at least two DOCX attachments)
-- run_update_checklist (requires checklist DOCX + email CSV)
+- run_update_checklist (requires checklist DOCX; Outlook Inbox, Sent Items, and subfolders are scanned automatically)
 - run_generate_punchlist (requires checklist DOCX)
-- run_email_ai_search (answers question using loaded emails or attached CSV email export)
+- run_email_ai_search (answers question using loaded emails or by scanning Outlook folders)
 - run_general_llm_chat (general Q&A / drafting with the selected provider)
 - open_tab
 - no_op
@@ -12254,8 +12672,58 @@ ipcMain.handle('update-checklist', async (event, config) => {
   if (!checklistPath || !fs.existsSync(checklistPath)) {
     return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
   }
-  if (!emailPath || !fs.existsSync(emailPath)) {
-    return { success: false, error: 'Email CSV file not found. Please select a valid .csv export.' };
+
+  let emailInputPath = '';
+  let emailSource = 'outlook';
+  let cleanupEmailInputPath = '';
+  let collectedEmailCount = 0;
+  let collectedEmailDaysBack = Number(config.daysBack || 30);
+
+  if (Array.isArray(config.emails) && config.emails.length) {
+    const normalizedEmails = config.emails.map((email) => normalizeLoadedEmail(email)).filter((email) => (
+      email.subject || email.body || email.from || email.to || email.attachments
+    ));
+    if (!normalizedEmails.length) {
+      return { success: false, error: 'No email activity was provided for checklist analysis.' };
+    }
+    cleanupEmailInputPath = writeTempEmailDataset(normalizedEmails);
+    emailInputPath = cleanupEmailInputPath;
+    emailSource = 'memory';
+    collectedEmailCount = normalizedEmails.length;
+  } else if (emailPath && fs.existsSync(emailPath)) {
+    emailInputPath = emailPath;
+    emailSource = 'csv';
+  } else {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('checklist-progress', {
+        message: 'Scanning Outlook email folders...',
+        percent: 12
+      });
+    }
+    const outlookResult = await collectOutlookEmails({
+      daysBack: collectedEmailDaysBack,
+      folders: Array.isArray(config.folders) && config.folders.length ? config.folders : ['Inbox', 'Sent Items'],
+      folderPaths: Array.isArray(config.folderPaths) ? config.folderPaths : [],
+      maxResultsPerFolder: config.maxResultsPerFolder || 250,
+      bodyCharLimit: config.bodyCharLimit || 4000
+    });
+    if (!outlookResult.success) {
+      return {
+        success: false,
+        error: outlookResult.error || 'Failed to scan Outlook email folders.'
+      };
+    }
+    if (!Array.isArray(outlookResult.emails) || !outlookResult.emails.length) {
+      return {
+        success: false,
+        error: `No Outlook emails were found in Inbox or Sent Items for the last ${outlookResult.daysBack || collectedEmailDaysBack} days.`
+      };
+    }
+    cleanupEmailInputPath = writeTempEmailDataset(outlookResult.emails);
+    emailInputPath = cleanupEmailInputPath;
+    emailSource = 'outlook';
+    collectedEmailCount = outlookResult.emails.length;
+    collectedEmailDaysBack = outlookResult.daysBack || collectedEmailDaysBack;
   }
 
   // Create temp output folder
@@ -12283,15 +12751,18 @@ ipcMain.handle('update-checklist', async (event, config) => {
     let args;
 
     if (app.isPackaged) {
-      args = [clModuleName, checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
+      args = [clModuleName, checklistPath, emailInputPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
     } else {
-      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
+      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailInputPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
     }
 
     if (providerAutoDetectNote) {
       mainWindow.webContents.send('checklist-progress', { message: providerAutoDetectNote, percent: 10 });
     }
-    mainWindow.webContents.send('checklist-progress', { message: `Analyzing checklist and emails with ${providerName}...`, percent: 20 });
+    mainWindow.webContents.send('checklist-progress', {
+      message: `Analyzing checklist and ${emailSource === 'outlook' ? 'Outlook activity' : 'email activity'} with ${providerName}...`,
+      percent: 20
+    });
 
     const proc = spawnTracked(processorPath, args);
     let stdout = '';
@@ -12307,6 +12778,9 @@ ipcMain.handle('update-checklist', async (event, config) => {
     });
 
     proc.on('close', (code) => {
+      if (cleanupEmailInputPath) {
+        try { fs.unlinkSync(cleanupEmailInputPath); } catch (_) {}
+      }
       mainWindow.webContents.send('checklist-progress', { message: 'Complete', percent: 100 });
 
       if (code !== 0) {
@@ -12327,11 +12801,18 @@ ipcMain.handle('update-checklist', async (event, config) => {
         success: !!result.success,
         outputPath: result.output_path,
         itemsUpdated: result.items_updated,
+        emailsProcessed: result.emails_processed || collectedEmailCount,
+        emailSource,
+        daysBack: emailSource === 'outlook' ? collectedEmailDaysBack : null,
+        folderPaths: emailSource === 'outlook' ? (Array.isArray(config.folderPaths) ? config.folderPaths : []) : [],
         error: result.error
       });
     });
 
     proc.on('error', (err) => {
+      if (cleanupEmailInputPath) {
+        try { fs.unlinkSync(cleanupEmailInputPath); } catch (_) {}
+      }
       resolve({ success: false, error: err.message });
     });
   });

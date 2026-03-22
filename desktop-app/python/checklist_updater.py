@@ -2,11 +2,11 @@
 """
 Checklist Updater - Update transaction checklist based on email activity
 
-This module parses a transaction checklist (Word document) and an email CSV export,
+This module parses a transaction checklist (Word document) and an email activity dataset,
 then updates the checklist status column based on detected email activity.
 
 Usage:
-    python checklist_updater.py <checklist_path> <email_csv_path> <output_folder> <api_key> [provider] [model] [provider_base_url]
+    python checklist_updater.py <checklist_path> <email_input_path> <output_folder> <api_key> [provider] [model] [provider_base_url]
 """
 
 import sys
@@ -163,6 +163,60 @@ NOTES_COLUMN_PATTERNS = [
 ]
 
 
+def normalize_email_record(raw_email):
+    """Normalize one email record from CSV or JSON input."""
+    if not isinstance(raw_email, dict):
+        return None
+
+    attachments = raw_email.get('attachments', '')
+    if isinstance(attachments, list):
+        attachment_text = '; '.join(str(item).strip() for item in attachments if str(item).strip())
+    else:
+        attachment_text = str(attachments or '').strip()
+
+    has_attachments = raw_email.get('has_attachments')
+    if isinstance(has_attachments, str):
+        has_attachments = has_attachments.strip().lower() not in ('', '0', 'false', 'no', 'none', 'nan')
+    else:
+        has_attachments = bool(has_attachments)
+    if not has_attachments and attachment_text:
+        has_attachments = attachment_text.lower() not in ('none', 'false', 'no', 'n/a')
+
+    email = {
+        'subject': str(raw_email.get('subject', '') or '').strip(),
+        'body': str(raw_email.get('body', '') or '').strip(),
+        'from': str(raw_email.get('from', raw_email.get('sender', raw_email.get('sender_email', ''))) or '').strip(),
+        'to': str(raw_email.get('to', '') or '').strip(),
+        'cc': str(raw_email.get('cc', '') or '').strip(),
+        'attachments': attachment_text,
+        'has_attachments': has_attachments,
+        'date': str(raw_email.get('date', '') or '').strip(),
+    }
+
+    sent_value = str(raw_email.get('date_sent', raw_email.get('sent', '')) or '').strip()
+    received_value = str(raw_email.get('date_received', raw_email.get('received', '')) or '').strip()
+    if sent_value:
+        email['date_sent'] = sent_value
+    else:
+        email['date_sent'] = ''
+    if received_value:
+        email['date_received'] = received_value
+    else:
+        email['date_received'] = ''
+    if not email['date']:
+        email['date'] = email['date_received'] or email['date_sent']
+
+    email['searchable'] = " ".join([
+        email['subject'],
+        email['body'],
+        email['from'],
+        email['to'],
+        email['cc'],
+        email['attachments'],
+    ]).lower()
+    return email
+
+
 def parse_email_csv(csv_path):
     """
     Parse Outlook email CSV export.
@@ -198,40 +252,60 @@ def parse_email_csv(csv_path):
 
         emails = []
         for _, row in df.iterrows():
-            email = {}
+            raw_email = {}
             for field, possible_cols in column_mapping.items():
                 for col in possible_cols:
                     if col in df.columns and pd.notna(row.get(col)):
                         raw_value = str(row[col]).strip()
                         if field == 'has_attachments':
-                            email[field] = raw_value.lower() not in ('', '0', 'false', 'no', 'none', 'nan')
+                            raw_email[field] = raw_value.lower() not in ('', '0', 'false', 'no', 'none', 'nan')
                         else:
-                            email[field] = raw_value
+                            raw_email[field] = raw_value
                         break
                 else:
-                    email[field] = False if field == 'has_attachments' else ''
+                    raw_email[field] = False if field == 'has_attachments' else ''
 
-            if not email.get('has_attachments'):
-                attachment_text = str(email.get('attachments', '') or '').strip().lower()
-                if attachment_text and attachment_text not in ('none', 'false', 'no', 'n/a'):
-                    email['has_attachments'] = True
-
-            # Combine key fields for fallback lexical checks and lightweight heuristics.
-            email['searchable'] = " ".join([
-                str(email.get('subject', '') or ''),
-                str(email.get('body', '') or ''),
-                str(email.get('from', '') or ''),
-                str(email.get('to', '') or ''),
-                str(email.get('cc', '') or ''),
-                str(email.get('attachments', '') or ''),
-            ]).lower()
-            emails.append(email)
+            email = normalize_email_record(raw_email)
+            if email:
+                emails.append(email)
 
         return emails
 
     except Exception as e:
         print(f"Error parsing email CSV: {e}", file=sys.stderr)
         return []
+
+
+def parse_email_json(json_path):
+    """Parse JSON email activity written by the Electron app."""
+    try:
+        with open(json_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except Exception as e:
+        print(f"Error parsing email JSON: {e}", file=sys.stderr)
+        return []
+
+    if isinstance(payload, dict):
+        raw_emails = payload.get('emails', [])
+    elif isinstance(payload, list):
+        raw_emails = payload
+    else:
+        raw_emails = []
+
+    emails = []
+    for raw_email in raw_emails:
+        email = normalize_email_record(raw_email)
+        if email:
+            emails.append(email)
+    return emails
+
+
+def parse_email_input(email_input_path):
+    """Load email activity from either CSV export or JSON dataset."""
+    ext = os.path.splitext(str(email_input_path or ''))[1].lower()
+    if ext == '.json':
+        return parse_email_json(email_input_path)
+    return parse_email_csv(email_input_path)
 
 
 def find_column_index(headers, patterns):
@@ -1139,7 +1213,7 @@ Include only rows with meaningful evidence from email. Do not include rows with 
 
 def update_checklist(
     checklist_path,
-    email_csv_path,
+    email_input_path,
     output_folder,
     api_key=None,
     provider="anthropic",
@@ -1151,7 +1225,7 @@ def update_checklist(
 
     Args:
         checklist_path: Path to Word document with checklist table
-        email_csv_path: Path to Outlook email CSV export
+        email_input_path: Path to CSV or JSON email activity input
         output_folder: Folder to save updated checklist
         api_key: Provider API key
         provider: LLM provider (anthropic/openai/harvey)
@@ -1177,10 +1251,10 @@ def update_checklist(
             result['error'] = 'LLM API key is required to update checklist from email activity.'
             return result
 
-        # Parse email CSV
-        emails = parse_email_csv(email_csv_path)
+        # Parse email activity
+        emails = parse_email_input(email_input_path)
         if not emails:
-            result['error'] = 'No emails found in CSV file'
+            result['error'] = 'No emails found in the supplied email activity.'
             return result
 
         # Open checklist document
@@ -1349,12 +1423,12 @@ def main():
     if len(sys.argv) < 4:
         print(json.dumps({
             'success': False,
-            'error': 'Usage: checklist_updater.py <checklist_path> <email_csv_path> <output_folder> <api_key> [provider] [model] [provider_base_url]'
+            'error': 'Usage: checklist_updater.py <checklist_path> <email_input_path> <output_folder> <api_key> [provider] [model] [provider_base_url]'
         }))
         sys.exit(1)
 
     checklist_path = sys.argv[1]
-    email_csv_path = sys.argv[2]
+    email_input_path = sys.argv[2]
     output_folder = sys.argv[3]
 
     # API key is required for LLM-driven checklist updates.
@@ -1382,7 +1456,7 @@ def main():
 
     result = update_checklist(
         checklist_path,
-        email_csv_path,
+        email_input_path,
         output_folder,
         api_key,
         provider=provider,

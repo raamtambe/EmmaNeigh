@@ -30,6 +30,9 @@ SIGNATURE_TRIGGER_PHRASES = [
     "THE PARTIES HERETO", "DULY AUTHORIZED"
 ]
 
+ANNEX_KEYWORDS = ["SCHEDULE", "EXHIBIT", "ANNEX", "APPENDIX"]
+LONG_ANNEX_PAGE_THRESHOLD = 100
+
 
 def emit(msg_type, **kwargs):
     """Output JSON message to stdout for the Electron app."""
@@ -677,6 +680,77 @@ def extract_signers_from_docx(docx_path):
     return signers, method if method else ""
 
 
+def find_first_signature_page(page_iterable):
+    """
+    Return the first 1-based page number that contains a signature block.
+    Returns None if no signature page is found.
+    """
+    for page_num, page in enumerate(page_iterable, start=1):
+        signers, _ = extract_person_signers(page)
+        if signers:
+            return page_num
+    return None
+
+
+def has_annex_keywords_after_signature(doc, first_signature_page):
+    """
+    Check a few pages after the first signature block for common annex markers.
+    This is advisory only; the page-count threshold controls the actual warning.
+    """
+    if not first_signature_page:
+        return False
+
+    start_index = first_signature_page
+    end_index = min(doc.page_count, first_signature_page + 5)
+
+    for page_index in range(start_index, end_index):
+        try:
+            text = doc.load_page(page_index).get_text().upper()
+        except Exception:
+            continue
+        if any(keyword in text for keyword in ANNEX_KEYWORDS):
+            return True
+
+    return False
+
+
+def detect_long_annex_documents(document_files, page_threshold=LONG_ANNEX_PAGE_THRESHOLD):
+    """
+    Quickly scan PDFs for large annexes after the first signature block.
+    Returns a list of warning dictionaries for the UI prompt.
+    """
+    warnings = []
+    total = max(len(document_files), 1)
+
+    for idx, (filename, filepath) in enumerate(document_files):
+        percent = min(4, 1 + int(((idx + 1) / total) * 3))
+        emit("progress", percent=percent, message=f"Checking annex length in {filename}")
+
+        if not filename.lower().endswith('.pdf'):
+            continue
+
+        try:
+            doc = fitz.open(filepath)
+            first_signature_page = find_first_signature_page(doc)
+
+            if first_signature_page:
+                pages_after_signature = max(0, doc.page_count - first_signature_page)
+                if pages_after_signature > page_threshold:
+                    warnings.append({
+                        "document": filename,
+                        "total_pages": doc.page_count,
+                        "first_signature_page": first_signature_page,
+                        "pages_after_signature_block": pages_after_signature,
+                        "annex_keywords_detected": has_annex_keywords_after_signature(doc, first_signature_page)
+                    })
+
+            doc.close()
+        except Exception:
+            continue
+
+    return warnings
+
+
 def create_docx_packet(signer_name, docs_for_signer, output_folder):
     """
     Create a DOCX signature packet for a signer from DOCX source documents.
@@ -1003,6 +1077,8 @@ def main():
     input_dir = None
     file_paths = None
     output_format = 'preserve'  # Default: output format matches input format
+    preflight_long_annex_check = False
+    long_annex_threshold = LONG_ANNEX_PAGE_THRESHOLD
 
     # Check if we have --config argument (for file list or folder config) or direct folder path
     if sys.argv[1] == '--config':
@@ -1015,12 +1091,13 @@ def main():
                 config = json.load(f)
             file_paths = config.get('files', [])
             output_format = config.get('output_format', 'preserve')
+            preflight_long_annex_check = bool(config.get('preflight_long_annex_check', False))
+            long_annex_threshold = int(config.get('long_annex_threshold', LONG_ANNEX_PAGE_THRESHOLD))
 
             # v5.1.6: Handle both 'files' list and 'folder' path from config
             if file_paths:
-                # File list provided - use temp directory for output
-                import tempfile
-                input_dir = tempfile.mkdtemp(prefix='emmaneigh_packets_')
+                # File list provided - create temp output folder only when doing the full run
+                input_dir = None
             elif config.get('folder'):
                 # Folder path provided in config
                 input_dir = config.get('folder')
@@ -1038,14 +1115,6 @@ def main():
         if not os.path.isdir(input_dir):
             emit("error", message=f"Invalid folder: {input_dir}")
             sys.exit(1)
-
-    # Set up output directories
-    output_base = os.path.join(input_dir, "signature_packets_output")
-    output_pdf_dir = os.path.join(output_base, "packets")
-    output_table_dir = os.path.join(output_base, "tables")
-
-    os.makedirs(output_pdf_dir, exist_ok=True)
-    os.makedirs(output_table_dir, exist_ok=True)
 
     # Get document files - either from file_paths list or scan directory (including subdirectories)
     if file_paths:
@@ -1071,7 +1140,30 @@ def main():
         sys.exit(1)
 
     total = len(document_files)
-    emit("progress", percent=0, message=f"Found {total} documents")
+    emit("progress", percent=8, message=f"Found {total} documents")
+
+    if preflight_long_annex_check:
+        warnings = detect_long_annex_documents(document_files, long_annex_threshold)
+        emit(
+            "result",
+            success=True,
+            documentsChecked=total,
+            longAnnexThreshold=long_annex_threshold,
+            longAnnexWarnings=warnings
+        )
+        return
+
+    if file_paths and not input_dir:
+        import tempfile
+        input_dir = tempfile.mkdtemp(prefix='emmaneigh_packets_')
+
+    # Set up output directories
+    output_base = os.path.join(input_dir, "signature_packets_output")
+    output_pdf_dir = os.path.join(output_base, "packets")
+    output_table_dir = os.path.join(output_base, "tables")
+
+    os.makedirs(output_pdf_dir, exist_ok=True)
+    os.makedirs(output_table_dir, exist_ok=True)
 
     # Scan all documents for signature pages
     rows = []
@@ -1079,7 +1171,7 @@ def main():
     filepath_lookup = {filename: filepath for filename, filepath in document_files}
 
     for idx, (filename, filepath) in enumerate(document_files):
-        percent = int((idx / total) * 50)
+        percent = 10 + int(((idx + 1) / total) * 40)
         emit("progress", percent=percent, message=f"Scanning {filename}")
 
         try:
@@ -1134,7 +1226,7 @@ def main():
     df = df.sort_values(["Signer Name", "Document", "Page"])
 
     # Save master index
-    emit("progress", percent=55, message="Creating master index...")
+    emit("progress", percent=60, message="Creating master index...")
     df.to_excel(os.path.join(output_table_dir, "MASTER_SIGNATURE_INDEX.xlsx"), index=False)
 
     # Create individual packets with specified output format
@@ -1142,10 +1234,10 @@ def main():
     total_signers = len(signers)
     packets_created = []
 
-    emit("progress", percent=55, message=f"Creating packets (format: {output_format})...")
+    emit("progress", percent=65, message=f"Creating packets (format: {output_format})...")
 
     for idx, (signer, group) in enumerate(signers):
-        percent = 55 + int((idx / total_signers) * 45)
+        percent = 65 + int(((idx + 1) / total_signers) * 30)
         emit("progress", percent=percent, message=f"Creating packet for {signer}")
 
         # Save signer's Excel file
@@ -1160,7 +1252,7 @@ def main():
         )
         packets_created.extend(signer_packets)
 
-    emit("progress", percent=100, message="Complete!")
+    emit("progress", percent=96, message="Preparing download...")
     emit("result",
          success=True,
          outputPath=output_base,
