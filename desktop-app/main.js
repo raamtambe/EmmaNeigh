@@ -53,6 +53,7 @@ const DEFAULT_LOCALAI_MODEL = 'qwen2.5:1.5b';
 const LOCAL_AI_INSTALL_PS_URL = 'https://ollama.com/install.ps1';
 const LOCAL_AI_DOWNLOAD_PAGE_URL = 'https://ollama.com/download';
 const LOCAL_AI_STATUS_EVENT = 'local-ai-progress';
+const IMANAGE_DRIVE_ROOT_KEY = 'imanage_drive_root';
 const LOCAL_AI_PROFILES = {
   'qwen2.5:1.5b': {
     id: 'qwen2.5:1.5b',
@@ -5867,6 +5868,7 @@ function parseIManageVersionNumber(rawValue) {
 function normalizeIManageProfileId(rawValue) {
   const text = String(rawValue || '').trim();
   if (!text) return '';
+  if (/^drive:/i.test(text)) return text;
   const match = text.match(/\d+/g);
   if (!match || !match.length) return text;
   return match.join('');
@@ -6031,6 +6033,400 @@ function resolveIManageCheckoutFilePath(checkoutResult, checkoutDir = '', prefer
   }
 
   return '';
+}
+
+function isIManageDriveProfileId(rawValue) {
+  return /^drive:/i.test(String(rawValue || '').trim());
+}
+
+function encodeIManageDriveProfileId(filePath) {
+  const normalized = normalizeLocalPath(filePath);
+  return normalized ? `drive:${normalized}` : '';
+}
+
+function decodeIManageDriveProfileId(profileId) {
+  const text = String(profileId || '').trim();
+  if (!/^drive:/i.test(text)) return '';
+  return normalizeLocalPath(text.replace(/^drive:/i, ''));
+}
+
+function isDirectoryPath(candidatePath) {
+  try {
+    return !!candidatePath && fs.existsSync(candidatePath) && fs.statSync(candidatePath).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+function getConfiguredIManageDriveRoot() {
+  const configured = resolveExistingLocalPath(
+    getSettingValue(IMANAGE_DRIVE_ROOT_KEY, process.env.IMANAGE_DRIVE_ROOT || '')
+  );
+  return isDirectoryPath(configured) ? path.resolve(configured) : '';
+}
+
+function collectNamedIManageDriveRoots(baseDir, output, seen) {
+  if (!isDirectoryPath(baseDir)) return;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(baseDir, { withFileTypes: true });
+  } catch (_) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!/imanage/i.test(entry.name)) continue;
+    const fullPath = path.resolve(path.join(baseDir, entry.name));
+    const key = fullPath.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(fullPath);
+  }
+}
+
+function detectIManageDriveRoots() {
+  const roots = [];
+  const seen = new Set();
+
+  const addRoot = (candidate) => {
+    const resolved = resolveExistingLocalPath(candidate);
+    if (!isDirectoryPath(resolved)) return;
+    const fullPath = path.resolve(resolved);
+    const key = fullPath.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    roots.push(fullPath);
+  };
+
+  const configured = getConfiguredIManageDriveRoot();
+  if (configured) addRoot(configured);
+
+  const homeDir = os.homedir();
+  const oneDriveRoots = [
+    process.env.OneDrive,
+    process.env.OneDriveCommercial,
+    process.env.OneDriveConsumer,
+    path.join(homeDir, 'OneDrive'),
+    path.join(homeDir, 'Library', 'CloudStorage')
+  ].filter(Boolean);
+  const baseDirs = [
+    homeDir,
+    path.join(homeDir, 'Documents'),
+    ...oneDriveRoots,
+    ...oneDriveRoots.map((rootDir) => path.join(rootDir, 'Documents'))
+  ];
+
+  for (const candidate of [
+    path.join(homeDir, 'iManage'),
+    path.join(homeDir, 'iManage Drive'),
+    path.join(homeDir, 'Documents', 'iManage'),
+    path.join(homeDir, 'Documents', 'iManage Drive')
+  ]) {
+    addRoot(candidate);
+  }
+
+  for (const baseDir of baseDirs) {
+    collectNamedIManageDriveRoots(baseDir, roots, seen);
+  }
+
+  return roots;
+}
+
+async function promptForIManageDriveRoot(existingRoots = []) {
+  const defaultPath = existingRoots[0] || getConfiguredIManageDriveRoot() || path.join(os.homedir(), 'Documents');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select your iManage Drive sync folder',
+    defaultPath,
+    properties: ['openDirectory']
+  });
+  if (result.canceled || !result.filePaths || !result.filePaths[0]) return '';
+  const selected = resolveExistingLocalPath(result.filePaths[0]);
+  if (!isDirectoryPath(selected)) return '';
+  writeSettingValue(IMANAGE_DRIVE_ROOT_KEY, selected);
+  try { saveDatabase(); } catch (_) {}
+  return path.resolve(selected);
+}
+
+async function getAvailableIManageDriveRoots(options = {}) {
+  const allowPrompt = !!options.allowPrompt;
+  const roots = detectIManageDriveRoots();
+  if (roots.length || !allowPrompt) return roots;
+  const selected = await promptForIManageDriveRoot(roots);
+  return selected ? [selected] : [];
+}
+
+function isWithinIManageDriveRoot(filePath, rootPath) {
+  const resolvedFile = resolveExistingLocalPath(filePath);
+  const resolvedRoot = resolveExistingLocalPath(rootPath);
+  if (!resolvedFile || !resolvedRoot) return false;
+  try {
+    const rel = path.relative(path.resolve(resolvedRoot), path.resolve(resolvedFile));
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  } catch (_) {
+    return false;
+  }
+}
+
+function getIManageDriveRootForPath(filePath, roots = null) {
+  const candidates = Array.isArray(roots) && roots.length ? roots : detectIManageDriveRoots();
+  return candidates.find((rootPath) => isWithinIManageDriveRoot(filePath, rootPath)) || '';
+}
+
+function buildIManageDriveFileRecord(filePath, rootPath = '') {
+  const resolvedPath = resolveExistingLocalPath(filePath);
+  const matchedRoot = rootPath || getIManageDriveRootForPath(resolvedPath) || '';
+  let stats = null;
+  try { stats = fs.statSync(resolvedPath); } catch (_) {}
+  return {
+    mode: 'drive',
+    profile_id: encodeIManageDriveProfileId(resolvedPath),
+    path: resolvedPath,
+    root_path: matchedRoot,
+    name: path.basename(resolvedPath),
+    description: matchedRoot ? path.relative(matchedRoot, resolvedPath) : resolvedPath,
+    version: 'local-sync',
+    modified_at: stats ? new Date(stats.mtimeMs).toISOString() : '',
+    size: stats ? stats.size : 0
+  };
+}
+
+function pickUniqueIManageDriveTargetPath(targetPath) {
+  if (!fs.existsSync(targetPath)) return targetPath;
+  const dirName = path.dirname(targetPath);
+  const ext = path.extname(targetPath);
+  const stem = path.basename(targetPath, ext);
+  for (let i = 2; i <= 999; i += 1) {
+    const candidate = path.join(dirName, `${stem} (${i})${ext}`);
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return targetPath;
+}
+
+async function imanageDriveBrowseFiles(multiple = false) {
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: true });
+  if (!roots.length) {
+    return {
+      success: false,
+      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+    };
+  }
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose files from your iManage Drive sync folder',
+    defaultPath: roots[0],
+    properties: multiple ? ['openFile', 'multiSelections'] : ['openFile']
+  });
+  if (result.canceled || !result.filePaths || !result.filePaths.length) {
+    return { success: false, error: 'iManage Drive browse canceled.' };
+  }
+  const validFilePaths = result.filePaths.filter((filePath) => !!getIManageDriveRootForPath(filePath, roots));
+  if (!validFilePaths.length) {
+    return {
+      success: false,
+      error: 'Choose files inside your synced iManage Drive folder.'
+    };
+  }
+  return {
+    success: true,
+    mode: 'drive',
+    files: validFilePaths.map((filePath) => buildIManageDriveFileRecord(filePath, getIManageDriveRootForPath(filePath, roots)))
+  };
+}
+
+async function imanageDriveSearch(query, options = {}) {
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: !!options.allowPrompt });
+  if (!roots.length) {
+    return {
+      success: false,
+      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+    };
+  }
+
+  const queryText = String(query || '').trim();
+  if (!queryText) {
+    return { success: false, error: 'query is required for iManage Drive search.' };
+  }
+
+  const matches = [];
+  for (const rootPath of roots) {
+    const files = listFilesRecursively(rootPath, 8);
+    for (const filePath of files) {
+      const record = buildIManageDriveFileRecord(filePath, rootPath);
+      const score = scoreIManageSearchCandidate(queryText, record);
+      if (score <= 0) continue;
+      matches.push({ ...record, _score: score });
+    }
+  }
+
+  matches.sort((a, b) => b._score - a._score);
+  return {
+    success: true,
+    mode: 'drive',
+    files: matches.slice(0, Number(options.maxResults) || 25)
+  };
+}
+
+async function imanageDriveSaveDocument(filePath, action = 'new_document', showDialog = true) {
+  const resolvedPath = resolveExistingLocalPath(filePath);
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    return { success: false, error: 'Local file not found for iManage Drive save.' };
+  }
+
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: !!showDialog });
+  if (!roots.length) {
+    return {
+      success: false,
+      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+    };
+  }
+
+  const currentRoot = getIManageDriveRootForPath(resolvedPath, roots);
+  if (action === 'new_version' && currentRoot) {
+    return {
+      success: true,
+      mode: 'drive',
+      profile_id: encodeIManageDriveProfileId(resolvedPath),
+      path: resolvedPath,
+      files: [buildIManageDriveFileRecord(resolvedPath, currentRoot)],
+      warning: 'File is already inside your synced iManage Drive folder. Saving changes in place will sync back through iManage Drive.'
+    };
+  }
+
+  let targetPath = '';
+  if (showDialog) {
+    const defaultPath = path.join(roots[0], path.basename(resolvedPath));
+    const dialogResult = await dialog.showSaveDialog(mainWindow, {
+      title: action === 'new_version' ? 'Save updated version to iManage Drive' : 'Save document to iManage Drive',
+      defaultPath
+    });
+    if (dialogResult.canceled || !dialogResult.filePath) {
+      return { success: false, error: 'iManage Drive save canceled.' };
+    }
+    targetPath = resolveExistingLocalPath(dialogResult.filePath);
+  } else {
+    targetPath = path.join(roots[0], path.basename(resolvedPath));
+    if (action !== 'new_version') {
+      targetPath = pickUniqueIManageDriveTargetPath(targetPath);
+    }
+  }
+
+  const targetRoot = getIManageDriveRootForPath(targetPath, roots);
+  if (!targetRoot) {
+    return {
+      success: false,
+      error: 'Choose a target location inside your iManage Drive sync folder.'
+    };
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.copyFileSync(resolvedPath, targetPath);
+  return {
+    success: true,
+    mode: 'drive',
+    profile_id: encodeIManageDriveProfileId(targetPath),
+    path: targetPath,
+    files: [buildIManageDriveFileRecord(targetPath, targetRoot)],
+    warning: action === 'new_version'
+      ? 'Saved into your synced iManage Drive folder. Version behavior depends on your firm’s iManage Drive configuration.'
+      : 'Saved into your synced iManage Drive folder.'
+  };
+}
+
+async function imanageDriveCreateFolder(folderName, parentPath = '') {
+  const safeName = String(folderName || '').trim().replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!safeName) {
+    return { success: false, error: 'folder_name is required.' };
+  }
+
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: true });
+  if (!roots.length) {
+    return {
+      success: false,
+      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+    };
+  }
+
+  const parentCandidate = resolveExistingLocalPath(parentPath);
+  const baseDir = parentCandidate && isDirectoryPath(parentCandidate) && getIManageDriveRootForPath(parentCandidate, roots)
+    ? parentCandidate
+    : roots[0];
+  const targetDir = path.join(baseDir, safeName);
+  fs.mkdirSync(targetDir, { recursive: true });
+  return {
+    success: true,
+    mode: 'drive',
+    folder: {
+      name: safeName,
+      path: targetDir,
+      root_path: getIManageDriveRootForPath(targetDir, roots) || roots[0]
+    }
+  };
+}
+
+async function imanageDriveCheckout(profileId, checkoutPath = '', version = null) {
+  const sourcePath = decodeIManageDriveProfileId(profileId);
+  if (!sourcePath || !fs.existsSync(sourcePath)) {
+    return { success: false, error: 'Synced iManage Drive file not found.' };
+  }
+  const rootPath = getIManageDriveRootForPath(sourcePath);
+  if (!rootPath) {
+    return {
+      success: false,
+      error: 'This file is not inside a synced iManage Drive folder.'
+    };
+  }
+  return {
+    success: true,
+    mode: 'drive',
+    path: sourcePath,
+    version_requested: version,
+    files: [buildIManageDriveFileRecord(sourcePath, rootPath)],
+    warning: version !== null && version !== undefined
+      ? 'iManage Drive fallback exposes the synced local file only, not DMS version history.'
+      : 'Using the synced iManage Drive file directly. Edit this file in place and iManage Drive will sync it.'
+  };
+}
+
+async function imanageDriveCheckin(filePath) {
+  const resolvedPath = resolveExistingLocalPath(filePath);
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    return { success: false, error: 'Local file not found for iManage Drive check-in.' };
+  }
+  const rootPath = getIManageDriveRootForPath(resolvedPath);
+  if (!rootPath) {
+    return {
+      success: false,
+      error: 'This file is not inside a synced iManage Drive folder. Save it into your synced folder first so Drive can upload it.'
+    };
+  }
+  return {
+    success: true,
+    mode: 'drive',
+    path: resolvedPath,
+    files: [buildIManageDriveFileRecord(resolvedPath, rootPath)],
+    warning: 'File is already inside your synced iManage Drive folder. iManage Drive should sync the updated file automatically.'
+  };
+}
+
+function shouldTryIManageDriveFallback(errorLike) {
+  const text = String(
+    errorLike && typeof errorLike === 'object'
+      ? (errorLike.error || errorLike.stderr || errorLike.stdout || '')
+      : (errorLike || '')
+  )
+    .toLowerCase()
+    .trim();
+  if (!text) return false;
+  return (
+    text.includes('limited api surface') ||
+    text.includes('class-factory') ||
+    text.includes('class not registered') ||
+    text.includes('unable to create imanage com object') ||
+    text.includes('retrieving the com class factory') ||
+    text.includes('only available on windows') ||
+    text.includes('iManage COM could not be loaded'.toLowerCase())
+  );
 }
 
 /**
@@ -6268,7 +6664,12 @@ try {
   `;
   const result = await imanageRunPowerShell(script, { allowInteractive: true, timeoutMs: 120000 });
   const failure = normalizeIManageFailure(result);
-  if (failure) return failure;
+  if (failure) {
+    if (shouldTryIManageDriveFallback(failure)) {
+      return imanageDriveBrowseFiles(multiple);
+    }
+    return failure;
+  }
   return { success: true, files: normalizeIManageArrayPayload(result.data, 'files') };
 }
 
@@ -6423,7 +6824,12 @@ try {
   `;
   const result = await imanageRunPowerShell(script, { allowInteractive: showDialogBool, timeoutMs: 120000 });
   const failure = normalizeIManageFailure(result);
-  if (failure) return failure;
+  if (failure) {
+    if (shouldTryIManageDriveFallback(failure)) {
+      return imanageDriveSaveDocument(resolvedPath, normalizedAction, showDialogBool);
+    }
+    return failure;
+  }
   const data = result.data && typeof result.data === 'object' ? result.data : {};
   if (Array.isArray(data.files)) {
     data.files = normalizeIManageArrayPayload(data.files, 'files');
@@ -6435,6 +6841,12 @@ async function imanageGetVersions(profileId) {
   const normalizedProfileId = normalizeIManageProfileId(profileId);
   if (!normalizedProfileId) {
     return { success: false, error: 'A valid iManage profile ID is required.' };
+  }
+  if (isIManageDriveProfileId(normalizedProfileId)) {
+    return {
+      success: false,
+      error: 'iManage Drive fallback does not expose DMS version history. Use COM or iManage REST/OAuth for version lookup.'
+    };
   }
   const escapedId = String(normalizedProfileId).replace(/'/g, "''");
   const script = `
@@ -6571,6 +6983,9 @@ async function imanageCheckout(profileId, checkoutPath, version = null) {
   if (!normalizedProfileId) {
     return { success: false, error: 'A valid iManage profile ID is required for checkout.' };
   }
+  if (isIManageDriveProfileId(normalizedProfileId)) {
+    return imanageDriveCheckout(normalizedProfileId, checkoutPath, version);
+  }
 
   const escapedId = String(normalizedProfileId).replace(/'/g, "''");
   const normalizedCheckoutPath = normalizeLocalPath(checkoutPath || '');
@@ -6676,6 +7091,10 @@ async function imanageCheckin(filePath) {
   if (!resolvedPath || !fs.existsSync(resolvedPath)) {
     return { success: false, error: 'Local file was not found for iManage check-in.' };
   }
+  const driveRoot = getIManageDriveRootForPath(resolvedPath);
+  if (driveRoot) {
+    return imanageDriveCheckin(resolvedPath);
+  }
   const escapedPath = resolvedPath.replace(/'/g, "''");
   const script = `
 $ErrorActionPreference = 'Stop'
@@ -6740,7 +7159,12 @@ try {
   `;
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
-  if (failure) return failure;
+  if (failure) {
+    if (shouldTryIManageDriveFallback(failure)) {
+      return imanageDriveCheckin(resolvedPath);
+    }
+    return failure;
+  }
   const data = result.data && typeof result.data === 'object' ? result.data : {};
   return {
     success: true,
@@ -6801,7 +7225,12 @@ try {
   `;
   const result = await imanageRunPowerShell(script);
   const failure = normalizeIManageFailure(result);
-  if (failure) return failure;
+  if (failure) {
+    if (shouldTryIManageDriveFallback(failure)) {
+      return imanageDriveSearch(normalizedQuery, { allowPrompt: true, maxResults: 25 });
+    }
+    return failure;
+  }
   return { success: true, files: normalizeIManageArrayPayload(result.data, 'files') };
 }
 
@@ -7012,6 +7441,7 @@ Write-Output "###JSON_START###$json###JSON_END###"
   `;
 
   const result = await imanageRunPowerShell(script, { timeoutMs: 45000 });
+  const driveRoots = detectIManageDriveRoots();
   if (!result || !result.success) {
     return {
       success: false,
@@ -7019,7 +7449,9 @@ Write-Output "###JSON_START###$json###JSON_END###"
       diagnostics: {
         platform: process.platform,
         powershellHosts: getIManagePowerShellHosts(),
-        stderr: result ? result.stderr : ''
+        stderr: result ? result.stderr : '',
+        drive_roots: driveRoots,
+        drive_fallback_available: driveRoots.length > 0
       }
     };
   }
@@ -7030,7 +7462,11 @@ Write-Output "###JSON_START###$json###JSON_END###"
     .join(', ');
   return {
     success: !!data.com_created,
-    diagnostics: data,
+    diagnostics: {
+      ...data,
+      drive_roots: driveRoots,
+      drive_fallback_available: driveRoots.length > 0
+    },
     message: data.com_created
       ? `iManage COM connected via ${data.com_progid} [API: ${data.com_api_type || 'unknown'}] (${data.login_status}). Sessions: ${data.sessions_info?.count || 0}. Databases: ${data.databases_info?.count || 0} (${(data.databases_info?.names || []).join(', ')}). Key methods: ${checkSummary}`
       : `iManage COM could not be loaded. ${data.error || ''}`
@@ -7097,7 +7533,12 @@ try {
   `;
   const result = await imanageRunPowerShell(script, { timeoutMs: 60000 });
   const failure = normalizeIManageFailure(result);
-  if (failure) return failure;
+  if (failure) {
+    if (shouldTryIManageDriveFallback(failure)) {
+      return imanageDriveCreateFolder(normalizedName, parentPath);
+    }
+    return failure;
+  }
   const data = result.data && typeof result.data === 'object' ? result.data : {};
   return { success: true, folder: data.folder || { name: normalizedName } };
 }

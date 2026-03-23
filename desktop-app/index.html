@@ -7766,6 +7766,19 @@
       addAgentAttachmentsFromPaths(selectedPaths, 'picker');
     }
 
+    function agentPromptNeedsWorkflowRouting(promptText) {
+      const prompt = String(promptText || '').toLowerCase();
+      if (!prompt) return false;
+      return /(?:did|does|has|have|who|when|what|where|find|search|check|show|was|were|sent|review|approved|circulated).*(?:email|inbox|attachment|message)|(?:email|inbox|attachment|message).*(?:did|has|who|when|what|find|search|check)|update\s+checklist|checklist\s+update|refresh\s+checklist|generate\s+punchlist|create\s+punchlist|\bpunch\s*list\b|redline|blackline|compare|comparison|markup changes|mark up changes|(?:signature|sig)\s*(?:packet|packets|page|pages)|signing set|execution pages?|packet\s*shell|signature\s*shell|execution version|conformed|insert signed|sig\s*block|signature block|incumbency|collat(?:e|ion)|merge comments|consolidate|combine markups|i-?manage|save down|version up|create folder|workspace/.test(prompt);
+    }
+
+    function shouldRouteAgentCommandThroughPlanner(selectedProvider, promptText, cmdResult) {
+      if (!cmdResult || !cmdResult.success) return true;
+      if (cmdResult.tool) return false;
+      if (!isLocalProviderSelection(selectedProvider)) return false;
+      return agentPromptNeedsWorkflowRouting(promptText);
+    }
+
     async function executeAgentPlan(plan, originalPrompt) {
       const action = String(plan && plan.action ? plan.action : 'no_op');
       const targetTab = plan && plan.target_tab ? String(plan.target_tab) : null;
@@ -8118,7 +8131,9 @@
           });
         }
 
-        if (cmdResult && cmdResult.success) {
+        const usePlannerFallback = shouldRouteAgentCommandThroughPlanner(selectedProvider, prompt, cmdResult);
+
+        if (cmdResult && cmdResult.success && !usePlannerFallback) {
           addAgentMessage('assistant', cmdResult.message || 'Done.');
           const modelInfo = cmdResult.modelUsed ? ` (${cmdResult.modelUsed})` : '';
           const toolInfo = cmdResult.tool ? ` • Tool: ${cmdResult.tool.replace(/_/g, ' ')}` : '';
@@ -8126,6 +8141,9 @@
         } else {
           if (selectedProvider === 'harvey') {
             setAgentStatus('Routing via agent planner...');
+          } else if (usePlannerFallback) {
+            console.log('[Agent] Local model returned text without using tools for a workflow request; routing via agent-plan instead.');
+            setAgentStatus('Local model answered without using app tools. Routing via planner...');
           } else {
             console.log('[Agent] execute-command unavailable, falling back to agent-plan:', cmdResult?.error);
             setAgentStatus('Routing via agent planner...');
@@ -10832,10 +10850,39 @@
       aiSearchPanel.classList.add('visible');
     });
 
+    async function ensureOutlookEmailsLoadedForAiFeature({
+      title = 'Choose Outlook Folders',
+      description = 'Select the Outlook folders EmmaNeigh should search.'
+    } = {}) {
+      if (Array.isArray(emailData) && emailData.length > 0) {
+        return true;
+      }
+
+      const scope = await promptForOutlookScope({
+        title,
+        description,
+        defaultDays: emailLookbackDays || 30,
+        selectedFolders: emailSelectedOutlookFolders
+      });
+      if (!scope) {
+        return false;
+      }
+
+      emailLookbackDays = scope.daysBack;
+      emailSelectedOutlookFolders = scope.folderPaths;
+      await processOutlookEmails(scope.daysBack, scope.folderPaths);
+      return Array.isArray(emailData) && emailData.length > 0;
+    }
+
     // AI Search handler
     aiSearchBtn.addEventListener('click', async () => {
       const query = aiSearchInput.value.trim();
-      if (!query || emailData.length === 0) return;
+      if (!query) return;
+      const hasEmails = await ensureOutlookEmailsLoadedForAiFeature({
+        title: 'Choose Outlook Folders for Email AI Search',
+        description: 'Select the Outlook folders EmmaNeigh should search before answering your question.'
+      });
+      if (!hasEmails) return;
       let provider = 'localai';
       try {
         const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
@@ -10941,10 +10988,11 @@
     // ========== TASK DETECTION ==========
 
     detectTasksBtn.addEventListener('click', async () => {
-      if (!emailData || emailData.length === 0) {
-        alert('Please load Outlook emails first.');
-        return;
-      }
+      const hasEmails = await ensureOutlookEmailsLoadedForAiFeature({
+        title: 'Choose Outlook Folders for Task Detection',
+        description: 'Select the Outlook folders EmmaNeigh should search before detecting tasks.'
+      });
+      if (!hasEmails) return;
 
       // Show loading state
       detectTasksBtn.disabled = true;
