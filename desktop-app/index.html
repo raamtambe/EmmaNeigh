@@ -3598,6 +3598,7 @@
         <div style="margin-bottom: 8px;">
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">AI Provider</label>
           <select id="aiProviderSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+            <option value="localai">Local AI (Free, Recommended)</option>
             <option value="ollama">Ollama (Local, Recommended)</option>
             <option value="lmstudio">LM Studio (Local)</option>
             <option value="anthropic">Anthropic (Claude)</option>
@@ -3646,6 +3647,19 @@
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">LM Studio Model</label>
           <input type="text" id="lmstudioModelInput" class="api-key-input" placeholder="local-model">
           <p style="font-size: 11px; color: #666; margin-top: 4px;">No API key required for local LM Studio.</p>
+        </div>
+
+        <div id="localAiConfigRow" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #333;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Local AI Base URL</label>
+          <input type="text" id="localAiBaseUrlInput" class="api-key-input" placeholder="http://127.0.0.1:11435" style="margin-bottom: 8px;">
+          <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">Free Local Model</label>
+          <select id="localAiModelSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;"></select>
+          <div id="localAiStatus" style="font-size: 11px; color: #888; margin-top: 8px;">Checking Local AI status...</div>
+          <div style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
+            <button class="settings-btn settings-btn-primary" id="installLocalAiBtn">Install Local AI</button>
+            <button class="settings-btn settings-btn-secondary" id="refreshLocalAiBtn">Refresh Local AI</button>
+          </div>
+          <p style="font-size: 11px; color: #666; margin-top: 6px;">EmmaNeigh will manage a free local model for you. No API key is required.</p>
         </div>
 
       </div>
@@ -5267,6 +5281,12 @@
     const deleteApiKeyBtn = document.getElementById('deleteApiKeyBtn');
     const providerConsoleLink = document.getElementById('providerConsoleLink');
     const claudeModelRow = document.getElementById('claudeModelRow');
+    const localAiConfigRow = document.getElementById('localAiConfigRow');
+    const localAiBaseUrlInput = document.getElementById('localAiBaseUrlInput');
+    const localAiModelSelect = document.getElementById('localAiModelSelect');
+    const localAiStatus = document.getElementById('localAiStatus');
+    const installLocalAiBtn = document.getElementById('installLocalAiBtn');
+    const refreshLocalAiBtn = document.getElementById('refreshLocalAiBtn');
     const ollamaConfigRow = document.getElementById('ollamaConfigRow');
     const ollamaBaseUrlInput = document.getElementById('ollamaBaseUrlInput');
     const ollamaModelInput = document.getElementById('ollamaModelInput');
@@ -5291,6 +5311,14 @@
     const testFirebaseConfigBtn = document.getElementById('testFirebaseConfigBtn');
 
     const PROVIDER_META = {
+      localai: {
+        label: 'Local AI',
+        title: 'Local AI (Free)',
+        placeholder: '',
+        consoleUrl: 'https://ollama.com/download',
+        consoleText: 'Managed locally by EmmaNeigh',
+        requiresKey: false
+      },
       ollama: {
         label: 'Ollama',
         title: 'Ollama (Local)',
@@ -5335,16 +5363,17 @@
 
     function normalizeProvider(provider) {
       const value = (provider || '').trim().toLowerCase();
-      if (value === 'ollama' || value === 'lmstudio' || value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'localai' || value === 'ollama' || value === 'lmstudio' || value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'local' || value === 'built-in' || value === 'builtin' || value === 'local ai' || value === 'local-ai' || value === 'local pack' || value === 'localpack') return 'localai';
       if (value === 'lm studio' || value === 'lm-studio') return 'lmstudio';
       if (value === 'chatgpt') return 'openai';
       if (value === 'claude') return 'anthropic';
-      return 'ollama';
+      return 'localai';
     }
 
     function isLocalProviderSelection(provider) {
       const normalized = normalizeProvider(provider);
-      return normalized === 'ollama' || normalized === 'lmstudio';
+      return normalized === 'localai' || normalized === 'ollama' || normalized === 'lmstudio';
     }
 
     function getSelectedProvider() {
@@ -5353,12 +5382,77 @@
 
     function getProviderMeta(provider) {
       const normalized = normalizeProvider(provider);
-      return PROVIDER_META[normalized] || PROVIDER_META.ollama;
+      return PROVIDER_META[normalized] || PROVIDER_META.localai;
+    }
+
+    function setLocalAiStatus(message, tone = 'neutral') {
+      if (!localAiStatus) return;
+      localAiStatus.textContent = message || '';
+      if (tone === 'success') {
+        localAiStatus.style.color = '#22c55e';
+      } else if (tone === 'error') {
+        localAiStatus.style.color = '#ef4444';
+      } else if (tone === 'warning') {
+        localAiStatus.style.color = '#f59e0b';
+      } else {
+        localAiStatus.style.color = '#888';
+      }
+    }
+
+    function populateLocalAiProfiles(profiles, selectedModel) {
+      if (!localAiModelSelect) return;
+      const items = Array.isArray(profiles) ? profiles : [];
+      const fallback = selectedModel || 'qwen2.5:1.5b';
+      localAiModelSelect.innerHTML = '';
+      items.forEach((profile) => {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        const sizeText = profile.size ? ` • ${profile.size}` : '';
+        option.textContent = `${profile.label}${sizeText}`;
+        option.title = profile.summary || profile.label;
+        if (profile.id === fallback) {
+          option.selected = true;
+        }
+        localAiModelSelect.appendChild(option);
+      });
+      if (!localAiModelSelect.value && fallback) {
+        localAiModelSelect.value = fallback;
+      }
+    }
+
+    async function refreshLocalAiStatus(showNeutral = false) {
+      try {
+        const result = await ipcRenderer.invoke('get-local-ai-status');
+        if (!result || !result.success) {
+          setLocalAiStatus((result && result.message) || 'Local AI status unavailable.', 'error');
+          return;
+        }
+        const modelLabel = result.configuredModel ? ` Model: ${result.configuredModel}.` : '';
+        if (result.ready) {
+          setLocalAiStatus(`${result.message || 'Local AI is ready.'}${modelLabel}`, 'success');
+        } else if (showNeutral) {
+          setLocalAiStatus(`${result.message || 'Local AI is not installed yet.'}${modelLabel}`, 'warning');
+        } else {
+          setLocalAiStatus(result.message || 'Local AI is not installed yet.', 'warning');
+        }
+      } catch (e) {
+        setLocalAiStatus(e.message || 'Unable to refresh Local AI status.', 'error');
+      }
     }
 
     async function loadLocalProviderSettings(provider) {
       const selected = normalizeProvider(provider);
-      if (selected === 'ollama') {
+      if (selected === 'localai') {
+        const [baseUrl, model, profiles] = await Promise.all([
+          ipcRenderer.invoke('get-setting', 'localai_base_url'),
+          ipcRenderer.invoke('get-setting', 'localai_model'),
+          ipcRenderer.invoke('get-local-ai-profiles')
+        ]);
+        localAiBaseUrlInput.value = (baseUrl && baseUrl.success && baseUrl.value) ? baseUrl.value : 'http://127.0.0.1:11435';
+        const selectedModel = (model && model.success && model.value) ? model.value : (profiles && profiles.selectedModel) ? profiles.selectedModel : 'qwen2.5:1.5b';
+        populateLocalAiProfiles(profiles && profiles.success ? profiles.profiles : [], selectedModel);
+        await refreshLocalAiStatus(true);
+      } else if (selected === 'ollama') {
         const [baseUrl, model] = await Promise.all([
           ipcRenderer.invoke('get-setting', 'ollama_base_url'),
           ipcRenderer.invoke('get-setting', 'ollama_model')
@@ -5377,7 +5471,10 @@
 
     async function saveLocalProviderSettings(provider) {
       const selected = normalizeProvider(provider);
-      if (selected === 'ollama') {
+      if (selected === 'localai') {
+        await ipcRenderer.invoke('save-setting', { key: 'localai_base_url', value: (localAiBaseUrlInput.value || '').trim() || 'http://127.0.0.1:11435' });
+        await ipcRenderer.invoke('save-setting', { key: 'localai_model', value: (localAiModelSelect.value || '').trim() || 'qwen2.5:1.5b' });
+      } else if (selected === 'ollama') {
         await ipcRenderer.invoke('save-setting', { key: 'ollama_base_url', value: (ollamaBaseUrlInput.value || '').trim() || 'http://127.0.0.1:11434' });
         await ipcRenderer.invoke('save-setting', { key: 'ollama_model', value: (ollamaModelInput.value || '').trim() || 'llama3.1:8b' });
       } else if (selected === 'lmstudio') {
@@ -5392,14 +5489,21 @@
       const localProvider = isLocalProviderSelection(provider);
 
       apiProviderTitle.textContent = `${meta.title}`;
-      apiKeyHelpText.textContent = localProvider
-        ? `Local provider mode. Save base URL/model below, and make sure Ollama/LM Studio is running before testing.`
-        : `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
+      if (provider === 'localai') {
+        apiKeyHelpText.textContent = 'Free local provider mode. EmmaNeigh can install and manage a local model for you, then you can switch to Claude, ChatGPT, Harvey, or another provider later.';
+      } else if (provider === 'ollama') {
+        apiKeyHelpText.textContent = 'Local provider mode. Save the base URL and model below. EmmaNeigh will try to start Ollama automatically, but you still need Ollama installed and at least one model pulled.';
+      } else if (provider === 'lmstudio') {
+        apiKeyHelpText.textContent = 'Local provider mode. Save the base URL and model below. LM Studio must be open with a model loaded and its local server turned on.';
+      } else {
+        apiKeyHelpText.textContent = `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
+      }
       apiKeyInputGroup.style.display = localProvider ? 'none' : '';
       apiKeyActions.style.display = '';
       apiKeyInput.placeholder = apiKeyInput.value ? '••••••••••••••••' : meta.placeholder;
       providerConsoleLink.textContent = meta.consoleText;
       claudeModelRow.style.display = provider === 'anthropic' ? '' : 'none';
+      localAiConfigRow.style.display = provider === 'localai' ? '' : 'none';
       ollamaConfigRow.style.display = provider === 'ollama' ? '' : 'none';
       lmstudioConfigRow.style.display = provider === 'lmstudio' ? '' : 'none';
       saveApiKeyBtn.textContent = localProvider ? 'Save Provider Settings' : 'Save Key';
@@ -5411,7 +5515,7 @@
         const result = await ipcRenderer.invoke('get-setting', 'ai_provider');
         aiProviderSelect.value = normalizeProvider(result && result.success ? result.value : null);
       } catch (_) {
-        aiProviderSelect.value = 'ollama';
+        aiProviderSelect.value = 'localai';
       }
       await loadLocalProviderSettings(aiProviderSelect.value);
       applyProviderUi();
@@ -5422,7 +5526,7 @@
       const provider = getSelectedProvider();
       const meta = getProviderMeta(provider);
       if (isLocalProviderSelection(provider)) {
-        apiKeyStatus.innerHTML = `<span style="color: #60a5fa;">${meta.label} uses local connection settings. API key is optional.</span>`;
+        apiKeyStatus.innerHTML = `<span style="color: #60a5fa;">${provider === 'localai' ? 'Local AI uses EmmaNeigh-managed local runtime settings. No API key is required.' : `${meta.label} uses local connection settings. API key is optional.`}</span>`;
         apiKeyStatus.className = 'api-key-status connected';
         deleteApiKeyBtn.style.display = 'none';
         return;
@@ -5777,6 +5881,9 @@
         saveApiKeyBtn.textContent = 'Saving...';
         try {
           await saveLocalProviderSettings(provider);
+          if (provider === 'localai') {
+            await refreshLocalAiStatus(true);
+          }
           apiKeyStatus.innerHTML = '<span style="color: #22c55e;">✓ Local provider settings saved</span>';
           apiKeyStatus.className = 'api-key-status connected';
         } catch (e) {
@@ -5845,6 +5952,53 @@
 
       testApiKeyBtn.disabled = false;
       testApiKeyBtn.textContent = 'Test Connection';
+    });
+
+    if (installLocalAiBtn) {
+      installLocalAiBtn.addEventListener('click', async () => {
+        installLocalAiBtn.disabled = true;
+        installLocalAiBtn.textContent = 'Installing...';
+        setLocalAiStatus('Preparing Local AI install...', 'warning');
+        try {
+          await saveLocalProviderSettings('localai');
+          const result = await ipcRenderer.invoke('bootstrap-local-ai', {
+            model: (localAiModelSelect && localAiModelSelect.value) || 'qwen2.5:1.5b'
+          });
+          if (!result || !result.success) {
+            setLocalAiStatus((result && result.error) || 'Local AI install failed.', 'error');
+            return;
+          }
+          setLocalAiStatus(result.message || 'Local AI installed successfully.', 'success');
+          await checkApiKeyStatus();
+          await updateAgentProviderLabel();
+        } catch (e) {
+          setLocalAiStatus(e.message || 'Local AI install failed.', 'error');
+        } finally {
+          installLocalAiBtn.disabled = false;
+          installLocalAiBtn.textContent = 'Install Local AI';
+        }
+      });
+    }
+
+    if (refreshLocalAiBtn) {
+      refreshLocalAiBtn.addEventListener('click', async () => {
+        refreshLocalAiBtn.disabled = true;
+        refreshLocalAiBtn.textContent = 'Refreshing...';
+        try {
+          await refreshLocalAiStatus(true);
+          await checkApiKeyStatus();
+          await updateAgentProviderLabel();
+        } finally {
+          refreshLocalAiBtn.disabled = false;
+          refreshLocalAiBtn.textContent = 'Refresh Local AI';
+        }
+      });
+    }
+
+    ipcRenderer.on('local-ai-progress', (_event, payload) => {
+      const message = payload && payload.message ? payload.message : '';
+      if (!message) return;
+      setLocalAiStatus(message, payload && payload.is_error ? 'error' : 'warning');
     });
 
     deleteApiKeyBtn.addEventListener('click', async () => {
@@ -7779,10 +7933,10 @@
           return { message: 'Agent Mode could not load Outlook email activity. Open Email Search and try importing Outlook emails there.' };
         }
         const query = promptText || 'Summarize key takeaways from the loaded emails.';
-        let provider = 'ollama';
+        let provider = 'localai';
         try {
           const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
-          provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'ollama');
+          provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'localai');
         } catch (_) {}
 
         const aiResult = await ipcRenderer.invoke('nl-search-emails', {
@@ -7942,34 +8096,40 @@
       if (horseEl) horseEl.style.display = 'flex';
 
       try {
-        // First try execute-command (agent tool use — supports Anthropic, OpenAI, Ollama, LM Studio)
-        const context = getAgentContext();
-        context.thread_id = activeAgentRunThreadId;
-        // Build conversation history from current thread for agent memory
-        const activeThread = getActiveAgentThread();
-        const priorMessages = (activeThread && Array.isArray(activeThread.messages))
-          ? activeThread.messages
-              .slice(0, -1)  // exclude the message we just added above
-              .filter(m => m.role === 'user' || m.role === 'assistant')
-              .slice(-10)    // keep last 10 messages for context window
-              .map(m => ({ role: m.role, content: m.text || '' }))
-          : [];
-        const cmdResult = await ipcRenderer.invoke('execute-command', {
-          prompt,
-          context,
-          conversationHistory: priorMessages
-        });
+        const selectedProvider = getSelectedProvider();
+        let cmdResult = null;
+
+        if (selectedProvider !== 'harvey') {
+          // First try execute-command (agent tool use — supports Anthropic, OpenAI, Ollama, LM Studio)
+          const context = getAgentContext();
+          context.thread_id = activeAgentRunThreadId;
+          const activeThread = getActiveAgentThread();
+          const priorMessages = (activeThread && Array.isArray(activeThread.messages))
+            ? activeThread.messages
+                .slice(0, -1)
+                .filter(m => m.role === 'user' || m.role === 'assistant')
+                .slice(-10)
+                .map(m => ({ role: m.role, content: m.text || '' }))
+            : [];
+          cmdResult = await ipcRenderer.invoke('execute-command', {
+            prompt,
+            context,
+            conversationHistory: priorMessages
+          });
+        }
 
         if (cmdResult && cmdResult.success) {
-          // Tool use or text response succeeded
           addAgentMessage('assistant', cmdResult.message || 'Done.');
           const modelInfo = cmdResult.modelUsed ? ` (${cmdResult.modelUsed})` : '';
           const toolInfo = cmdResult.tool ? ` • Tool: ${cmdResult.tool.replace(/_/g, ' ')}` : '';
           setAgentStatus(`Agent${modelInfo}${toolInfo}`);
         } else {
-          // execute-command failed (no API key, etc.) — fall back to agent-plan
-          console.log('[Agent] execute-command unavailable, falling back to agent-plan:', cmdResult?.error);
-          setAgentStatus('Routing via agent planner...');
+          if (selectedProvider === 'harvey') {
+            setAgentStatus('Routing via agent planner...');
+          } else {
+            console.log('[Agent] execute-command unavailable, falling back to agent-plan:', cmdResult?.error);
+            setAgentStatus('Routing via agent planner...');
+          }
 
           const result = await ipcRenderer.invoke('agent-plan', {
             prompt,
@@ -10676,10 +10836,10 @@
     aiSearchBtn.addEventListener('click', async () => {
       const query = aiSearchInput.value.trim();
       if (!query || emailData.length === 0) return;
-      let provider = 'ollama';
+      let provider = 'localai';
       try {
         const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
-        provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'ollama');
+        provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'localai');
       } catch (_) {}
       const providerLabel = getProviderMeta(provider).label;
 

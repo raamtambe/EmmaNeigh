@@ -32,8 +32,10 @@ from docx.enum.style import WD_STYLE_TYPE
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_HARVEY_BASE_URL = "https://api.harvey.ai"
+DEFAULT_LOCALAI_BASE_URL = "http://127.0.0.1:11435"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_LMSTUDIO_BASE_URL = "http://127.0.0.1:1234"
+DEFAULT_LOCALAI_MODEL = "qwen2.5:1.5b"
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
 DEFAULT_LMSTUDIO_MODEL = "local-model"
 MAX_HTTP_ATTEMPTS = 3
@@ -133,8 +135,10 @@ def normalize_provider(provider):
     value = str(provider or "").strip().lower()
     if value == "claude":
         return "anthropic"
-    if value in ("anthropic", "openai", "harvey", "ollama", "lmstudio"):
+    if value in ("localai", "anthropic", "openai", "harvey", "ollama", "lmstudio"):
         return value
+    if value in ("local", "local ai", "local-ai", "local pack", "localpack", "built-in", "builtin"):
+        return "localai"
     if value in ("lm studio", "lm-studio"):
         return "lmstudio"
     return "anthropic"
@@ -155,7 +159,7 @@ def infer_provider_from_api_key(api_key):
 
 def resolve_provider(provider, api_key):
     preferred = normalize_provider(provider)
-    if preferred in ("ollama", "lmstudio"):
+    if preferred in ("localai", "ollama", "lmstudio"):
         return preferred
     inferred = infer_provider_from_api_key(api_key)
     return inferred or preferred
@@ -456,6 +460,29 @@ def call_openai_compatible_prompt(prompt, api_key, model_candidates, base_url, p
     )
 
 
+def call_localai_prompt(prompt, api_key, model_name, provider_base_url):
+    base_url = str(provider_base_url or os.environ.get("LOCALAI_BASE_URL") or DEFAULT_LOCALAI_BASE_URL).strip()
+    if not base_url:
+        base_url = DEFAULT_LOCALAI_BASE_URL
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+    return call_openai_compatible_prompt(
+        prompt,
+        api_key,
+        [
+            model_name,
+            os.environ.get("LOCALAI_MODEL"),
+            DEFAULT_LOCALAI_MODEL,
+            "qwen2.5:1.5b",
+            "qwen2.5:7b",
+            "gemma3:1b",
+            "gemma3",
+        ],
+        base_url,
+        "Local AI",
+    )
+
+
 def call_ollama_prompt(prompt, api_key, model_name, provider_base_url):
     base_url = str(provider_base_url or os.environ.get("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).strip()
     if not base_url:
@@ -549,7 +576,9 @@ def call_harvey_prompt(prompt, api_key, max_tokens, provider_base_url):
 
 def call_provider_prompt_json(prompt, api_key, provider, model_name=None, provider_base_url=None):
     provider_name = resolve_provider(provider, api_key)
-    if provider_name == "openai":
+    if provider_name == "localai":
+        response_text, _ = call_localai_prompt(prompt, api_key, model_name, provider_base_url)
+    elif provider_name == "openai":
         response_text, _ = call_openai_prompt(prompt, api_key, model_name)
     elif provider_name == "harvey":
         response_text, _ = call_harvey_prompt(prompt, api_key, 2048, provider_base_url)
@@ -1268,12 +1297,14 @@ def main():
     )
     model_name = sys.argv[6] if len(sys.argv) > 6 else (
         os.environ.get('OPENAI_MODEL') if provider == 'openai'
+        else os.environ.get('LOCALAI_MODEL') if provider == 'localai'
         else os.environ.get('OLLAMA_MODEL') if provider == 'ollama'
         else os.environ.get('LMSTUDIO_MODEL') if provider == 'lmstudio'
         else os.environ.get('CLAUDE_MODEL')
     )
     provider_base_url = sys.argv[7] if len(sys.argv) > 7 else (
         os.environ.get('HARVEY_BASE_URL', DEFAULT_HARVEY_BASE_URL) if provider == 'harvey'
+        else os.environ.get('LOCALAI_BASE_URL', DEFAULT_LOCALAI_BASE_URL) if provider == 'localai'
         else os.environ.get('OLLAMA_BASE_URL', DEFAULT_OLLAMA_BASE_URL) if provider == 'ollama'
         else os.environ.get('LMSTUDIO_BASE_URL', DEFAULT_LMSTUDIO_BASE_URL) if provider == 'lmstudio'
         else None

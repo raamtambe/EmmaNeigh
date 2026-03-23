@@ -40,14 +40,45 @@ const pendingLogsPath = path.join(app.getPath('userData'), 'pending_logs.json');
 const feedbackLogPath = path.join(app.getPath('userData'), 'feedback_log.json');
 const APP_VERSION = require('./package.json').version;
 const MACHINE_ID = crypto.createHash('sha256').update(os.hostname()).digest('hex').substring(0, 12);
-const DEFAULT_AI_PROVIDER = 'ollama';
+const DEFAULT_AI_PROVIDER = 'localai';
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const DEFAULT_HARVEY_BASE_URL = 'https://api.harvey.ai';
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
+const DEFAULT_LOCALAI_BASE_URL = 'http://127.0.0.1:11435';
 const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b';
 const DEFAULT_LMSTUDIO_MODEL = 'local-model';
+const DEFAULT_LOCALAI_MODEL = 'qwen2.5:1.5b';
+const LOCAL_AI_INSTALL_PS_URL = 'https://ollama.com/install.ps1';
+const LOCAL_AI_DOWNLOAD_PAGE_URL = 'https://ollama.com/download';
+const LOCAL_AI_STATUS_EVENT = 'local-ai-progress';
+const LOCAL_AI_PROFILES = {
+  'qwen2.5:1.5b': {
+    id: 'qwen2.5:1.5b',
+    label: 'Qwen 2.5 1.5B',
+    size: '986MB',
+    summary: 'Fastest free default. Best for routing, summaries, and lighter agent tasks.'
+  },
+  'qwen2.5:7b': {
+    id: 'qwen2.5:7b',
+    label: 'Qwen 2.5 7B',
+    size: '4.7GB',
+    summary: 'Better quality for legal drafting and longer reasoning.'
+  },
+  'gemma3:1b': {
+    id: 'gemma3:1b',
+    label: 'Gemma 3 1B',
+    size: '815MB',
+    summary: 'Smallest install. Good for quick local responses on lighter machines.'
+  },
+  'gemma3': {
+    id: 'gemma3',
+    label: 'Gemma 3 4B',
+    size: '3.3GB',
+    summary: 'Balanced local model for document tasks and chat.'
+  }
+};
 const REQUIRE_FIREBASE_TELEMETRY = false;
 const FIREBASE_TELEMETRY_PROBE_COLLECTION = 'telemetry_health';
 const FIREBASE_STATUS_SUCCESS_CACHE_MS = 30000;
@@ -85,6 +116,8 @@ const ANALYTICS_ADMIN_IDENTIFIERS = new Set(
 const trackedChildProcesses = new Map();
 let trackedProcessCounter = 0;
 const rawSpawn = spawn;
+let managedLocalAiServerProcess = null;
+let localAiBootstrapPromise = null;
 
 function spawnTracked(command, args = [], options = {}) {
   const proc = rawSpawn(command, args, options);
@@ -1685,16 +1718,17 @@ function normalizeClaudeModel(model) {
 function normalizeAIProvider(provider) {
   const value = (provider || '').trim().toLowerCase();
   if (!value) return DEFAULT_AI_PROVIDER;
+  if (value === 'local' || value === 'built-in' || value === 'builtin' || value === 'local ai' || value === 'local-ai' || value === 'local pack' || value === 'localpack') return 'localai';
   if (value === 'chatgpt') return 'openai';
   if (value === 'claude') return 'anthropic';
-  if (value === 'ollama' || value === 'lmstudio' || value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
+  if (value === 'localai' || value === 'ollama' || value === 'lmstudio' || value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
   if (value === 'lm studio' || value === 'lm-studio') return 'lmstudio';
   return DEFAULT_AI_PROVIDER;
 }
 
 function isLocalProvider(provider) {
   const normalized = normalizeAIProvider(provider);
-  return normalized === 'ollama' || normalized === 'lmstudio';
+  return normalized === 'localai' || normalized === 'ollama' || normalized === 'lmstudio';
 }
 
 function providerRequiresApiKey(provider) {
@@ -1742,6 +1776,8 @@ function resolveAiCallContext({ apiKey, requestedProvider }) {
 
 function getAIProviderDisplayName(provider) {
   switch (normalizeAIProvider(provider)) {
+    case 'localai':
+      return 'Local AI';
     case 'ollama':
       return 'Ollama';
     case 'lmstudio':
@@ -1753,6 +1789,30 @@ function getAIProviderDisplayName(provider) {
     default:
       return 'Anthropic';
   }
+}
+
+function getLocalAIProfiles() {
+  return Object.values(LOCAL_AI_PROFILES);
+}
+
+function getLocalAIProfile(profileId) {
+  const normalized = String(profileId || '').trim();
+  if (normalized && LOCAL_AI_PROFILES[normalized]) return LOCAL_AI_PROFILES[normalized];
+  return LOCAL_AI_PROFILES[DEFAULT_LOCALAI_MODEL];
+}
+
+function getLocalProviderBaseUrl(provider) {
+  const normalized = normalizeAIProvider(provider);
+  if (normalized === 'localai') return getLocalAIBaseUrl();
+  if (normalized === 'lmstudio') return getLmStudioBaseUrl();
+  return getOllamaBaseUrl();
+}
+
+function getLocalProviderModel(provider) {
+  const normalized = normalizeAIProvider(provider);
+  if (normalized === 'localai') return getLocalAIModel();
+  if (normalized === 'lmstudio') return getLmStudioModel();
+  return getOllamaModel();
 }
 
 function parseJsonSafe(text) {
@@ -1890,6 +1950,853 @@ function requestHttps({ baseUrl, path: requestPath, method = 'GET', headers = {}
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeProviderBaseUrl(rawValue, fallbackValue) {
+  let value = String(rawValue || fallbackValue || '').trim();
+  if (!value) value = String(fallbackValue || '').trim();
+  if (!value) return '';
+  if (!/^[a-z]+:\/\//i.test(value)) {
+    value = `http://${value}`;
+  }
+
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    url.search = '';
+    if (url.pathname === '/') {
+      url.pathname = '';
+    }
+    return url.toString().replace(/\/$/, '');
+  } catch (_) {
+    return String(fallbackValue || value).trim().replace(/\/+$/, '');
+  }
+}
+
+function getLocalAiRootDir() {
+  return path.join(app.getPath('userData'), 'local-ai');
+}
+
+function getLocalAiModelsDir() {
+  return path.join(getLocalAiRootDir(), 'models');
+}
+
+function ensureDirectoryExists(dirPath) {
+  if (!dirPath) return;
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function buildLoopbackBaseUrlVariants(rawValue, fallbackValue) {
+  const primary = normalizeProviderBaseUrl(rawValue, fallbackValue);
+  const variants = [];
+  const pushVariant = (candidate) => {
+    const normalized = normalizeProviderBaseUrl(candidate, primary);
+    if (normalized && !variants.includes(normalized)) {
+      variants.push(normalized);
+    }
+  };
+
+  pushVariant(primary);
+
+  try {
+    const url = new URL(primary);
+    const altHosts = [];
+    if (url.hostname === '127.0.0.1') altHosts.push('localhost');
+    if (url.hostname === 'localhost') altHosts.push('127.0.0.1');
+    if (url.hostname === '0.0.0.0') altHosts.push('127.0.0.1', 'localhost');
+    for (const host of altHosts) {
+      const alt = new URL(primary);
+      alt.hostname = host;
+      pushVariant(alt.toString());
+    }
+  } catch (_) {}
+
+  return variants;
+}
+
+function isLocalProviderConnectionError(detail) {
+  const text = String(detail || '').trim().toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes('econnrefused') ||
+    text.includes('connection refused') ||
+    text.includes('actively refused') ||
+    text.includes('enotfound') ||
+    text.includes('ehostunreach') ||
+    text.includes('network error')
+  );
+}
+
+function findExecutableOnPath(commandName) {
+  try {
+    const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+    const result = spawnSync(lookupCommand, [commandName], {
+      encoding: 'utf8',
+      windowsHide: true
+    });
+    if (result.status !== 0) return '';
+    return String(result.stdout || '')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .find(Boolean) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function parseProviderHostPort(baseUrl, fallbackPort) {
+  try {
+    const parsed = new URL(baseUrl);
+    return `${parsed.hostname}:${parsed.port || fallbackPort}`;
+  } catch (_) {
+    return `127.0.0.1:${fallbackPort}`;
+  }
+}
+
+function getLocalAiOllamaEnv() {
+  const baseUrl = getLocalAIBaseUrl();
+  ensureDirectoryExists(getLocalAiRootDir());
+  ensureDirectoryExists(getLocalAiModelsDir());
+  return {
+    ...process.env,
+    OLLAMA_HOST: parseProviderHostPort(baseUrl, 11435),
+    OLLAMA_MODELS: getLocalAiModelsDir()
+  };
+}
+
+function emitLocalAiProgress(message, extra = {}) {
+  if (!mainWindow || !mainWindow.webContents) return;
+  mainWindow.webContents.send(LOCAL_AI_STATUS_EVENT, {
+    message: String(message || '').trim(),
+    is_error: !!extra.is_error,
+    step: extra.step || null,
+    timestamp: new Date().toISOString()
+  });
+}
+
+function findOllamaBinary() {
+  const cliPath = findExecutableOnPath('ollama');
+  if (cliPath) return cliPath;
+
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe'),
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'Ollama.exe'),
+        path.join(process.env.ProgramFiles || '', 'Ollama', 'ollama.exe'),
+        path.join(process.env.ProgramFiles || '', 'Ollama', 'Ollama.exe'),
+        path.join(process.env['ProgramFiles(x86)'] || '', 'Ollama', 'ollama.exe'),
+        path.join(process.env['ProgramFiles(x86)'] || '', 'Ollama', 'Ollama.exe')
+      ]
+    : [
+        '/usr/local/bin/ollama',
+        '/opt/homebrew/bin/ollama',
+        '/Applications/Ollama.app/Contents/Resources/ollama',
+        '/Applications/Ollama.app/Contents/MacOS/Ollama'
+      ];
+
+  return candidates.find(candidate => candidate && fs.existsSync(candidate)) || '';
+}
+
+function spawnLocalAiServer(commandPath) {
+  if (!commandPath) return null;
+  try {
+    const proc = rawSpawn(commandPath, ['serve'], {
+      env: getLocalAiOllamaEnv(),
+      windowsHide: true,
+      detached: false,
+      stdio: 'ignore'
+    });
+    proc.once('exit', () => {
+      if (managedLocalAiServerProcess === proc) {
+        managedLocalAiServerProcess = null;
+      }
+    });
+    proc.once('error', () => {
+      if (managedLocalAiServerProcess === proc) {
+        managedLocalAiServerProcess = null;
+      }
+    });
+    managedLocalAiServerProcess = proc;
+    return proc;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function startManagedLocalAiServer() {
+  const binaryPath = findOllamaBinary();
+  if (!binaryPath) {
+    return {
+      success: false,
+      error: process.platform === 'win32'
+        ? 'Ollama is not installed yet. Click "Install Local AI" in Settings to install the free local runtime.'
+        : `Ollama is not installed yet. Install it from ${LOCAL_AI_DOWNLOAD_PAGE_URL}, then retry.`
+    };
+  }
+
+  const baseUrl = getLocalAIBaseUrl();
+  const alreadyRunning = await probeLocalProviderBaseUrl({
+    provider: 'localai',
+    baseUrl,
+    apiKey: ''
+  });
+  if (alreadyRunning.reachable) {
+    return {
+      success: true,
+      baseUrl,
+      binaryPath,
+      note: 'Local AI runtime already running.'
+    };
+  }
+
+  emitLocalAiProgress('Starting the local AI runtime...', { step: 'start_runtime' });
+  const proc = spawnLocalAiServer(binaryPath);
+  if (!proc) {
+    return { success: false, error: 'EmmaNeigh could not start the local AI runtime.' };
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(1000);
+    const probe = await probeLocalProviderBaseUrl({
+      provider: 'localai',
+      baseUrl,
+      apiKey: ''
+    });
+    if (probe.reachable) {
+      return {
+        success: true,
+        baseUrl,
+        binaryPath,
+        note: 'Local AI runtime started.'
+      };
+    }
+  }
+
+  return {
+    success: false,
+    error: `EmmaNeigh started the local runtime, but it did not respond at ${baseUrl}.`
+  };
+}
+
+async function installOllamaForLocalAi() {
+  if (findOllamaBinary()) {
+    return { success: true, installed: true, message: 'Ollama is already installed.' };
+  }
+
+  if (process.platform !== 'win32') {
+    return {
+      success: false,
+      installed: false,
+      error: `Automatic install is currently supported on Windows only. Install Ollama from ${LOCAL_AI_DOWNLOAD_PAGE_URL}, then retry.`
+    };
+  }
+
+  emitLocalAiProgress('Installing the free local AI runtime...', { step: 'install_runtime' });
+  return await new Promise((resolve) => {
+    const installer = rawSpawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `irm ${LOCAL_AI_INSTALL_PS_URL} | iex`
+    ], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stderr = '';
+    installer.stdout.on('data', (chunk) => {
+      const text = String(chunk || '').trim();
+      if (text) emitLocalAiProgress(text, { step: 'install_runtime' });
+    });
+    installer.stderr.on('data', (chunk) => {
+      stderr += String(chunk || '');
+    });
+    installer.on('close', () => {
+      const binaryPath = findOllamaBinary();
+      if (binaryPath) {
+        resolve({ success: true, installed: true, message: 'Ollama installed successfully.', binaryPath });
+        return;
+      }
+      resolve({
+        success: false,
+        installed: false,
+        error: stderr.trim() || 'Ollama installation did not complete successfully.'
+      });
+    });
+    installer.on('error', (err) => {
+      resolve({ success: false, installed: false, error: err.message });
+    });
+  });
+}
+
+async function ensureLocalAiModelInstalled(modelName) {
+  const model = String(modelName || getLocalAIModel()).trim() || DEFAULT_LOCALAI_MODEL;
+  const baseUrl = getLocalAIBaseUrl();
+  const currentModels = await fetchOpenAICompatibleModels({ baseUrl, apiKey: '' });
+  if (currentModels.includes(model)) {
+    return { success: true, model, alreadyInstalled: true };
+  }
+
+  const binaryPath = findOllamaBinary();
+  if (!binaryPath) {
+    return { success: false, error: 'Local AI runtime is not installed yet.' };
+  }
+
+  emitLocalAiProgress(`Downloading the local model (${model}). This can take a few minutes...`, { step: 'pull_model' });
+  return await new Promise((resolve) => {
+    const proc = rawSpawn(binaryPath, ['pull', model], {
+      env: getLocalAiOllamaEnv(),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stderr = '';
+    proc.stdout.on('data', (chunk) => {
+      const text = String(chunk || '').trim();
+      if (text) emitLocalAiProgress(text, { step: 'pull_model' });
+    });
+    proc.stderr.on('data', (chunk) => {
+      const text = String(chunk || '').trim();
+      if (text) {
+        stderr += `${text}\n`;
+        emitLocalAiProgress(text, { step: 'pull_model' });
+      }
+    });
+    proc.on('close', async (code) => {
+      if (code !== 0) {
+        resolve({ success: false, error: stderr.trim() || `Model download failed with exit code ${code}.` });
+        return;
+      }
+      const refreshedModels = await fetchOpenAICompatibleModels({ baseUrl, apiKey: '' });
+      if (!refreshedModels.includes(model)) {
+        resolve({ success: false, error: `Model download finished, but ${model} is still not available.` });
+        return;
+      }
+      resolve({ success: true, model, models: refreshedModels });
+    });
+    proc.on('error', (err) => resolve({ success: false, error: err.message }));
+  });
+}
+
+async function bootstrapManagedLocalAi(profileId) {
+  if (localAiBootstrapPromise) return localAiBootstrapPromise;
+
+  localAiBootstrapPromise = (async () => {
+    const profile = getLocalAIProfile(profileId || getLocalAIModel());
+    emitLocalAiProgress(`Preparing Local AI using ${profile.label}...`, { step: 'prepare' });
+
+    const installResult = await installOllamaForLocalAi();
+    if (!installResult.success) {
+      emitLocalAiProgress(installResult.error, { step: 'install_runtime', is_error: true });
+      return installResult;
+    }
+
+    const startResult = await startManagedLocalAiServer();
+    if (!startResult.success) {
+      emitLocalAiProgress(startResult.error, { step: 'start_runtime', is_error: true });
+      return startResult;
+    }
+
+    const modelResult = await ensureLocalAiModelInstalled(profile.id);
+    if (!modelResult.success) {
+      emitLocalAiProgress(modelResult.error, { step: 'pull_model', is_error: true });
+      return modelResult;
+    }
+
+    emitLocalAiProgress(`Local AI is ready with ${profile.label}.`, { step: 'complete' });
+    return {
+      success: true,
+      provider: 'localai',
+      model: profile.id,
+      baseUrl: getLocalAIBaseUrl(),
+      profile
+    };
+  })();
+
+  try {
+    return await localAiBootstrapPromise;
+  } finally {
+    localAiBootstrapPromise = null;
+  }
+}
+
+function launchDetachedProcess(command, args = []) {
+  try {
+    const child = rawSpawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.unref();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function getOllamaLaunchCommand() {
+  const cliPath = findExecutableOnPath('ollama');
+  if (cliPath) {
+    return {
+      installed: true,
+      command: cliPath,
+      args: ['serve'],
+      display: `${cliPath} serve`
+    };
+  }
+
+  if (process.platform === 'darwin') {
+    const appCandidates = [
+      '/Applications/Ollama.app/Contents/MacOS/Ollama',
+      path.join(os.homedir(), 'Applications', 'Ollama.app', 'Contents', 'MacOS', 'Ollama')
+    ];
+    const appBinary = appCandidates.find(candidate => fs.existsSync(candidate));
+    if (appBinary) {
+      return {
+        installed: true,
+        command: appBinary,
+        args: [],
+        display: appBinary
+      };
+    }
+    const openPath = findExecutableOnPath('open');
+    if (openPath) {
+      return {
+        installed: fs.existsSync('/Applications/Ollama.app') || fs.existsSync(path.join(os.homedir(), 'Applications', 'Ollama.app')),
+        command: openPath,
+        args: ['-a', 'Ollama'],
+        display: 'open -a Ollama'
+      };
+    }
+  }
+
+  if (process.platform === 'win32') {
+    const appCandidates = [
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'Ollama.exe'),
+      path.join(process.env.ProgramFiles || '', 'Ollama', 'Ollama.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || '', 'Ollama', 'Ollama.exe')
+    ].filter(Boolean);
+    const appBinary = appCandidates.find(candidate => fs.existsSync(candidate));
+    if (appBinary) {
+      return {
+        installed: true,
+        command: appBinary,
+        args: [],
+        display: appBinary
+      };
+    }
+  }
+
+  return { installed: false, command: '', args: [], display: '' };
+}
+
+function getLmStudioLaunchCommand() {
+  if (process.platform === 'darwin') {
+    const appCandidates = [
+      '/Applications/LM Studio.app/Contents/MacOS/LM Studio',
+      path.join(os.homedir(), 'Applications', 'LM Studio.app', 'Contents', 'MacOS', 'LM Studio')
+    ];
+    const appBinary = appCandidates.find(candidate => fs.existsSync(candidate));
+    if (appBinary) {
+      return {
+        installed: true,
+        command: appBinary,
+        args: [],
+        display: appBinary
+      };
+    }
+  }
+
+  if (process.platform === 'win32') {
+    const appCandidates = [
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'LM Studio', 'LM Studio.exe'),
+      path.join(process.env.ProgramFiles || '', 'LM Studio', 'LM Studio.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || '', 'LM Studio', 'LM Studio.exe')
+    ].filter(Boolean);
+    const appBinary = appCandidates.find(candidate => fs.existsSync(candidate));
+    if (appBinary) {
+      return {
+        installed: true,
+        command: appBinary,
+        args: [],
+        display: appBinary
+      };
+    }
+  }
+
+  return { installed: false, command: '', args: [], display: '' };
+}
+
+function tryLaunchLocalProvider(provider) {
+  const normalized = normalizeAIProvider(provider);
+  if (normalized === 'localai') {
+    const binaryPath = findOllamaBinary();
+    if (!binaryPath) {
+      return {
+        attempted: false,
+        started: false,
+        installed: false,
+        display: ''
+      };
+    }
+    const proc = spawnLocalAiServer(binaryPath);
+    return {
+      attempted: true,
+      started: !!proc,
+      installed: true,
+      display: `${binaryPath} serve`
+    };
+  }
+  const launchCommand = normalized === 'ollama'
+    ? getOllamaLaunchCommand()
+    : getLmStudioLaunchCommand();
+
+  if (!launchCommand.command) {
+    return {
+      attempted: false,
+      started: false,
+      installed: !!launchCommand.installed,
+      display: ''
+    };
+  }
+
+  const started = launchDetachedProcess(launchCommand.command, launchCommand.args || []);
+  return {
+    attempted: true,
+    started,
+    installed: true,
+    display: launchCommand.display
+  };
+}
+
+async function probeLocalProviderBaseUrl({ provider, baseUrl, apiKey }) {
+  const headers = {};
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const response = await requestHttps({
+    baseUrl,
+    path: '/v1/models',
+    method: 'GET',
+    headers,
+    timeoutMs: 15000
+  });
+
+  if (response.statusCode === 200) {
+    const models = Array.isArray(response.jsonBody?.data)
+      ? response.jsonBody.data.map(item => String(item?.id || '').trim()).filter(Boolean)
+      : [];
+    return {
+      ok: models.length > 0,
+      reachable: true,
+      baseUrl,
+      models,
+      endpoint: '/v1/models',
+      response,
+      note: models.length > 0 ? '' : `${getAIProviderDisplayName(provider)} is reachable but no models are loaded.`
+    };
+  }
+
+  if (provider === 'ollama' || provider === 'localai') {
+    const tagsResponse = await requestHttps({
+      baseUrl,
+      path: '/api/tags',
+      method: 'GET',
+      headers: {},
+      timeoutMs: 15000
+    });
+    if (tagsResponse.statusCode === 200) {
+      const models = Array.isArray(tagsResponse.jsonBody?.models)
+        ? tagsResponse.jsonBody.models.map(item => String(item?.name || '').trim()).filter(Boolean)
+        : [];
+      return {
+        ok: models.length > 0,
+        reachable: true,
+        baseUrl,
+        models,
+        endpoint: '/api/tags',
+        response: tagsResponse,
+        note: models.length > 0
+          ? `${getAIProviderDisplayName(provider)} is connected via the native local endpoint.`
+          : `${getAIProviderDisplayName(provider)} is running but no models are installed yet.`
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    reachable: response.statusCode > 0,
+    baseUrl,
+    models: [],
+    endpoint: '/v1/models',
+    response
+  };
+}
+
+function buildLocalProviderFailureMessage({ provider, baseUrl, configuredModel, detail, launchInfo, models }) {
+  const label = getAIProviderDisplayName(provider);
+  const configured = configuredModel || (
+    provider === 'localai' ? DEFAULT_LOCALAI_MODEL
+    : provider === 'ollama' ? DEFAULT_OLLAMA_MODEL
+    : DEFAULT_LMSTUDIO_MODEL
+  );
+  const steps = [];
+
+  if (provider === 'localai') {
+    if (!launchInfo || launchInfo.installed === false) {
+      if (process.platform === 'win32') {
+        steps.push('Open Settings and click "Install Local AI" to install the free runtime and model.');
+      } else {
+        steps.push(`Install Ollama from ${LOCAL_AI_DOWNLOAD_PAGE_URL}, then return to EmmaNeigh and click "Install Local AI".`);
+      }
+    } else if (launchInfo.attempted && !launchInfo.started) {
+      steps.push('EmmaNeigh found the local runtime but could not start it automatically.');
+    }
+    if (Array.isArray(models) && models.length > 0) {
+      steps.push(`Available local models: ${models.slice(0, 5).join(', ')}.`);
+    } else {
+      const profile = getLocalAIProfile(configured);
+      steps.push(`Install a free local model such as ${profile.label} from Settings.`);
+    }
+    steps.push(`EmmaNeigh uses ${baseUrl} for the built-in local model.`);
+  } else if (provider === 'ollama') {
+    if (!launchInfo || launchInfo.installed === false) {
+      steps.push('Install Ollama from https://ollama.com/download.');
+    } else if (launchInfo.attempted && !launchInfo.started) {
+      steps.push('EmmaNeigh found Ollama but could not start it automatically.');
+    }
+    steps.push('Open the Ollama app or run `ollama serve`.');
+    if (Array.isArray(models) && models.length > 0) {
+      steps.push(`Available local models: ${models.slice(0, 5).join(', ')}.`);
+    } else {
+      steps.push(`Pull a local model with \`ollama pull ${configured}\`.`);
+    }
+    steps.push(`Keep the base URL set to ${baseUrl}.`);
+  } else {
+    if (!launchInfo || launchInfo.installed === false) {
+      steps.push('Install LM Studio from https://lmstudio.ai/.');
+    } else if (launchInfo.attempted && !launchInfo.started) {
+      steps.push('EmmaNeigh found LM Studio but could not launch it automatically.');
+    }
+    steps.push('Open LM Studio.');
+    steps.push('Load a model into the chat/runtime.');
+    steps.push('Turn on the OpenAI-compatible local server in LM Studio.');
+    steps.push(`Keep the base URL set to ${baseUrl}.`);
+  }
+
+  const detailText = detail ? ` Last error: ${detail}.` : '';
+  return `${label} is not ready at ${baseUrl}.${detailText} ${steps.join(' ')}`.trim();
+}
+
+async function ensureLocalProviderAvailable(provider, apiKey, options = {}) {
+  const normalized = normalizeAIProvider(provider);
+  if (normalized === 'localai') {
+    const configuredBaseUrl = getLocalAIBaseUrl();
+    const configuredModel = getLocalAIModel();
+    const variants = buildLoopbackBaseUrlVariants(configuredBaseUrl, DEFAULT_LOCALAI_BASE_URL);
+    const allowAutoLaunch = options.allowAutoLaunch !== false;
+    const allowBootstrap = !!options.allowBootstrap;
+
+    let lastProbe = null;
+    for (const candidateBaseUrl of variants) {
+      const probe = await probeLocalProviderBaseUrl({
+        provider: normalized,
+        baseUrl: candidateBaseUrl,
+        apiKey: ''
+      });
+      lastProbe = probe;
+      if (probe.ok && probe.models.includes(configuredModel)) {
+        return {
+          success: true,
+          provider: normalized,
+          baseUrl: candidateBaseUrl,
+          configuredBaseUrl,
+          configuredModel,
+          models: probe.models,
+          endpoint: probe.endpoint,
+          message: `${getAIProviderDisplayName(normalized)} is ready at ${candidateBaseUrl}.`
+        };
+      }
+    }
+
+    let launchInfo = null;
+    if (allowBootstrap) {
+      const bootstrapResult = await bootstrapManagedLocalAi(configuredModel);
+      if (bootstrapResult.success) {
+        const finalProbe = await probeLocalProviderBaseUrl({
+          provider: normalized,
+          baseUrl: configuredBaseUrl,
+          apiKey: ''
+        });
+        return {
+          success: true,
+          provider: normalized,
+          baseUrl: configuredBaseUrl,
+          configuredBaseUrl,
+          configuredModel,
+          models: finalProbe.models || [configuredModel],
+          endpoint: finalProbe.endpoint || '/api/tags',
+          autoStarted: true,
+          launchCommand: findOllamaBinary(),
+          message: `${getAIProviderDisplayName(normalized)} is ready at ${configuredBaseUrl}.`
+        };
+      }
+      return {
+        success: false,
+        provider: normalized,
+        baseUrl: configuredBaseUrl,
+        configuredBaseUrl,
+        configuredModel,
+        models: [],
+        endpoint: '/api/tags',
+        autoStarted: false,
+        launchCommand: '',
+        error: bootstrapResult.error || 'Failed to bootstrap Local AI.'
+      };
+    }
+
+    const lastDetail = lastProbe ? getErrorDetail(lastProbe.response) : 'Unknown error';
+    if (allowAutoLaunch && isLocalProviderConnectionError(lastDetail)) {
+      launchInfo = tryLaunchLocalProvider(normalized);
+      if (launchInfo.started) {
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          await sleep(1000);
+          const probe = await probeLocalProviderBaseUrl({
+            provider: normalized,
+            baseUrl: configuredBaseUrl,
+            apiKey: ''
+          });
+          lastProbe = probe;
+          if (probe.ok && probe.models.includes(configuredModel)) {
+            return {
+              success: true,
+              provider: normalized,
+              baseUrl: configuredBaseUrl,
+              configuredBaseUrl,
+              configuredModel,
+              models: probe.models,
+              endpoint: probe.endpoint,
+              autoStarted: true,
+              launchCommand: launchInfo.display,
+              message: `${getAIProviderDisplayName(normalized)} started and is ready at ${configuredBaseUrl}.`
+            };
+          }
+        }
+      }
+    }
+
+    const detail = lastProbe ? getErrorDetail(lastProbe.response) : 'Unknown error';
+    return {
+      success: false,
+      provider: normalized,
+      baseUrl: configuredBaseUrl,
+      configuredBaseUrl,
+      configuredModel,
+      models: lastProbe?.models || [],
+      endpoint: lastProbe?.endpoint || '/api/tags',
+      autoStarted: !!launchInfo?.started,
+      launchCommand: launchInfo?.display || '',
+      error: buildLocalProviderFailureMessage({
+        provider: normalized,
+        baseUrl: configuredBaseUrl,
+        configuredModel,
+        detail,
+        launchInfo,
+        models: lastProbe?.models || []
+      })
+    };
+  }
+
+  const configuredBaseUrl = normalized === 'lmstudio'
+    ? getLmStudioBaseUrl()
+    : getOllamaBaseUrl();
+  const configuredModel = normalized === 'lmstudio'
+    ? getLmStudioModel()
+    : getOllamaModel();
+  const fallbackBaseUrl = normalized === 'lmstudio'
+    ? DEFAULT_LMSTUDIO_BASE_URL
+    : DEFAULT_OLLAMA_BASE_URL;
+  const variants = buildLoopbackBaseUrlVariants(configuredBaseUrl, fallbackBaseUrl);
+  const allowAutoLaunch = options.allowAutoLaunch !== false;
+
+  let lastProbe = null;
+  for (const candidateBaseUrl of variants) {
+    const probe = await probeLocalProviderBaseUrl({
+      provider: normalized,
+      baseUrl: candidateBaseUrl,
+      apiKey
+    });
+    lastProbe = probe;
+    if (probe.ok) {
+      return {
+        success: true,
+        provider: normalized,
+        baseUrl: candidateBaseUrl,
+        configuredBaseUrl,
+        configuredModel,
+        models: probe.models,
+        endpoint: probe.endpoint,
+        message: `${getAIProviderDisplayName(normalized)} is ready at ${candidateBaseUrl}.`
+      };
+    }
+  }
+
+  let launchInfo = null;
+  const lastDetail = lastProbe ? getErrorDetail(lastProbe.response) : 'Unknown error';
+  if (allowAutoLaunch && isLocalProviderConnectionError(lastDetail)) {
+    launchInfo = tryLaunchLocalProvider(normalized);
+    if (launchInfo.started) {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await sleep(1000);
+        for (const candidateBaseUrl of variants) {
+          const probe = await probeLocalProviderBaseUrl({
+            provider: normalized,
+            baseUrl: candidateBaseUrl,
+            apiKey
+          });
+          lastProbe = probe;
+          if (probe.ok) {
+            return {
+              success: true,
+              provider: normalized,
+              baseUrl: candidateBaseUrl,
+              configuredBaseUrl,
+              configuredModel,
+              models: probe.models,
+              endpoint: probe.endpoint,
+              autoStarted: true,
+              launchCommand: launchInfo.display,
+              message: `${getAIProviderDisplayName(normalized)} started and is ready at ${candidateBaseUrl}.`
+            };
+          }
+        }
+      }
+    }
+  }
+
+  const detail = lastProbe ? getErrorDetail(lastProbe.response) : 'Unknown error';
+  return {
+    success: false,
+    provider: normalized,
+    baseUrl: configuredBaseUrl,
+    configuredBaseUrl,
+    configuredModel,
+    models: lastProbe?.models || [],
+    endpoint: lastProbe?.endpoint || '/v1/models',
+    autoStarted: !!launchInfo?.started,
+    launchCommand: launchInfo?.display || '',
+    error: buildLocalProviderFailureMessage({
+      provider: normalized,
+      baseUrl: configuredBaseUrl,
+      configuredModel,
+      detail,
+      launchInfo,
+      models: lastProbe?.models || []
+    })
+  };
 }
 
 function getErrorDetail(response) {
@@ -2096,13 +3003,77 @@ async function callHarveyPrompt({ apiKey, prompt, maxTokens }) {
   return { success: true, text: String(text), modelUsed: 'harvey-assist' };
 }
 
+async function callLocalAIPrompt({ prompt, maxTokens }) {
+  const localProvider = await ensureLocalProviderAvailable('localai', '', {
+    allowAutoLaunch: true,
+    allowBootstrap: true
+  });
+  if (!localProvider.success) {
+    return { success: false, error: localProvider.error };
+  }
+
+  const configuredModel = getLocalAIModel();
+  const modelCandidates = Array.from(new Set([
+    configuredModel,
+    DEFAULT_LOCALAI_MODEL,
+    'qwen2.5:1.5b',
+    'qwen2.5:7b',
+    'gemma3:1b',
+    'gemma3'
+  ]));
+
+  const openaiResult = await callOpenAICompatiblePrompt({
+    baseUrl: localProvider.baseUrl,
+    apiKey: '',
+    prompt,
+    maxTokens,
+    modelCandidates,
+    providerLabel: 'Local AI'
+  });
+  if (openaiResult.success) return openaiResult;
+
+  const discovered = await fetchOpenAICompatibleModels({ baseUrl: localProvider.baseUrl, apiKey: '' });
+  const allCandidates = Array.from(new Set([...modelCandidates, ...discovered]));
+  let lastError = openaiResult.error || 'Unknown error';
+  for (const modelName of allCandidates) {
+    const response = await requestHttps({
+      baseUrl: localProvider.baseUrl,
+      path: '/api/chat',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: modelName,
+        stream: false,
+        messages: [{ role: 'user', content: prompt }],
+        options: maxTokens ? { num_predict: maxTokens } : {}
+      }),
+      timeoutMs: 90000
+    });
+    if (response.statusCode === 200 && response.jsonBody?.message?.content) {
+      return { success: true, text: String(response.jsonBody.message.content).trim(), modelUsed: modelName };
+    }
+    if (response.statusCode === 404) continue;
+    lastError = getErrorDetail(response);
+  }
+
+  return {
+    success: false,
+    error: `Local AI could not respond. ${lastError}`
+  };
+}
+
 async function callOllamaPrompt({ apiKey, prompt, maxTokens }) {
-  const ollamaBase = getOllamaBaseUrl();
+  const localProvider = await ensureLocalProviderAvailable('ollama', apiKey, { allowAutoLaunch: true });
+  if (!localProvider.success) {
+    return { success: false, error: localProvider.error };
+  }
+  const ollamaBase = localProvider.baseUrl;
   const modelCandidates = [
     getOllamaModel(),
     DEFAULT_OLLAMA_MODEL,
     'llama3.1:8b',
-    'qwen2.5:7b'
+    'qwen2.5:7b',
+    'gemma3:4b'
   ];
 
   // Try OpenAI-compatible endpoint first (preferred, works with Ollama 0.1.24+)
@@ -2150,12 +3121,16 @@ async function callOllamaPrompt({ apiKey, prompt, maxTokens }) {
 }
 
 async function callLmStudioPrompt({ apiKey, prompt, maxTokens }) {
+  const localProvider = await ensureLocalProviderAvailable('lmstudio', apiKey, { allowAutoLaunch: true });
+  if (!localProvider.success) {
+    return { success: false, error: localProvider.error };
+  }
   const modelCandidates = [
     getLmStudioModel(),
     DEFAULT_LMSTUDIO_MODEL
   ];
   return callOpenAICompatiblePrompt({
-    baseUrl: getLmStudioBaseUrl(),
+    baseUrl: localProvider.baseUrl,
     apiKey,
     prompt,
     maxTokens,
@@ -2166,6 +3141,9 @@ async function callLmStudioPrompt({ apiKey, prompt, maxTokens }) {
 
 async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
   const normalized = resolveProviderForApiKey(provider, apiKey);
+  if (normalized === 'localai') {
+    return callLocalAIPrompt({ prompt, maxTokens });
+  }
   if (normalized === 'ollama') {
     return callOllamaPrompt({ apiKey, prompt, maxTokens });
   }
@@ -2199,7 +3177,10 @@ function getProviderConnectionConfig(providerInput, apiKeyInput) {
   let healthPath = '/v1/models';
   let model = getClaudeModel();
 
-  if (provider === 'ollama') {
+  if (provider === 'localai') {
+    baseUrl = getLocalAIBaseUrl();
+    model = getLocalAIModel();
+  } else if (provider === 'ollama') {
     baseUrl = getOllamaBaseUrl();
     model = getOllamaModel();
   } else if (provider === 'lmstudio') {
@@ -2232,6 +3213,26 @@ async function runProviderHealthCheck(connectionConfig, apiKeyInput) {
   const apiKey = String(apiKeyInput || '').trim();
   if (!connectionConfig) {
     return { ok: false, status: 'invalid_config', detail: 'Provider configuration missing.' };
+  }
+
+  if (isLocalProvider(connectionConfig.provider)) {
+    const localProvider = await ensureLocalProviderAvailable(connectionConfig.provider, apiKey, { allowAutoLaunch: true });
+    if (localProvider.success) {
+      return {
+        ok: true,
+        status: 'reachable',
+        statusCode: 200,
+        endpoint: buildProviderHealthEndpoint(localProvider.baseUrl, localProvider.endpoint || '/v1/models'),
+        detail: localProvider.message
+      };
+    }
+    return {
+      ok: false,
+      status: 'unreachable',
+      statusCode: 0,
+      endpoint: connectionConfig.healthEndpoint,
+      detail: localProvider.error
+    };
   }
 
   if (connectionConfig.requiresApiKey && !apiKey) {
@@ -10081,13 +11082,13 @@ function convertToolsToOpenAIFormat(tools) {
 function resolveAgentProvider() {
   const provider = getAIProvider();
   const apiKey = getApiKey();
-  const isLocal = provider === 'ollama' || provider === 'lmstudio';
+  const isLocal = provider === 'localai' || provider === 'ollama' || provider === 'lmstudio';
 
   // Local providers (Ollama, LM Studio) bypass proxy — they run on localhost
   if (!isLocal) {
     const proxyUrl = getAgentProxyUrl();
-    if (proxyUrl) {
-      // Proxy mode — forward everything to the proxy server which holds the real API key
+    if (proxyUrl && providerRequiresApiKey(provider) && !apiKey) {
+      // Fallback proxy mode — only used when a direct API-key provider is selected but no key is configured.
       return { mode: 'proxy', proxyUrl, proxyToken: getAgentProxyToken() };
     }
   }
@@ -10102,6 +11103,24 @@ function resolveAgentProvider() {
       provider: 'openai',
       baseUrl: 'https://api.openai.com',
       models: [getOpenAIModel(), DEFAULT_OPENAI_MODEL, 'gpt-4o-mini', 'gpt-4o']
+    };
+  }
+  if (provider === 'harvey') {
+    return {
+      mode: 'harvey',
+      apiKey,
+      provider: 'harvey',
+      baseUrl: getHarveyBaseUrl(),
+      models: ['harvey-assist']
+    };
+  }
+  if (provider === 'localai') {
+    return {
+      mode: 'openai',
+      apiKey: '',
+      provider: 'localai',
+      baseUrl: getLocalAIBaseUrl(),
+      models: [getLocalAIModel(), DEFAULT_LOCALAI_MODEL, 'qwen2.5:1.5b', 'gemma3:1b']
     };
   }
   if (provider === 'lmstudio') {
@@ -10159,11 +11178,19 @@ ipcMain.handle('execute-command', async (event, { prompt, context, conversationH
     const agentConfig = resolveAgentProvider();
     emitAgentProgress('start', 'Agent is planning your request...');
 
-    // Anthropic mode requires API key; Ollama/LM Studio do not
-    if (agentConfig.mode === 'anthropic' && !agentConfig.apiKey) {
+    if (agentConfig.provider === 'harvey') {
+      const unsupportedResult = {
+        success: false,
+        error: 'Harvey is configured for planning and general chat, but multi-step tool execution is not available yet. EmmaNeigh will use planner mode instead.'
+      };
+      finalizeAgentProgress(unsupportedResult);
+      return unsupportedResult;
+    }
+
+    if (providerRequiresApiKey(agentConfig.provider) && agentConfig.mode !== 'proxy' && !agentConfig.apiKey) {
       const missingKeyResult = {
         success: false,
-        error: 'No Anthropic API key configured. Set a key in Settings, switch to Ollama (free), or configure a backend proxy.'
+        error: `No ${getAIProviderDisplayName(agentConfig.provider)} API key configured. Add one in Settings, switch to a local model, or configure a backend proxy.`
       };
       finalizeAgentProgress(missingKeyResult);
       return missingKeyResult;
@@ -10172,6 +11199,26 @@ ipcMain.handle('execute-command', async (event, { prompt, context, conversationH
     const activeTab = context?.activeTab || 'unknown';
     const loadedFiles = context?.loadedFiles || [];
     const isWindows = process.platform === 'win32';
+
+    if (agentConfig.provider === 'localai' || agentConfig.provider === 'ollama' || agentConfig.provider === 'lmstudio') {
+      const localProvider = await ensureLocalProviderAvailable(agentConfig.provider, agentConfig.apiKey, {
+        allowAutoLaunch: true,
+        allowBootstrap: agentConfig.provider === 'localai'
+      });
+      if (!localProvider.success) {
+        const unavailableResult = {
+          success: false,
+          error: localProvider.error
+        };
+        finalizeAgentProgress(unavailableResult);
+        return unavailableResult;
+      }
+      agentConfig.baseUrl = localProvider.baseUrl;
+      agentConfig.models = Array.from(new Set([
+        ...(agentConfig.models || []),
+        ...(localProvider.models || [])
+      ].filter(Boolean)));
+    }
 
     const systemPrompt = `You are EmmaNeigh, a legal document processing assistant for Kirkland & Ellis.
 You help users manage documents, navigate the application, and interact with iManage (the document management system).
@@ -10420,9 +11467,9 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       return logAndReturn({ success: false, error: `No supported Claude model available. Last error: ${getErrorDetail(lastResponse)}` }, 'none');
     }
 
-    // ── OPENAI-COMPATIBLE MODE (Ollama, LM Studio, OpenAI) ──────────
+    // ── OPENAI-COMPATIBLE MODE (Local AI, Ollama, LM Studio, OpenAI) ──────────
     const openaiTools = convertToolsToOpenAIFormat(COMMAND_TOOLS);
-    const isLocalOllama = agentConfig.provider === 'ollama' || agentConfig.provider === 'lmstudio';
+    const isLocalOllama = agentConfig.provider === 'localai' || agentConfig.provider === 'ollama' || agentConfig.provider === 'lmstudio';
 
     // Discover available models from the provider (Ollama, LM Studio, OpenAI all support /v1/models)
     let modelCandidates = agentConfig.models || [DEFAULT_OLLAMA_MODEL];
@@ -10560,7 +11607,11 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
 
     return logAndReturn({
       success: false,
-      error: `No supported ${agentConfig.provider} model available. Ensure ${agentConfig.provider === 'ollama' ? 'Ollama is running (ollama serve) and a model is pulled (ollama pull llama3.1:8b)' : 'the provider is reachable'}. Last error: ${getErrorDetail(lastResponse)}`
+      error: `No supported ${agentConfig.provider} model available. Ensure ${agentConfig.provider === 'localai'
+        ? 'Local AI is installed from Settings'
+        : agentConfig.provider === 'ollama'
+          ? 'Ollama is running (ollama serve) and a model is pulled (ollama pull llama3.1:8b)'
+          : 'the provider is reachable'}. Last error: ${getErrorDetail(lastResponse)}`
     }, 'none');
   } catch (e) {
     console.error('[execute-command] Error:', e);
@@ -10618,6 +11669,60 @@ ipcMain.handle('agent-llm-diagnostics', async (event, payload) => {
       success: false,
       error: e.message
     };
+  }
+});
+
+ipcMain.handle('get-local-ai-profiles', async () => {
+  return {
+    success: true,
+    profiles: getLocalAIProfiles(),
+    selectedModel: getLocalAIModel(),
+    baseUrl: getLocalAIBaseUrl()
+  };
+});
+
+ipcMain.handle('get-local-ai-status', async () => {
+  try {
+    const status = await ensureLocalProviderAvailable('localai', '', {
+      allowAutoLaunch: true,
+      allowBootstrap: false
+    });
+    return {
+      success: true,
+      ready: !!status.success,
+      configuredModel: getLocalAIModel(),
+      baseUrl: getLocalAIBaseUrl(),
+      models: status.models || [],
+      message: status.success ? status.message : status.error
+    };
+  } catch (e) {
+    return {
+      success: false,
+      ready: false,
+      configuredModel: getLocalAIModel(),
+      baseUrl: getLocalAIBaseUrl(),
+      models: [],
+      message: e.message
+    };
+  }
+});
+
+ipcMain.handle('bootstrap-local-ai', async (event, payload) => {
+  try {
+    const profileId = String(payload?.model || getLocalAIModel()).trim() || DEFAULT_LOCALAI_MODEL;
+    const result = await bootstrapManagedLocalAi(profileId);
+    if (!result.success) {
+      return { success: false, error: result.error || 'Failed to install Local AI.' };
+    }
+    return {
+      success: true,
+      model: result.model,
+      baseUrl: result.baseUrl,
+      profile: result.profile,
+      message: `Local AI installed successfully using ${result.profile?.label || result.model}.`
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
   }
 });
 
@@ -10842,71 +11947,56 @@ ipcMain.handle('test-api-key', async (event, payload) => {
     const providerAutoDetected = provider !== requestedProvider;
 
     let response;
+    if (provider === 'localai') {
+      const localProvider = await ensureLocalProviderAvailable('localai', '', {
+        allowAutoLaunch: true,
+        allowBootstrap: true
+      });
+      if (!localProvider.success) {
+        return { success: false, error: localProvider.error };
+      }
+      const configuredModel = getLocalAIModel();
+      return {
+        success: true,
+        message: `${localProvider.message} Active model: ${configuredModel}. Available models: ${localProvider.models.slice(0, 5).join(', ')}${localProvider.models.length > 5 ? '...' : ''}`,
+        provider,
+        models: localProvider.models,
+        configuredModel,
+        configuredModelAvailable: localProvider.models.includes(configuredModel),
+        baseUrl: localProvider.baseUrl
+      };
+    }
+
     if (provider === 'ollama') {
-      const ollamaBase = getOllamaBaseUrl();
-      response = await requestHttps({
-        baseUrl: ollamaBase,
-        path: '/v1/models',
-        method: 'GET',
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-        timeoutMs: 15000
-      });
-      if (response.statusCode === 200) {
-        const models = Array.isArray(response.jsonBody?.data)
-          ? response.jsonBody.data.map(m => String(m?.id || '').trim()).filter(Boolean)
-          : [];
-        const configuredModel = getOllamaModel();
-        const modelAvailable = models.length > 0;
-        const configuredModelAvailable = models.includes(configuredModel);
-        const modelNote = models.length === 0
-          ? ' No models found — run "ollama pull llama3.1:8b" to get started.'
-          : configuredModelAvailable
-            ? ` Model "${configuredModel}" is available. ${models.length} model(s) installed.`
-            : ` Configured model "${configuredModel}" not found. Available: ${models.slice(0, 5).join(', ')}${models.length > 5 ? '...' : ''}.`;
-        return {
-          success: modelAvailable,
-          message: `Ollama connection successful at ${ollamaBase}.${modelNote}`,
-          provider,
-          models,
-          configuredModel,
-          configuredModelAvailable
-        };
+      const localProvider = await ensureLocalProviderAvailable('ollama', apiKey, { allowAutoLaunch: true });
+      if (!localProvider.success) {
+        return { success: false, error: localProvider.error };
       }
-      // Try Ollama's native /api/tags endpoint as fallback
-      const tagsResponse = await requestHttps({
-        baseUrl: ollamaBase,
-        path: '/api/tags',
-        method: 'GET',
-        headers: {},
-        timeoutMs: 15000
-      });
-      if (tagsResponse.statusCode === 200) {
-        const models = Array.isArray(tagsResponse.jsonBody?.models)
-          ? tagsResponse.jsonBody.models.map(m => String(m?.name || '').trim()).filter(Boolean)
-          : [];
-        return {
-          success: models.length > 0,
-          message: `Ollama is running at ${ollamaBase}. ${models.length} model(s) found${models.length > 0 ? ': ' + models.slice(0, 5).join(', ') : ' — run "ollama pull llama3.1:8b"'}.`,
-          provider,
-          models,
-          note: 'Connected via /api/tags (OpenAI compat endpoint may be unavailable — consider updating Ollama).'
-        };
-      }
-      return { success: false, error: `Ollama is not reachable at ${ollamaBase}. Make sure Ollama is running (ollama serve). ${getErrorDetail(response)}` };
+      const configuredModel = getOllamaModel();
+      return {
+        success: true,
+        message: `${localProvider.message} Available models: ${localProvider.models.slice(0, 5).join(', ')}${localProvider.models.length > 5 ? '...' : ''}`,
+        provider,
+        models: localProvider.models,
+        configuredModel,
+        configuredModelAvailable: localProvider.models.includes(configuredModel),
+        baseUrl: localProvider.baseUrl
+      };
     }
 
     if (provider === 'lmstudio') {
-      response = await requestHttps({
-        baseUrl: getLmStudioBaseUrl(),
-        path: '/v1/models',
-        method: 'GET',
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-        timeoutMs: 15000
-      });
-      if (response.statusCode === 200) {
-        return { success: true, message: 'LM Studio connection successful', provider };
+      const localProvider = await ensureLocalProviderAvailable('lmstudio', apiKey, { allowAutoLaunch: true });
+      if (!localProvider.success) {
+        return { success: false, error: localProvider.error };
       }
-      return { success: false, error: `LM Studio is not reachable at ${getLmStudioBaseUrl()}. ${getErrorDetail(response)}` };
+      return {
+        success: true,
+        message: `${localProvider.message} Available models: ${localProvider.models.slice(0, 5).join(', ')}${localProvider.models.length > 5 ? '...' : ''}`,
+        provider,
+        models: localProvider.models,
+        configuredModel: getLmStudioModel(),
+        baseUrl: localProvider.baseUrl
+      };
     }
 
     if (!apiKey) {
@@ -12226,16 +13316,21 @@ function getOpenAIModel() {
   return model || DEFAULT_OPENAI_MODEL;
 }
 
+function getLocalAIBaseUrl() {
+  return normalizeProviderBaseUrl(getSettingValue('localai_base_url', DEFAULT_LOCALAI_BASE_URL), DEFAULT_LOCALAI_BASE_URL);
+}
+
+function getLocalAIModel() {
+  const model = (getSettingValue('localai_model', DEFAULT_LOCALAI_MODEL) || '').trim();
+  return model || DEFAULT_LOCALAI_MODEL;
+}
+
 function getOllamaBaseUrl() {
-  const raw = (getSettingValue('ollama_base_url', DEFAULT_OLLAMA_BASE_URL) || '').trim();
-  if (!raw) return DEFAULT_OLLAMA_BASE_URL;
-  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+  return normalizeProviderBaseUrl(getSettingValue('ollama_base_url', DEFAULT_OLLAMA_BASE_URL), DEFAULT_OLLAMA_BASE_URL);
 }
 
 function getLmStudioBaseUrl() {
-  const raw = (getSettingValue('lmstudio_base_url', DEFAULT_LMSTUDIO_BASE_URL) || '').trim();
-  if (!raw) return DEFAULT_LMSTUDIO_BASE_URL;
-  return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+  return normalizeProviderBaseUrl(getSettingValue('lmstudio_base_url', DEFAULT_LMSTUDIO_BASE_URL), DEFAULT_LMSTUDIO_BASE_URL);
 }
 
 function getOllamaModel() {
@@ -12654,11 +13749,13 @@ ipcMain.handle('update-checklist', async (event, config) => {
   const providerModel =
     provider === 'openai' ? getOpenAIModel()
     : provider === 'anthropic' ? getClaudeModel()
+    : provider === 'localai' ? getLocalAIModel()
     : provider === 'ollama' ? getOllamaModel()
     : provider === 'lmstudio' ? getLmStudioModel()
     : '';
-  const providerBaseUrl =
+  let providerBaseUrl =
     provider === 'harvey' ? getHarveyBaseUrl()
+    : provider === 'localai' ? getLocalAIBaseUrl()
     : provider === 'ollama' ? getOllamaBaseUrl()
     : provider === 'lmstudio' ? getLmStudioBaseUrl()
     : '';
@@ -12671,6 +13768,16 @@ ipcMain.handle('update-checklist', async (event, config) => {
   }
   if (!checklistPath || !fs.existsSync(checklistPath)) {
     return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
+  }
+  if (provider === 'localai' || provider === 'ollama' || provider === 'lmstudio') {
+    const localProvider = await ensureLocalProviderAvailable(provider, apiKey, {
+      allowAutoLaunch: true,
+      allowBootstrap: provider === 'localai'
+    });
+    if (!localProvider.success) {
+      return { success: false, error: localProvider.error };
+    }
+    providerBaseUrl = localProvider.baseUrl;
   }
 
   let emailInputPath = '';
@@ -12830,11 +13937,13 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   const providerModel =
     provider === 'openai' ? getOpenAIModel()
     : provider === 'anthropic' ? getClaudeModel()
+    : provider === 'localai' ? getLocalAIModel()
     : provider === 'ollama' ? getOllamaModel()
     : provider === 'lmstudio' ? getLmStudioModel()
     : '';
-  const providerBaseUrl =
+  let providerBaseUrl =
     provider === 'harvey' ? getHarveyBaseUrl()
+    : provider === 'localai' ? getLocalAIBaseUrl()
     : provider === 'ollama' ? getOllamaBaseUrl()
     : provider === 'lmstudio' ? getLmStudioBaseUrl()
     : '';
@@ -12847,6 +13956,16 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   }
   if (!checklistPath || !fs.existsSync(checklistPath)) {
     return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
+  }
+  if (provider === 'localai' || provider === 'ollama' || provider === 'lmstudio') {
+    const localProvider = await ensureLocalProviderAvailable(provider, apiKey, {
+      allowAutoLaunch: true,
+      allowBootstrap: provider === 'localai'
+    });
+    if (!localProvider.success) {
+      return { success: false, error: localProvider.error };
+    }
+    providerBaseUrl = localProvider.baseUrl;
   }
 
   // Create temp output folder
