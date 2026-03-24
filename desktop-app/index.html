@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob:; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: data:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self';">
   <title>EmmaNeigh</title>
   <style>
     * {
@@ -3674,8 +3675,16 @@
           <button class="settings-btn settings-btn-secondary" id="testFirebaseConfigBtn">Refresh Status</button>
         </div>
 
-        <!-- Hidden admin controls retained for backward compatibility -->
-        <div id="telemetryAdminControls" style="display: none;">
+        <div id="securityAdminSummary" style="display: none; margin-top: 12px; padding: 12px; background: #111; border: 1px solid #2a2a2a; border-radius: 8px;">
+          <div style="font-size: 12px; color: #ccc; font-weight: 600; margin-bottom: 6px;">Admin Security Controls</div>
+          <div id="securityAdminSummaryText" style="font-size: 12px; color: #888; line-height: 1.5;">Loading deployment security posture...</div>
+        </div>
+
+        <div id="telemetryAdminControls" style="display: none; margin-top: 12px;">
+          <div style="font-size: 12px; color: #ccc; font-weight: 600; margin-bottom: 8px;">Managed Deployment Settings</div>
+          <p style="font-size: 12px; color: #777; margin-bottom: 12px;">
+            These controls are for deployment administrators only. If this app was shipped with managed configuration, the values below will be visible but locked.
+          </p>
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 6px;">Telemetry Ingest URL (Recommended)</label>
           <input type="text" id="telemetryIngestUrlInput" style="width: 100%; background: #111; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 12px; padding: 8px;" placeholder="https://your-ingest-service.example.com/telemetry/ingest">
           <label style="font-size: 12px; color: #888; display: block; margin: 8px 0 6px;">Telemetry Ingest Token (optional, recommended)</label>
@@ -5037,13 +5046,13 @@
       </aside>
     </div><!-- End workspace-layout -->
 
-    <footer>
-      <p>All processing happens locally. No data leaves your machine.</p>
-    </footer>
+  <footer>
+      <p>Core document processing happens locally. Network access is limited to configured AI, telemetry, policy, and update services.</p>
+  </footer>
   </div>
 
   <script>
-    const { ipcRenderer } = require('electron');
+    const ipcRenderer = window.emmaElectron;
 
     // ========== VERSION ENFORCEMENT ==========
     // Check for mandatory updates with grace period
@@ -5305,6 +5314,8 @@
     const testAccessPolicyBtn = document.getElementById('testAccessPolicyBtn');
     const accessPolicyStatus = document.getElementById('accessPolicyStatus');
     const telemetryAdminControls = document.getElementById('telemetryAdminControls');
+    const securityAdminSummary = document.getElementById('securityAdminSummary');
+    const securityAdminSummaryText = document.getElementById('securityAdminSummaryText');
     const firebaseConfigInput = document.getElementById('firebaseConfigInput');
     const firebaseConfigStatus = document.getElementById('firebaseConfigStatus');
     const saveFirebaseConfigBtn = document.getElementById('saveFirebaseConfigBtn');
@@ -5383,6 +5394,24 @@
     function getProviderMeta(provider) {
       const normalized = normalizeProvider(provider);
       return PROVIDER_META[normalized] || PROVIDER_META.localai;
+    }
+
+    function applyAllowedProviderPolicy(allowedProviders = []) {
+      const normalizedAllowed = Array.isArray(allowedProviders)
+        ? allowedProviders.map((provider) => normalizeProvider(provider))
+        : [];
+      const allowedSet = new Set(normalizedAllowed.filter(Boolean));
+      Array.from(aiProviderSelect.options).forEach((option) => {
+        const optionProvider = normalizeProvider(option.value);
+        const enabled = allowedSet.size === 0 || allowedSet.has(optionProvider);
+        option.disabled = !enabled;
+        option.hidden = !enabled;
+      });
+      const current = normalizeProvider(aiProviderSelect.value);
+      if (allowedSet.size > 0 && !allowedSet.has(current)) {
+        const fallback = normalizedAllowed[0] || 'localai';
+        aiProviderSelect.value = fallback;
+      }
     }
 
     function setLocalAiStatus(message, tone = 'neutral') {
@@ -5517,6 +5546,12 @@
       } catch (_) {
         aiProviderSelect.value = 'localai';
       }
+      try {
+        const securityResult = await ipcRenderer.invoke('get-deployment-security-status', getSecurityRequester());
+        applyAllowedProviderPolicy(securityResult && securityResult.success ? securityResult.status?.allowedAiProviders : []);
+      } catch (_) {
+        applyAllowedProviderPolicy([]);
+      }
       await loadLocalProviderSettings(aiProviderSelect.value);
       applyProviderUi();
     }
@@ -5562,19 +5597,23 @@
 
     async function loadTelemetryIngestConfig() {
       try {
-        const result = await ipcRenderer.invoke('get-telemetry-ingest-config');
+        const result = await ipcRenderer.invoke('get-telemetry-ingest-config', getSecurityRequester());
         if (!result || !result.success) {
           setTelemetryIngestStatus(result?.error || 'Unable to load ingest config.', 'error');
           return;
         }
         telemetryIngestUrlInput.value = result.url || '';
         telemetryIngestTokenInput.value = '';
+        if (telemetryIngestUrlInput) telemetryIngestUrlInput.disabled = !!result.locked;
+        if (telemetryIngestTokenInput) telemetryIngestTokenInput.disabled = !!result.locked;
         if (result.url) {
           setTelemetryIngestStatus(
-            result.hasToken
-              ? 'Telemetry ingest backend configured (token saved).'
-              : 'Telemetry ingest backend configured (no token saved).',
-            result.hasToken ? 'success' : 'warning'
+            result.managed
+              ? `Telemetry ingest backend configured and managed by deployment${result.hasToken ? ' (token saved).' : '.'}`
+              : result.hasToken
+                ? 'Telemetry ingest backend configured (token saved).'
+                : 'Telemetry ingest backend configured (no token saved).',
+            result.managed ? 'success' : (result.hasToken ? 'success' : 'warning')
           );
         } else {
           setTelemetryIngestStatus('No telemetry ingest backend configured.', 'neutral');
@@ -5600,7 +5639,7 @@
 
     async function loadAccessPolicyConfig() {
       try {
-        const result = await ipcRenderer.invoke('get-access-policy-config');
+        const result = await ipcRenderer.invoke('get-access-policy-config', getSecurityRequester());
         if (!result || !result.success) {
           setAccessPolicyStatus(result?.error || 'Unable to load access policy config.', 'error');
           return;
@@ -5608,11 +5647,15 @@
         if (accessPolicyUrlInput) accessPolicyUrlInput.value = result.url || '';
         if (accessPolicyTokenInput) accessPolicyTokenInput.value = '';
         if (accessPolicyFailClosedInput) accessPolicyFailClosedInput.checked = !!result.failClosed;
+        if (accessPolicyUrlInput) accessPolicyUrlInput.disabled = !!result.locked;
+        if (accessPolicyTokenInput) accessPolicyTokenInput.disabled = !!result.locked;
+        if (accessPolicyFailClosedInput) accessPolicyFailClosedInput.disabled = !!result.locked;
         if (result.url) {
           const tone = result.failClosed ? 'warning' : 'success';
           const modeLabel = result.failClosed ? 'fail-closed' : 'fail-open';
           const tokenLabel = result.hasToken ? 'token configured' : 'no token configured';
-          setAccessPolicyStatus(`Remote access policy configured (${modeLabel}, ${tokenLabel}).`, tone);
+          const managedLabel = result.managed ? ', managed by deployment' : '';
+          setAccessPolicyStatus(`Remote access policy configured (${modeLabel}, ${tokenLabel}${managedLabel}).`, tone);
         } else {
           setAccessPolicyStatus('No remote access policy configured.', 'neutral');
         }
@@ -5635,11 +5678,61 @@
       }
     }
 
+    function setSecurityAdminSummary(status = {}) {
+      if (!securityAdminSummaryText) return;
+      const parts = [];
+      parts.push(status.safeStorageAvailable ? 'Secure OS key storage available.' : 'Secure OS key storage unavailable.');
+      parts.push(status.accessPolicyFailClosed ? 'Access policy is fail-closed.' : 'Access policy is fail-open.');
+      parts.push(`Telemetry config: ${status.telemetrySource || 'unknown'}.`);
+      parts.push(`Access policy config: ${status.accessPolicySource || 'unknown'}.`);
+      parts.push(`Tracking config: ${status.firebaseSource || 'unknown'}.`);
+      if (Array.isArray(status.allowedAiProviders) && status.allowedAiProviders.length > 0) {
+        parts.push(`Allowed AI providers: ${status.allowedAiProviders.join(', ')}.`);
+      } else {
+        parts.push('AI providers are not restricted by deployment policy.');
+      }
+      securityAdminSummaryText.textContent = parts.join(' ');
+    }
+
+    function applySecurityConfigLocking(config = {}) {
+      const telemetryLocked = !!config.telemetryLocked;
+      const accessLocked = !!config.accessPolicyLocked;
+      const firebaseLocked = !!config.firebaseLocked;
+
+      [telemetryIngestUrlInput, telemetryIngestTokenInput].forEach((el) => {
+        if (el) el.disabled = telemetryLocked;
+      });
+      if (saveTelemetryIngestBtn) saveTelemetryIngestBtn.disabled = telemetryLocked;
+      if (testTelemetryIngestBtn) testTelemetryIngestBtn.disabled = false;
+
+      [accessPolicyUrlInput, accessPolicyTokenInput, accessPolicyFailClosedInput].forEach((el) => {
+        if (el) el.disabled = accessLocked;
+      });
+      if (saveAccessPolicyBtn) saveAccessPolicyBtn.disabled = accessLocked;
+      if (testAccessPolicyBtn) testAccessPolicyBtn.disabled = false;
+
+      if (firebaseConfigInput) firebaseConfigInput.disabled = firebaseLocked;
+      if (saveFirebaseConfigBtn) saveFirebaseConfigBtn.disabled = firebaseLocked;
+    }
+
     async function refreshFirebaseSettingsStatus(force = false) {
       try {
         await loadTelemetryIngestConfig();
         await loadAccessPolicyConfig();
-        const configResult = await ipcRenderer.invoke('get-firebase-config');
+        let securityStatus = null;
+        if (canCurrentUserViewUserStats()) {
+          const securityResult = await ipcRenderer.invoke('get-deployment-security-status', getSecurityRequester());
+          securityStatus = securityResult && securityResult.success ? securityResult.status : null;
+          if (securityStatus) {
+            setSecurityAdminSummary(securityStatus);
+            applySecurityConfigLocking({
+              telemetryLocked: !!securityStatus.managedTelemetry,
+              accessPolicyLocked: !!securityStatus.managedAccessPolicy,
+              firebaseLocked: !!securityStatus.managedFirebase
+            });
+          }
+        }
+        const configResult = await ipcRenderer.invoke('get-firebase-config', getSecurityRequester());
         const statusResult = await ipcRenderer.invoke('get-firebase-telemetry-status', {
           force,
           context: 'settings_refresh'
@@ -5647,8 +5740,16 @@
 
         if (configResult && configResult.success && configResult.config) {
           firebaseConfigInput.value = JSON.stringify(configResult.config, null, 2);
-        } else if (!firebaseConfigInput.value.trim()) {
+        } else {
           firebaseConfigInput.value = '';
+        }
+
+        if (securityStatus) {
+          applySecurityConfigLocking({
+            telemetryLocked: !!securityStatus.managedTelemetry,
+            accessPolicyLocked: !!securityStatus.managedAccessPolicy,
+            firebaseLocked: !!securityStatus.managedFirebase
+          });
         }
 
         const status = statusResult && statusResult.success ? statusResult.status : null;
@@ -5703,7 +5804,8 @@
         const result = await ipcRenderer.invoke('save-telemetry-ingest-config', {
           url,
           token,
-          keepExistingToken: !token
+          keepExistingToken: !token,
+          requester: getSecurityRequester()
         });
         if (!result || !result.success) {
           setTelemetryIngestStatus(result?.error || 'Failed to save ingest config.', 'error');
@@ -5720,7 +5822,7 @@
       } catch (e) {
         setTelemetryIngestStatus(`Save failed: ${e.message}`, 'error');
       } finally {
-        saveTelemetryIngestBtn.disabled = false;
+        saveTelemetryIngestBtn.disabled = !!telemetryIngestUrlInput.disabled;
         saveTelemetryIngestBtn.textContent = 'Save Ingest Config';
       }
     });
@@ -5735,7 +5837,8 @@
       try {
         const result = await ipcRenderer.invoke('test-telemetry-ingest-config', {
           url,
-          token
+          token,
+          requester: getSecurityRequester()
         });
         if (!result || !result.success) {
           setTelemetryIngestStatus(result?.error || 'Telemetry ingest test failed.', 'error');
@@ -5769,7 +5872,8 @@
             token,
             keepExistingToken: !token,
             failClosed,
-            email: currentUser?.email || ''
+            email: currentUser?.email || '',
+            requester: getSecurityRequester()
           });
           if (!result || !result.success) {
             setAccessPolicyStatus(result?.error || 'Failed to save access policy config.', 'error');
@@ -5786,7 +5890,7 @@
         } catch (e) {
           setAccessPolicyStatus(`Save failed: ${e.message}`, 'error');
         } finally {
-          saveAccessPolicyBtn.disabled = false;
+          saveAccessPolicyBtn.disabled = !!(accessPolicyUrlInput && accessPolicyUrlInput.disabled);
           saveAccessPolicyBtn.textContent = 'Save Access Policy';
         }
       });
@@ -5804,7 +5908,8 @@
               email: currentUser?.email || '',
               username: currentUser?.username || '',
               userId: currentUser?.id || ''
-            }
+            },
+            requester: getSecurityRequester()
           });
           if (!result || !result.success) {
             setAccessPolicyStatus(result?.error || 'Access policy test failed.', 'error');
@@ -5843,7 +5948,10 @@
       saveFirebaseConfigBtn.disabled = true;
       saveFirebaseConfigBtn.textContent = 'Saving...';
       try {
-        const result = await ipcRenderer.invoke('save-firebase-config', parsed);
+        const result = await ipcRenderer.invoke('save-firebase-config', {
+          ...parsed,
+          requester: getSecurityRequester()
+        });
         if (!result || !result.success) {
           setFirebaseConfigStatus(result?.error || 'Failed to save Firebase config.', 'error');
           return;
@@ -5854,7 +5962,7 @@
       } catch (e) {
         setFirebaseConfigStatus(`Save failed: ${e.message}`, 'error');
       } finally {
-        saveFirebaseConfigBtn.disabled = false;
+        saveFirebaseConfigBtn.disabled = !!firebaseConfigInput.disabled;
         saveFirebaseConfigBtn.textContent = 'Save Firebase Config';
       }
     });
@@ -6012,7 +6120,9 @@
     providerConsoleLink.addEventListener('click', (e) => {
       e.preventDefault();
       const meta = getProviderMeta(getSelectedProvider());
-      require('electron').shell.openExternal(meta.consoleUrl);
+      ipcRenderer.openExternal(meta.consoleUrl).catch((err) => {
+        apiKeyStatus.innerHTML = `<span style="color: #ef4444;">${(err && err.message) || 'Unable to open provider console.'}</span>`;
+      });
     });
 
     aiProviderSelect.addEventListener('change', async () => {
@@ -6055,6 +6165,10 @@
       };
     }
 
+    function getSecurityRequester() {
+      return getUserStatsRequester();
+    }
+
     function canCurrentUserViewUserStats() {
       return !!(currentUser && !currentUser.isGuest && currentUser.isAdmin);
     }
@@ -6063,6 +6177,9 @@
       if (!userStatsSection) return;
       const allowed = canCurrentUserViewUserStats();
       userStatsSection.style.display = allowed ? '' : 'none';
+      if (securityAdminSummary) {
+        securityAdminSummary.style.display = allowed ? 'block' : 'none';
+      }
       if (telemetryAdminControls) {
         telemetryAdminControls.style.display = allowed ? 'block' : 'none';
       }
@@ -6411,6 +6528,7 @@
             loginError.textContent = result.message || 'Access has been disabled by your administrator.';
           }
           await stopSessionMonitoring('policy_blocked');
+          await ipcRenderer.invoke('clear-session-context');
           localStorage.removeItem('emmaneigh_session');
           localStorage.removeItem('emmaneigh_user');
           currentUser = null;
@@ -6420,6 +6538,10 @@
           loginModal.classList.remove('hidden');
           resetLoginForms();
           return false;
+        }
+        if (result && result.success && currentUser) {
+          currentUser.isAdmin = !!result.isAdmin;
+          applyUserStatsVisibility();
         }
       } catch (_) {}
       return true;
@@ -6900,6 +7022,7 @@
           console.error('Session restore failed:', e);
         }
         await stopSessionMonitoring('session_invalid');
+        await ipcRenderer.invoke('clear-session-context');
         localStorage.removeItem('emmaneigh_session');
         localStorage.removeItem('emmaneigh_user');
       }
@@ -6916,6 +7039,7 @@
     userInfo.addEventListener('click', async () => {
       // Clear session and show login modal
       await stopSessionMonitoring('manual_logout');
+      await ipcRenderer.invoke('clear-session-context');
       localStorage.removeItem('emmaneigh_session');
       localStorage.removeItem('emmaneigh_user');
       currentUser = null;

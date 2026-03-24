@@ -1,0 +1,6 @@
+{
+  "telemetryIngestUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/telemetryIngest",
+  "accessPolicyUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/accessPolicy",
+  "accessPolicyFailClosed": true,
+  "allowedAiProviders": ["localai", "anthropic", "openai"]
+}

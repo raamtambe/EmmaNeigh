@@ -6,7 +6,7 @@ const archiver = require('archiver');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const os = require('os');
-const { fileURLToPath } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 let initFirebase = () => false;
 let loadFirebaseConfig = () => null;
 let saveFirebaseConfig = () => false;
@@ -115,10 +115,38 @@ const ANALYTICS_ADMIN_IDENTIFIERS = new Set(
 );
 
 const trackedChildProcesses = new Map();
+const rendererSessionState = new Map();
 let trackedProcessCounter = 0;
 const rawSpawn = spawn;
 let managedLocalAiServerProcess = null;
 let localAiBootstrapPromise = null;
+
+function getRendererEntryUrl() {
+  return pathToFileURL(path.join(__dirname, 'index.html')).toString();
+}
+
+function isTrustedRendererUrl(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!url) return false;
+  const entryUrl = getRendererEntryUrl();
+  return url === entryUrl || url.startsWith(`${entryUrl}#`) || url.startsWith(`${entryUrl}?`);
+}
+
+function assertTrustedIpcEvent(event, channel = 'unknown') {
+  const senderUrl = String(
+    event?.senderFrame?.url ||
+    (event?.sender && typeof event.sender.getURL === 'function' ? event.sender.getURL() : '')
+  ).trim();
+  if (!isTrustedRendererUrl(senderUrl)) {
+    throw new Error(`Blocked IPC request on '${channel}' from untrusted renderer.`);
+  }
+}
+
+const originalIpcMainHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => originalIpcMainHandle(channel, async (event, ...args) => {
+  assertTrustedIpcEvent(event, channel);
+  return listener(event, ...args);
+});
 
 function spawnTracked(command, args = [], options = {}) {
   const proc = rawSpawn(command, args, options);
@@ -305,11 +333,17 @@ function categorizeFeatureLabel(featureName) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function canAccessFeedbackLog(username) {
-  return FEEDBACK_ADMIN_USERNAMES.has(normalizeUsername(username));
+function getConfiguredAdminRules() {
+  const bundled = loadBundledTelemetryConfig() || {};
+  return {
+    adminUsers: getPolicyList(bundled, ['admin_users', 'adminUsers', 'admin_usernames', 'adminUsernames']),
+    adminEmails: getPolicyList(bundled, ['admin_emails', 'adminEmails']),
+    adminDomains: getPolicyList(bundled, ['admin_domains', 'adminDomains']),
+    feedbackAdmins: getPolicyList(bundled, ['feedback_admins', 'feedbackAdmins'])
+  };
 }
 
-function canAccessAnalyticsDashboard(identity = {}) {
+function canAccessAnalyticsDashboardFallback(identity = {}) {
   const username = normalizeUsername(identity.username || '');
   const email = normalizeEmail(identity.email || '');
   const localPart = email.includes('@') ? email.split('@')[0] : '';
@@ -318,6 +352,39 @@ function canAccessAnalyticsDashboard(identity = {}) {
     (!!email && ANALYTICS_ADMIN_IDENTIFIERS.has(email)) ||
     (!!localPart && ANALYTICS_ADMIN_IDENTIFIERS.has(localPart))
   );
+}
+
+function canAccessAnalyticsDashboard(identity = {}) {
+  const username = normalizeUsername(identity.username || '');
+  const email = normalizeEmail(identity.email || '');
+  const emailDomain = email.includes('@') ? email.split('@')[1] : '';
+  const emailLocalPart = email.includes('@') ? email.split('@')[0] : '';
+  const { adminUsers, adminEmails, adminDomains } = getConfiguredAdminRules();
+  const hasManagedRules = adminUsers.length > 0 || adminEmails.length > 0 || adminDomains.length > 0;
+
+  if (hasManagedRules) {
+    return (
+      (!!username && listHasMatch(adminUsers, username)) ||
+      (!!email && (listHasMatch(adminEmails, email) || listHasMatch(adminEmails, emailLocalPart))) ||
+      (!!emailDomain && listHasMatch(adminDomains, emailDomain))
+    );
+  }
+
+  return canAccessAnalyticsDashboardFallback(identity);
+}
+
+function canAccessFeedbackLog(identity = {}) {
+  const username = normalizeUsername(identity.username || '');
+  const email = normalizeEmail(identity.email || '');
+  const { feedbackAdmins } = getConfiguredAdminRules();
+  if (feedbackAdmins.length > 0) {
+    const localPart = email.includes('@') ? email.split('@')[0] : '';
+    return (
+      (!!username && listHasMatch(feedbackAdmins, username)) ||
+      (!!email && (listHasMatch(feedbackAdmins, email) || listHasMatch(feedbackAdmins, localPart)))
+    );
+  }
+  return FEEDBACK_ADMIN_USERNAMES.has(username) || canAccessAnalyticsDashboard(identity);
 }
 
 function resolveRequesterIdentity(requester = {}) {
@@ -355,15 +422,59 @@ function canRequesterAccessAnalytics(requester = {}) {
   return canAccessAnalyticsDashboard(identity);
 }
 
-function buildSessionUserPayload({ id, username, displayName, email, apiKeyEnc }) {
+function getSessionIdentityFromEvent(event) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return null;
+  return rendererSessionState.get(webContentsId) || null;
+}
+
+function setSessionIdentityForEvent(event, identity = {}) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return;
+  rendererSessionState.set(webContentsId, {
+    userId: String(identity.userId || identity.id || '').trim(),
+    username: String(identity.username || '').trim(),
+    email: normalizeEmail(identity.email || ''),
+    isAdmin: !!identity.isAdmin,
+    updatedAt: Date.now()
+  });
+}
+
+function clearSessionIdentityForEvent(event) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return;
+  rendererSessionState.delete(webContentsId);
+}
+
+function canEventAccessAnalytics(event, requester = {}) {
+  const sessionIdentity = getSessionIdentityFromEvent(event);
+  if (sessionIdentity && sessionIdentity.isAdmin) {
+    return true;
+  }
+  return canRequesterAccessAnalytics(requester);
+}
+
+function canEventAccessFeedback(event, requester = {}) {
+  const sessionIdentity = getSessionIdentityFromEvent(event);
+  if (sessionIdentity) {
+    return canAccessFeedbackLog(sessionIdentity);
+  }
+  return canAccessFeedbackLog(resolveRequesterIdentity(requester));
+}
+
+function buildSessionUserPayload({ id, username, displayName, email, apiKeyEnc, isAdmin = null, adminSource = 'local' }) {
   const normalizedEmail = normalizeEmail(email || '');
+  const resolvedIsAdmin = typeof isAdmin === 'boolean'
+    ? isAdmin
+    : canAccessAnalyticsDashboard({ username, email: normalizedEmail });
   return {
     id,
     username,
     displayName: displayName || username,
     email: normalizedEmail || null,
     hasApiKey: !!apiKeyEnc,
-    isAdmin: canAccessAnalyticsDashboard({ username, email: normalizedEmail })
+    isAdmin: resolvedIsAdmin,
+    adminSource
   };
 }
 
@@ -388,7 +499,7 @@ function encodeSecretForSetting(secretValue) {
       return `enc:${encrypted}`;
     }
   } catch (_) {}
-  return `plain:${plain}`;
+  return '';
 }
 
 function encodeSecretToSetting(plainValue) {
@@ -400,7 +511,7 @@ function encodeSecretToSetting(plainValue) {
       return 'enc:' + encrypted.toString('base64');
     }
   } catch (_) {}
-  return 'plain:' + value;
+  return '';
 }
 
 function decodeSecretFromSetting(storedValue) {
@@ -456,39 +567,69 @@ function loadBundledTelemetryConfig() {
   return null;
 }
 
-function getTelemetryIngestUrl() {
-  const fromSetting = normalizeIngestUrl(getSettingValue(TELEMETRY_INGEST_KEY, ''));
-  if (fromSetting) return fromSetting;
+function getEnvJsonConfig(envKey) {
+  const raw = String(process.env[envKey] || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
 
+function getManagedFirebaseConfig() {
+  const envConfig = getEnvJsonConfig('EMMANEIGH_FIREBASE_CONFIG_JSON');
+  if (envConfig) {
+    return { source: 'environment', value: envConfig };
+  }
+  const bundled = loadBundledTelemetryConfig() || {};
+  const bundledConfig = bundled.firebaseConfig || bundled.firebase_config || null;
+  if (bundledConfig && typeof bundledConfig === 'object') {
+    return { source: 'bundled', value: bundledConfig };
+  }
+  return { source: 'none', value: null };
+}
+
+function getTelemetryIngestUrl() {
   const fromEnv = normalizeIngestUrl(process.env.EMMANEIGH_TELEMETRY_INGEST_URL || '');
   if (fromEnv) return fromEnv;
 
   const bundled = loadBundledTelemetryConfig();
-  if (!bundled) return '';
-  return normalizeIngestUrl(
+  const fromBundled = normalizeIngestUrl(
+    bundled && (
     bundled.telemetryIngestUrl ||
     bundled.ingestUrl ||
     bundled.url ||
     ''
+    )
   );
+  if (fromBundled) return fromBundled;
+
+  const fromSetting = normalizeIngestUrl(getSettingValue(TELEMETRY_INGEST_KEY, ''));
+  if (fromSetting) return fromSetting;
+  return '';
 }
 
 function getTelemetryIngestToken() {
-  const fromSetting = decodeSecretFromSetting(getSettingValue(TELEMETRY_INGEST_TOKEN_KEY, ''));
-  if (fromSetting) return fromSetting;
-
   const fromEnv = String(process.env.EMMANEIGH_TELEMETRY_INGEST_TOKEN || '').trim();
   if (fromEnv) return fromEnv;
 
   const bundled = loadBundledTelemetryConfig();
-  if (!bundled) return '';
-  return String(
+  const fromBundled = String(
+    bundled && (
     bundled.telemetryIngestToken ||
     bundled.ingestToken ||
     bundled.token ||
     bundled.apiKey ||
     ''
+    )
   ).trim();
+  if (fromBundled) return fromBundled;
+
+  const fromSetting = decodeSecretFromSetting(getSettingValue(TELEMETRY_INGEST_TOKEN_KEY, ''));
+  if (fromSetting) return fromSetting;
+  return '';
 }
 
 function normalizeBooleanSetting(value, fallback = false) {
@@ -501,15 +642,12 @@ function normalizeBooleanSetting(value, fallback = false) {
 }
 
 function getAccessPolicyUrl() {
-  const fromSetting = normalizeIngestUrl(getSettingValue(ACCESS_POLICY_URL_KEY, ''));
-  if (fromSetting) return fromSetting;
-
   const fromEnv = normalizeIngestUrl(process.env.EMMANEIGH_ACCESS_POLICY_URL || '');
   if (fromEnv) return fromEnv;
 
   const bundled = loadBundledTelemetryConfig();
-  if (!bundled) return '';
-  return normalizeIngestUrl(
+  const fromBundled = normalizeIngestUrl(
+    bundled && (
     bundled.accessPolicyUrl ||
     bundled.access_policy_url ||
     bundled.userAccessPolicyUrl ||
@@ -517,19 +655,22 @@ function getAccessPolicyUrl() {
     bundled.killSwitchUrl ||
     bundled.kill_switch_url ||
     ''
+    )
   );
+  if (fromBundled) return fromBundled;
+
+  const fromSetting = normalizeIngestUrl(getSettingValue(ACCESS_POLICY_URL_KEY, ''));
+  if (fromSetting) return fromSetting;
+  return '';
 }
 
 function getAccessPolicyToken() {
-  const fromSetting = decodeSecretFromSetting(getSettingValue(ACCESS_POLICY_TOKEN_KEY, ''));
-  if (fromSetting) return fromSetting;
-
   const fromEnv = String(process.env.EMMANEIGH_ACCESS_POLICY_TOKEN || '').trim();
   if (fromEnv) return fromEnv;
 
   const bundled = loadBundledTelemetryConfig();
-  if (!bundled) return '';
-  return String(
+  const fromBundled = String(
+    bundled && (
     bundled.accessPolicyToken ||
     bundled.access_policy_token ||
     bundled.userAccessPolicyToken ||
@@ -537,24 +678,94 @@ function getAccessPolicyToken() {
     bundled.killSwitchToken ||
     bundled.kill_switch_token ||
     ''
+    )
   ).trim();
+  if (fromBundled) return fromBundled;
+
+  const fromSetting = decodeSecretFromSetting(getSettingValue(ACCESS_POLICY_TOKEN_KEY, ''));
+  if (fromSetting) return fromSetting;
+  return '';
 }
 
 function getAccessPolicyFailClosed() {
+  const envRaw = process.env.EMMANEIGH_ACCESS_POLICY_FAIL_CLOSED;
+  if (typeof envRaw !== 'undefined' && String(envRaw).trim() !== '') {
+    return normalizeBooleanSetting(envRaw, true);
+  }
+
+  const bundled = loadBundledTelemetryConfig();
+  if (bundled) {
+    const bundledRaw = bundled.accessPolicyFailClosed ?? bundled.access_policy_fail_closed ?? null;
+    if (bundledRaw !== null && typeof bundledRaw !== 'undefined' && String(bundledRaw).trim() !== '') {
+      return normalizeBooleanSetting(bundledRaw, true);
+    }
+  }
+
   const fromSettingRaw = getSettingValue(ACCESS_POLICY_FAIL_CLOSED_KEY, null);
   if (fromSettingRaw !== null && typeof fromSettingRaw !== 'undefined' && String(fromSettingRaw).trim() !== '') {
     return normalizeBooleanSetting(fromSettingRaw, false);
   }
 
-  const envRaw = process.env.EMMANEIGH_ACCESS_POLICY_FAIL_CLOSED;
-  if (typeof envRaw !== 'undefined' && String(envRaw).trim() !== '') {
-    return normalizeBooleanSetting(envRaw, false);
-  }
+  return !!(process.env.EMMANEIGH_ACCESS_POLICY_URL || (bundled && (
+    bundled.accessPolicyUrl ||
+    bundled.access_policy_url ||
+    bundled.userAccessPolicyUrl ||
+    bundled.user_access_policy_url ||
+    bundled.killSwitchUrl ||
+    bundled.kill_switch_url
+  )));
+}
 
-  const bundled = loadBundledTelemetryConfig();
-  if (!bundled) return false;
-  const bundledRaw = bundled.accessPolicyFailClosed ?? bundled.access_policy_fail_closed ?? null;
-  return normalizeBooleanSetting(bundledRaw, false);
+function hasManagedTelemetryConfig() {
+  return !!(
+    String(process.env.EMMANEIGH_TELEMETRY_INGEST_URL || '').trim() ||
+    (() => {
+      const bundled = loadBundledTelemetryConfig();
+      return bundled && (bundled.telemetryIngestUrl || bundled.ingestUrl || bundled.url);
+    })()
+  );
+}
+
+function hasManagedAccessPolicyConfig() {
+  return !!(
+    String(process.env.EMMANEIGH_ACCESS_POLICY_URL || '').trim() ||
+    (() => {
+      const bundled = loadBundledTelemetryConfig();
+      return bundled && (
+        bundled.accessPolicyUrl ||
+        bundled.access_policy_url ||
+        bundled.userAccessPolicyUrl ||
+        bundled.user_access_policy_url ||
+        bundled.killSwitchUrl ||
+        bundled.kill_switch_url
+      );
+    })()
+  );
+}
+
+function hasManagedFirebaseConfig() {
+  return !!getManagedFirebaseConfig().value;
+}
+
+function canEventManageSecuritySettings(event, requester = {}) {
+  return canEventAccessAnalytics(event, requester);
+}
+
+function getDeploymentSecurityStatus() {
+  const managedFirebase = getManagedFirebaseConfig();
+  return {
+    safeStorageAvailable: !!safeStorage.isEncryptionAvailable(),
+    managedTelemetry: hasManagedTelemetryConfig(),
+    managedAccessPolicy: hasManagedAccessPolicyConfig(),
+    managedFirebase: !!managedFirebase.value,
+    accessPolicyFailClosed: getAccessPolicyFailClosed(),
+    allowedAiProviders: getAllowedAIProviders(),
+    telemetrySource: hasManagedTelemetryConfig() ? 'managed' : (getTelemetryIngestUrl() ? 'local' : 'none'),
+    accessPolicySource: hasManagedAccessPolicyConfig() ? 'managed' : (getAccessPolicyUrl() ? 'local' : 'none'),
+    firebaseSource: managedFirebase.source === 'none'
+      ? (loadFirebaseConfig() ? 'local' : 'none')
+      : managedFirebase.source
+  };
 }
 
 function normalizePolicyList(rawValue) {
@@ -664,10 +875,37 @@ function evaluateAccessPolicyPayload(payload, identity = {}) {
   const allowedDomains = getPolicyList(policy, ['allowed_domains', 'allowedDomains', 'approved_domains']);
   const allowedUsers = getPolicyList(policy, ['allowed_users', 'allowedUsers', 'allowed_usernames', 'allowed_user_ids', 'allowedUserIds']);
 
+  const adminEmails = getPolicyList(policy, ['admin_emails', 'adminEmails']);
+  const adminDomains = getPolicyList(policy, ['admin_domains', 'adminDomains']);
+  const adminUsers = getPolicyList(policy, ['admin_users', 'adminUsers', 'admin_usernames', 'adminUsernames']);
+  const hasAdminRules = adminEmails.length > 0 || adminDomains.length > 0 || adminUsers.length > 0;
+  const directAdminRaw =
+    policy.is_admin ??
+    policy.isAdmin ??
+    policy.admin ??
+    policyRoot.is_admin ??
+    policyRoot.isAdmin ??
+    policyRoot.admin;
+  const roleText = String(policy.role || policyRoot.role || '').trim().toLowerCase();
+  const isAdminFromRules = (
+    (!!email && (listHasMatch(adminEmails, email) || listHasMatch(adminEmails, emailLocalPart))) ||
+    (!!emailDomain && listHasMatch(adminDomains, emailDomain)) ||
+    (!!username && listHasMatch(adminUsers, username)) ||
+    (!!userId && listHasMatch(adminUsers, userId))
+  );
+  const isAdmin = hasAdminRules
+    ? isAdminFromRules
+    : (
+      normalizeBooleanSetting(directAdminRaw, false) ||
+      roleText === 'admin' ||
+      roleText === 'owner' ||
+      canAccessAnalyticsDashboardFallback({ username, email })
+    );
+
   if (email && listHasMatch(blockedEmails, email)) return { allowed: false, message };
   if (emailDomain && listHasMatch(blockedDomains, emailDomain)) return { allowed: false, message };
   if ((username && listHasMatch(blockedUsers, username)) || (userId && listHasMatch(blockedUsers, userId))) {
-    return { allowed: false, message };
+    return { allowed: false, message, isAdmin };
   }
 
   const hasAllowRules = allowedEmails.length > 0 || allowedDomains.length > 0 || allowedUsers.length > 0;
@@ -676,12 +914,13 @@ function evaluateAccessPolicyPayload(payload, identity = {}) {
     const domainAllowed = emailDomain && listHasMatch(allowedDomains, emailDomain);
     const userAllowed = (username && listHasMatch(allowedUsers, username)) || (userId && listHasMatch(allowedUsers, userId));
     if (!(emailAllowed || domainAllowed || userAllowed)) {
-      return { allowed: false, message };
+      return { allowed: false, message, isAdmin };
     }
   }
 
   return {
     allowed: true,
+    isAdmin,
     message: String(
       policy.allowed_message ||
       policyRoot.allowed_message ||
@@ -825,6 +1064,7 @@ async function evaluateAccessPolicy(identity = {}, options = {}) {
     success: true,
     configured: true,
     allowed: !!decision.allowed,
+    isAdmin: !!decision.isAdmin,
     message: decision.message || (decision.allowed ? 'Access granted.' : 'Access denied by policy.'),
     source: 'policy_remote'
   };
@@ -1608,14 +1848,11 @@ function setApiKey(apiKey) {
     const normalizedKey = String(apiKey || '').trim();
     if (!normalizedKey) return false;
 
-    if (safeStorage.isEncryptionAvailable()) {
-      const encrypted = safeStorage.encryptString(normalizedKey);
-      fs.writeFileSync(apiKeyPath, encrypted);
-      return true;
+    if (!safeStorage.isEncryptionAvailable()) {
+      return false;
     }
-
-    // Fallback for environments where keychain-backed encryption is unavailable.
-    fs.writeFileSync(apiKeyPath, normalizedKey, { encoding: 'utf8' });
+    const encrypted = safeStorage.encryptString(normalizedKey);
+    fs.writeFileSync(apiKeyPath, encrypted);
     return true;
   } catch (e) {
     console.error('Failed to set API key:', e);
@@ -1735,6 +1972,42 @@ function isLocalProvider(provider) {
 function providerRequiresApiKey(provider) {
   const normalized = normalizeAIProvider(provider);
   return normalized === 'anthropic' || normalized === 'openai' || normalized === 'harvey';
+}
+
+function getAllowedAIProviders() {
+  const envList = normalizePolicyList(process.env.EMMANEIGH_ALLOWED_AI_PROVIDERS || '')
+    .map((provider) => normalizeAIProvider(provider))
+    .filter(Boolean);
+  if (envList.length > 0) {
+    return Array.from(new Set(envList));
+  }
+
+  const bundled = loadBundledTelemetryConfig() || {};
+  const bundledList = normalizePolicyList(
+    bundled.allowedAiProviders ||
+    bundled.allowed_ai_providers ||
+    bundled.aiProviders ||
+    bundled.ai_providers ||
+    ''
+  )
+    .map((provider) => normalizeAIProvider(provider))
+    .filter(Boolean);
+  return Array.from(new Set(bundledList));
+}
+
+function isAIProviderAllowed(provider) {
+  const normalized = normalizeAIProvider(provider);
+  const allowedProviders = getAllowedAIProviders();
+  return allowedProviders.length === 0 || allowedProviders.includes(normalized);
+}
+
+function getEnforcedAIProvider(provider) {
+  const normalized = normalizeAIProvider(provider);
+  const allowedProviders = getAllowedAIProviders();
+  if (allowedProviders.length === 0) return normalized;
+  return allowedProviders.includes(normalized)
+    ? normalized
+    : (allowedProviders[0] || DEFAULT_AI_PROVIDER);
 }
 
 function inferProviderFromApiKey(apiKey) {
@@ -3713,6 +3986,19 @@ async function checkVersionEnforcement() {
 
 let mainWindow;
 
+function isSafeExternalUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    return parsed.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+function isAllowedNavigationUrl(rawUrl) {
+  return isTrustedRendererUrl(rawUrl);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
@@ -3721,14 +4007,34 @@ function createWindow() {
     minHeight: 600,
     resizable: true,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0a0a0a'
   });
 
   mainWindow.loadFile('index.html');
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalUrl(url)) {
+      shell.openExternal(url).catch(() => {});
+    }
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigationUrl(url)) {
+      event.preventDefault();
+    }
+  });
+
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
 
   // Remove menu bar
   mainWindow.setMenuBarVisibility(false);
@@ -3830,6 +4136,18 @@ ipcMain.handle('check-for-updates', async () => {
 // Get app version
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+ipcMain.handle('open-external-url', async (event, rawUrl) => {
+  const url = String(rawUrl || '').trim();
+  if (!isSafeExternalUrl(url)) {
+    return { success: false, error: 'Only trusted HTTPS links can be opened externally.' };
+  }
+  const result = await shell.openExternal(url);
+  if (result) {
+    return { success: false, error: result };
+  }
+  return { success: true };
 });
 
 // Check version enforcement status
@@ -12513,7 +12831,13 @@ ipcMain.handle('set-agent-proxy', async (event, { url, token }) => {
     const normalizedUrl = String(url || '').trim();
     db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${AGENT_PROXY_URL_KEY}', '${normalizedUrl.replace(/'/g, "''")}')`);
     if (token !== undefined) {
+      if (String(token || '').trim() && !safeStorage.isEncryptionAvailable()) {
+        return { success: false, error: 'Secure OS key storage is unavailable on this machine. Proxy tokens cannot be stored safely.' };
+      }
       const encoded = encodeSecretToSetting(String(token || '').trim());
+      if (String(token || '').trim() && !encoded) {
+        return { success: false, error: 'Failed to encrypt proxy token.' };
+      }
       db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${AGENT_PROXY_TOKEN_KEY}', '${encoded.replace(/'/g, "''")}')`);
     }
     saveDatabase();
@@ -12531,7 +12855,8 @@ ipcMain.handle('get-agent-config', async () => {
     provider: config.provider || config.mode,
     hasProxy: config.mode === 'proxy',
     hasApiKey: config.mode === 'anthropic' ? !!config.apiKey : true,
-    models: config.models || []
+    models: config.models || [],
+    allowedProviders: getAllowedAIProviders()
   };
 });
 
@@ -12615,16 +12940,23 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
 
     saveDatabase();
 
+    const sessionUser = buildSessionUserPayload({
+      id,
+      username,
+      displayName: finalDisplayName,
+      email: normalizedEmail,
+      apiKeyEnc,
+      isAdmin: typeof loginAccess.isAdmin === 'boolean'
+        ? loginAccess.isAdmin
+        : canAccessAnalyticsDashboard({ username, email: normalizedEmail }),
+      adminSource: loginAccess.source || 'local'
+    });
+    setSessionIdentityForEvent(event, sessionUser);
+
     return {
       success: true,
       isNewUser,
-      user: buildSessionUserPayload({
-        id,
-        username,
-        displayName: finalDisplayName,
-        email: normalizedEmail,
-        apiKeyEnc
-      })
+      user: sessionUser
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -12767,15 +13099,22 @@ ipcMain.handle('login-user', async (event, { username, password, email }) => {
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
     saveDatabase();
 
+    const sessionUser = buildSessionUserPayload({
+      id,
+      username: uname,
+      displayName: displayName || uname,
+      email: normalizedEmail,
+      apiKeyEnc,
+      isAdmin: typeof loginAccess.isAdmin === 'boolean'
+        ? loginAccess.isAdmin
+        : canAccessAnalyticsDashboard({ username: uname, email: normalizedEmail }),
+      adminSource: loginAccess.source || 'local'
+    });
+    setSessionIdentityForEvent(event, sessionUser);
+
     return {
       success: true,
-      user: buildSessionUserPayload({
-        id,
-        username: uname,
-        displayName: displayName || uname,
-        email: normalizedEmail,
-        apiKeyEnc
-      })
+      user: sessionUser
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -12855,15 +13194,22 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
     db.run(`UPDATE users SET last_login = datetime('now') WHERE id = '${id}'`);
     saveDatabase();
 
+    const sessionUser = buildSessionUserPayload({
+      id,
+      username,
+      displayName: displayName || username,
+      email: normalizedEmail || null,
+      apiKeyEnc,
+      isAdmin: typeof loginAccess.isAdmin === 'boolean'
+        ? loginAccess.isAdmin
+        : canAccessAnalyticsDashboard({ username, email: normalizedEmail }),
+      adminSource: loginAccess.source || 'local'
+    });
+    setSessionIdentityForEvent(event, sessionUser);
+
     return {
       success: true,
-      user: buildSessionUserPayload({
-        id,
-        username,
-        displayName: displayName || username,
-        email: normalizedEmail || null,
-        apiKeyEnc
-      })
+      user: sessionUser
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -12872,12 +13218,12 @@ ipcMain.handle('complete-2fa-login', async (event, { userId, code }) => {
 
 // Get user statistics (for admin tracking)
 ipcMain.handle('can-access-user-stats', async (event, requester = {}) => {
-  return { success: true, allowed: canRequesterAccessAnalytics(requester) };
+  return { success: true, allowed: canEventAccessAnalytics(event, requester) };
 });
 
 ipcMain.handle('get-user-stats', async (event, requester = {}) => {
   if (!db) return { success: false, error: 'Database not initialized' };
-  if (!canRequesterAccessAnalytics(requester)) {
+  if (!canEventAccessAnalytics(event, requester)) {
     return { success: false, error: 'Not authorized to view user analytics.' };
   }
 
@@ -12972,7 +13318,7 @@ ipcMain.handle('get-activity-log-path', async () => {
 
 ipcMain.handle('open-analytics-storage', async (event, requester = {}) => {
   try {
-    if (!canRequesterAccessAnalytics(requester)) {
+    if (!canEventAccessAnalytics(event, requester)) {
       return { success: false, error: 'Not authorized to open analytics storage.' };
     }
     const analyticsDir = path.dirname(historyDbPath);
@@ -13023,12 +13369,12 @@ ipcMain.handle('set-user-api-key', async (event, { userId, apiKey }) => {
 
   try {
     let encrypted = null;
+    if (apiKey && !safeStorage.isEncryptionAvailable()) {
+      return { success: false, error: 'Secure OS key storage is unavailable on this machine. API keys cannot be stored safely.' };
+    }
     if (apiKey && safeStorage.isEncryptionAvailable()) {
       const encBuffer = safeStorage.encryptString(apiKey);
       encrypted = encBuffer.toString('base64');
-    } else if (apiKey) {
-      // Fallback: store as plain text (not ideal but functional)
-      encrypted = apiKey;
     }
 
     db.run(`UPDATE users SET api_key_encrypted = '${encrypted || ''}' WHERE id = '${userId}'`);
@@ -13092,6 +13438,7 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
       { eventType: 'session_restore' }
     );
     if (!sessionAccess.allowed) {
+      clearSessionIdentityForEvent(event);
       return {
         success: false,
         blocked: true,
@@ -13099,15 +13446,22 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
       };
     }
 
+    const sessionUser = buildSessionUserPayload({
+      id,
+      username: uname,
+      displayName: displayName || uname,
+      email: normalizedEmail || null,
+      apiKeyEnc,
+      isAdmin: typeof sessionAccess.isAdmin === 'boolean'
+        ? sessionAccess.isAdmin
+        : canAccessAnalyticsDashboard({ username: uname, email: normalizedEmail }),
+      adminSource: sessionAccess.source || 'local'
+    });
+    setSessionIdentityForEvent(event, sessionUser);
+
     return {
       success: true,
-      user: buildSessionUserPayload({
-        id,
-        username: uname,
-        displayName: displayName || uname,
-        email: normalizedEmail || null,
-        apiKeyEnc
-      })
+      user: sessionUser
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -13501,10 +13855,16 @@ ipcMain.handle('update-user-email', async (event, { userId, email }) => {
 ipcMain.handle('save-setting', async (event, { key, value }) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   try {
+    if ([TELEMETRY_INGEST_KEY, TELEMETRY_INGEST_TOKEN_KEY, ACCESS_POLICY_URL_KEY, ACCESS_POLICY_TOKEN_KEY, ACCESS_POLICY_FAIL_CLOSED_KEY].includes(String(key || ''))) {
+      return { success: false, error: 'Sensitive deployment settings must be updated through the dedicated admin controls.' };
+    }
     const rawValue =
       key === 'claude_model' ? normalizeClaudeModel(value)
-      : key === 'ai_provider' ? normalizeAIProvider(value)
+      : key === 'ai_provider' ? getEnforcedAIProvider(value)
       : (value ?? '');
+    if (key === 'ai_provider' && !isAIProviderAllowed(rawValue)) {
+      return { success: false, error: 'That AI provider is disabled by deployment policy.' };
+    }
     const settingValue = String(rawValue);
     db.run(`INSERT OR REPLACE INTO app_settings (key, value) VALUES ('${key}', '${settingValue.replace(/'/g, "''")}')`);
     if (key === 'claude_model') {
@@ -13529,6 +13889,9 @@ ipcMain.handle('save-setting', async (event, { key, value }) => {
 ipcMain.handle('get-setting', async (event, key) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   try {
+    if ([TELEMETRY_INGEST_KEY, TELEMETRY_INGEST_TOKEN_KEY, ACCESS_POLICY_URL_KEY, ACCESS_POLICY_TOKEN_KEY, ACCESS_POLICY_FAIL_CLOSED_KEY].includes(String(key || ''))) {
+      return { success: false, error: 'Sensitive deployment settings are not available through the generic settings API.' };
+    }
     const result = db.exec(`SELECT value FROM app_settings WHERE key = '${key}'`);
     if (result.length > 0 && result[0].values.length > 0) {
       return { success: true, value: result[0].values[0][0] };
@@ -13539,15 +13902,35 @@ ipcMain.handle('get-setting', async (event, key) => {
   }
 });
 
-ipcMain.handle('get-telemetry-ingest-config', async () => {
+ipcMain.handle('get-deployment-security-status', async (event, requester = {}) => {
+  if (!canEventManageSecuritySettings(event, requester)) {
+    return {
+      success: true,
+      status: {
+        safeStorageAvailable: !!safeStorage.isEncryptionAvailable(),
+        managedTelemetry: hasManagedTelemetryConfig(),
+        managedAccessPolicy: hasManagedAccessPolicyConfig(),
+        managedFirebase: hasManagedFirebaseConfig(),
+        accessPolicyFailClosed: getAccessPolicyFailClosed(),
+        allowedAiProviders: getAllowedAIProviders()
+      }
+    };
+  }
+  return { success: true, status: getDeploymentSecurityStatus() };
+});
+
+ipcMain.handle('get-telemetry-ingest-config', async (event, requester = {}) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   try {
     const url = getTelemetryIngestUrl();
     const token = getTelemetryIngestToken();
+    const canManage = canEventManageSecuritySettings(event, requester);
     return {
       success: true,
-      url,
-      hasToken: !!token
+      url: canManage ? url : '',
+      hasToken: canManage ? !!token : false,
+      managed: hasManagedTelemetryConfig(),
+      locked: hasManagedTelemetryConfig()
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -13556,6 +13939,12 @@ ipcMain.handle('get-telemetry-ingest-config', async () => {
 
 ipcMain.handle('save-telemetry-ingest-config', async (event, config = {}) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  if (!canEventManageSecuritySettings(event, config.requester || {})) {
+    return { success: false, error: 'Admin access is required to update telemetry configuration.' };
+  }
+  if (hasManagedTelemetryConfig()) {
+    return { success: false, error: 'Telemetry configuration is managed by deployment and cannot be overridden locally.' };
+  }
   try {
     const rawUrl = String(config.url || '').trim();
     const normalizedUrl = normalizeIngestUrl(rawUrl);
@@ -13565,12 +13954,16 @@ ipcMain.handle('save-telemetry-ingest-config', async (event, config = {}) => {
 
     const rawToken = typeof config.token === 'string' ? config.token.trim() : '';
     const keepExistingToken = !!config.keepExistingToken;
+    if (rawToken && !safeStorage.isEncryptionAvailable()) {
+      return { success: false, error: 'Secure OS key storage is unavailable on this machine. Telemetry tokens cannot be stored safely.' };
+    }
     if (!writeSettingValue(TELEMETRY_INGEST_KEY, normalizedUrl)) {
       return { success: false, error: 'Failed to save telemetry ingest URL.' };
     }
 
     if (rawToken) {
-      if (!writeSettingValue(TELEMETRY_INGEST_TOKEN_KEY, encodeSecretForSetting(rawToken))) {
+      const encodedToken = encodeSecretForSetting(rawToken);
+      if (!encodedToken || !writeSettingValue(TELEMETRY_INGEST_TOKEN_KEY, encodedToken)) {
         return { success: false, error: 'Failed to save telemetry ingest token.' };
       }
     } else if (!keepExistingToken) {
@@ -13602,6 +13995,9 @@ ipcMain.handle('save-telemetry-ingest-config', async (event, config = {}) => {
 });
 
 ipcMain.handle('test-telemetry-ingest-config', async (event, config = {}) => {
+  if (!canEventManageSecuritySettings(event, config.requester || {})) {
+    return { success: false, error: 'Admin access is required to test telemetry configuration.' };
+  }
   try {
     const url = normalizeIngestUrl(config.url || getTelemetryIngestUrl());
     if (!url) {
@@ -13629,14 +14025,17 @@ ipcMain.handle('test-telemetry-ingest-config', async (event, config = {}) => {
   }
 });
 
-ipcMain.handle('get-access-policy-config', async () => {
+ipcMain.handle('get-access-policy-config', async (event, requester = {}) => {
   if (!db) return { success: false, error: 'Database not initialized' };
   try {
+    const canManage = canEventManageSecuritySettings(event, requester);
     return {
       success: true,
-      url: getAccessPolicyUrl(),
-      hasToken: !!getAccessPolicyToken(),
-      failClosed: getAccessPolicyFailClosed()
+      url: canManage ? getAccessPolicyUrl() : '',
+      hasToken: canManage ? !!getAccessPolicyToken() : false,
+      failClosed: getAccessPolicyFailClosed(),
+      managed: hasManagedAccessPolicyConfig(),
+      locked: hasManagedAccessPolicyConfig()
     };
   } catch (e) {
     return { success: false, error: e.message };
@@ -13645,6 +14044,12 @@ ipcMain.handle('get-access-policy-config', async () => {
 
 ipcMain.handle('save-access-policy-config', async (event, config = {}) => {
   if (!db) return { success: false, error: 'Database not initialized' };
+  if (!canEventManageSecuritySettings(event, config.requester || {})) {
+    return { success: false, error: 'Admin access is required to update access policy configuration.' };
+  }
+  if (hasManagedAccessPolicyConfig()) {
+    return { success: false, error: 'Access policy is managed by deployment and cannot be overridden locally.' };
+  }
   try {
     const rawUrl = String(config.url || '').trim();
     const normalizedUrl = normalizeIngestUrl(rawUrl);
@@ -13655,13 +14060,17 @@ ipcMain.handle('save-access-policy-config', async (event, config = {}) => {
     const rawToken = typeof config.token === 'string' ? config.token.trim() : '';
     const keepExistingToken = !!config.keepExistingToken;
     const failClosed = normalizeBooleanSetting(config.failClosed, false);
+    if (rawToken && !safeStorage.isEncryptionAvailable()) {
+      return { success: false, error: 'Secure OS key storage is unavailable on this machine. Access policy tokens cannot be stored safely.' };
+    }
 
     if (!writeSettingValue(ACCESS_POLICY_URL_KEY, normalizedUrl)) {
       return { success: false, error: 'Failed to save access policy URL.' };
     }
 
     if (rawToken) {
-      if (!writeSettingValue(ACCESS_POLICY_TOKEN_KEY, encodeSecretForSetting(rawToken))) {
+      const encodedToken = encodeSecretForSetting(rawToken);
+      if (!encodedToken || !writeSettingValue(ACCESS_POLICY_TOKEN_KEY, encodedToken)) {
         return { success: false, error: 'Failed to save access policy token.' };
       }
     } else if (!keepExistingToken) {
@@ -13692,6 +14101,9 @@ ipcMain.handle('save-access-policy-config', async (event, config = {}) => {
 });
 
 ipcMain.handle('test-access-policy-config', async (event, config = {}) => {
+  if (!canEventManageSecuritySettings(event, config.requester || {})) {
+    return { success: false, error: 'Admin access is required to test access policy configuration.' };
+  }
   try {
     const identity = config.identity && typeof config.identity === 'object' ? config.identity : {};
     const result = await evaluateAccessPolicy(
@@ -13721,16 +14133,32 @@ ipcMain.handle('check-access-policy', async (event, identity = {}) => {
         force: !!identity.force
       }
     );
+    if (result.allowed) {
+      setSessionIdentityForEvent(event, {
+        userId: identity.userId || '',
+        username: identity.username || '',
+        email: identity.email || '',
+        isAdmin: !!result.isAdmin
+      });
+    } else {
+      clearSessionIdentityForEvent(event);
+    }
     return {
       success: true,
       configured: !!result.configured,
       allowed: !!result.allowed,
+      isAdmin: !!result.isAdmin,
       message: result.message || '',
       source: result.source || 'unknown'
     };
   } catch (e) {
     return { success: false, allowed: true, message: e.message };
   }
+});
+
+ipcMain.handle('clear-session-context', async (event) => {
+  clearSessionIdentityForEvent(event);
+  return { success: true };
 });
 
 function getSettingValue(key, fallbackValue = null) {
@@ -13745,7 +14173,7 @@ function getSettingValue(key, fallbackValue = null) {
 }
 
 function getAIProvider() {
-  return normalizeAIProvider(getSettingValue('ai_provider', DEFAULT_AI_PROVIDER));
+  return getEnforcedAIProvider(getSettingValue('ai_provider', DEFAULT_AI_PROVIDER));
 }
 
 function initAIProvider() {
@@ -13822,6 +14250,9 @@ ipcMain.handle('save-smtp-settings', async (event, { host, port, user, pass, fro
   try {
     const existingStoredPassRaw = String(getSettingValue('smtp_pass', '') || '');
     const hasNewPassword = typeof pass === 'string' && pass.length > 0;
+    if (hasNewPassword && !safeStorage.isEncryptionAvailable()) {
+      return { success: false, error: 'Secure OS key storage is unavailable on this machine. SMTP passwords cannot be stored safely.' };
+    }
 
     // Preserve existing SMTP password unless user provides a new one.
     let storedPassValue = existingStoredPassRaw;
@@ -13901,8 +14332,15 @@ ipcMain.handle('test-smtp', async (event, { host, port, user, pass, from }) => {
 
 // Save Firebase config to local file (not in source control)
 ipcMain.handle('save-firebase-config', async (event, config) => {
+  if (!canEventManageSecuritySettings(event, config?.requester || {})) {
+    return { success: false, error: 'Admin access is required to update telemetry tracking configuration.' };
+  }
+  if (hasManagedFirebaseConfig()) {
+    return { success: false, error: 'Firebase configuration is managed by deployment and cannot be overridden locally.' };
+  }
   try {
-    const saved = saveFirebaseConfig(config);
+    const { requester: _requester, ...firebaseConfig } = config || {};
+    const saved = saveFirebaseConfig(firebaseConfig);
     if (saved) {
       invalidateTelemetryStatusCache();
       const status = await getFirebaseTelemetryStatus({
@@ -13922,10 +14360,18 @@ ipcMain.handle('save-firebase-config', async (event, config) => {
 });
 
 // Get current Firebase config (for settings UI)
-ipcMain.handle('get-firebase-config', async () => {
+ipcMain.handle('get-firebase-config', async (event, requester = {}) => {
   const config = loadFirebaseConfig();
   const status = await getFirebaseTelemetryStatus({ skipProbe: true });
-  return { success: true, config: config, configured: !!config, status };
+  const canManage = canEventManageSecuritySettings(event, requester);
+  return {
+    success: true,
+    config: canManage ? config : null,
+    configured: !!config,
+    status,
+    managed: hasManagedFirebaseConfig(),
+    locked: hasManagedFirebaseConfig()
+  };
 });
 
 ipcMain.handle('get-firebase-telemetry-status', async (event, options = {}) => {
@@ -13986,8 +14432,7 @@ ipcMain.handle('submit-feedback', async (event, data) => {
 
 ipcMain.handle('get-feedback', async (event, options = {}) => {
   try {
-    const username = String(options?.username || '').trim();
-    if (!canAccessFeedbackLog(username)) {
+    if (!canEventAccessFeedback(event, options)) {
       return { success: false, error: 'Not authorized to view feedback log.', entries: [], path: feedbackLogPath };
     }
     const requestedLimit = Number(options?.limit);
@@ -14003,8 +14448,7 @@ ipcMain.handle('get-feedback', async (event, options = {}) => {
 
 ipcMain.handle('open-feedback-log', async (event, data = {}) => {
   try {
-    const username = String(data?.username || '').trim();
-    if (!canAccessFeedbackLog(username)) {
+    if (!canEventAccessFeedback(event, data)) {
       return { success: false, error: 'Not authorized to open feedback log.' };
     }
     if (!fs.existsSync(feedbackLogPath)) {
@@ -14021,8 +14465,7 @@ ipcMain.handle('open-feedback-log', async (event, data = {}) => {
 });
 
 ipcMain.handle('can-access-feedback-log', async (event, data = {}) => {
-  const username = String(data?.username || '').trim();
-  return { success: true, allowed: canAccessFeedbackLog(username) };
+  return { success: true, allowed: canEventAccessFeedback(event, data) };
 });
 
 // Get recent usage history

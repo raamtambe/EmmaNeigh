@@ -24,11 +24,51 @@ let firebaseApp = null;
 let firestoreDb = null;
 let firebaseReady = false;
 
+function loadManagedFirebaseConfig() {
+  const envRaw = String(process.env.EMMANEIGH_FIREBASE_CONFIG_JSON || '').trim();
+  if (envRaw) {
+    try {
+      const parsed = JSON.parse(envRaw);
+      if (parsed && parsed.apiKey && parsed.projectId) {
+        return parsed;
+      }
+    } catch (e) {
+      console.error('Failed to parse managed Firebase config from environment:', e.message);
+    }
+  }
+
+  const candidatePaths = [
+    String(process.env.EMMANEIGH_TELEMETRY_CONFIG_PATH || '').trim(),
+    path.join(process.resourcesPath || '', 'telemetry-config.json'),
+    path.join(__dirname, 'telemetry-config.json')
+  ].filter(Boolean);
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      if (!fs.existsSync(candidatePath)) continue;
+      const raw = fs.readFileSync(candidatePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const firebaseConfig = parsed && (parsed.firebaseConfig || parsed.firebase_config);
+      if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.projectId) {
+        return firebaseConfig;
+      }
+    } catch (e) {
+      console.error('Failed to read managed telemetry config for Firebase:', e.message);
+    }
+  }
+
+  return EMBEDDED_FIREBASE_CONFIG || null;
+}
+
 /**
  * Read Firebase config. Checks local override file first, then uses embedded config.
  * Always returns a valid config — never null.
  */
 function loadFirebaseConfig() {
+  const managedConfig = loadManagedFirebaseConfig();
+  if (managedConfig) {
+    return managedConfig;
+  }
   // Try local override first
   try {
     if (fs.existsSync(firebaseConfigPath)) {
@@ -41,8 +81,7 @@ function loadFirebaseConfig() {
   } catch (e) {
     console.error('Failed to read local Firebase config override:', e.message);
   }
-  // Fall back to embedded config if available
-  return EMBEDDED_FIREBASE_CONFIG || null;
+  return null;
 }
 
 /**
