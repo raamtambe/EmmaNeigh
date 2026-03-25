@@ -24,7 +24,7 @@ The Worker keeps the LLM provider key in Cloudflare secrets and returns short-li
 Current implementation:
 
 - `Groq` backend
-- default model: `qwen/qwen3-32b`
+- default model: `meta-llama/llama-4-scout-17b-16e-instruct`
 
 The endpoint contract is model/provider-agnostic, so the Worker can later be adapted to Anthropic, OpenAI, or another provider.
 
@@ -103,7 +103,7 @@ Example:
   "allowedAiProviders": ["managed"],
   "managedAi": {
     "provider": "managed",
-    "model": "qwen/qwen3-32b",
+    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
     "sessionUrl": "https://your-worker.workers.dev/session",
     "promptUrl": "https://your-worker.workers.dev/prompt",
     "agentUrl": "https://your-worker.workers.dev/agent",

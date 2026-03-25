@@ -73,7 +73,7 @@ function getManagedModel(env, requestedModel = '') {
   const overrideAllowed = normalizeBoolean(env.MANAGED_AI_ALLOW_MODEL_OVERRIDE, false);
   const requested = String(requestedModel || '').trim();
   if (overrideAllowed && requested) return requested;
-  return String(env.MANAGED_AI_MODEL || 'qwen/qwen3-32b').trim() || 'qwen/qwen3-32b';
+  return String(env.MANAGED_AI_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct').trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
 }
 
 function getManagedAiSessionTtlSeconds(env) {
@@ -611,29 +611,12 @@ async function handleHealth(request, env) {
   const auth = await requireManagedSession(request, env);
   if (auth.response) return auth.response;
 
-  const body = request.method === 'POST' ? await parseJsonBody(request) : {};
-  const model = getManagedModel(env, new URL(request.url).searchParams.get('model') || body.model || '');
-  const provider = getManagedProvider(env);
-  const groqResult = await fetchGroqModels(env.GROQ_API_KEY);
-  if (!groqResult.ok) {
-    return jsonResponse({
-      success: false,
-      provider,
-      model,
-      error: extractProviderError(groqResult)
-    }, 502);
-  }
-
-  const models = Array.isArray(groqResult.json && groqResult.json.data)
-    ? groqResult.json.data.map((item) => String(item && item.id || '').trim()).filter(Boolean)
-    : [];
-
   return jsonResponse({
     success: true,
-    provider,
-    model,
-    model_available: models.includes(model),
-    models
+    provider: getManagedProvider(env),
+    model: getManagedModel(env, ''),
+    session_valid: true,
+    backend_ready: !!env.GROQ_API_KEY && !!env.SESSION_SIGNING_KEY
   });
 }
 

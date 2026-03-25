@@ -2,7 +2,7 @@
   "allowedAiProviders": ["managed"],
   "managedAi": {
     "provider": "managed",
-    "model": "qwen/qwen3-32b",
+    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
     "sessionUrl": "https://emmaneigh-managed-ai.emmaneigh.workers.dev/session",
     "promptUrl": "https://emmaneigh-managed-ai.emmaneigh.workers.dev/prompt",
     "agentUrl": "https://emmaneigh-managed-ai.emmaneigh.workers.dev/agent",

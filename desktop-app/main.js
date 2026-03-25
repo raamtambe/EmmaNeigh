@@ -117,7 +117,9 @@ const ANALYTICS_ADMIN_IDENTIFIERS = new Set(
 const trackedChildProcesses = new Map();
 const rendererSessionState = new Map();
 const rendererManagedAiSessions = new Map();
+const rendererManagedAiStatusCache = new Map();
 const MANAGED_AI_SESSION_REFRESH_SKEW_MS = 2 * 60 * 1000;
+const MANAGED_AI_STATUS_CACHE_MS = 60 * 1000;
 let trackedProcessCounter = 0;
 const rawSpawn = spawn;
 let managedLocalAiServerProcess = null;
@@ -434,6 +436,7 @@ function setSessionIdentityForEvent(event, identity = {}) {
   const webContentsId = event?.sender?.id;
   if (!webContentsId) return;
   rendererManagedAiSessions.delete(webContentsId);
+  rendererManagedAiStatusCache.delete(webContentsId);
   rendererSessionState.set(webContentsId, {
     userId: String(identity.userId || identity.id || '').trim(),
     username: String(identity.username || '').trim(),
@@ -447,6 +450,7 @@ function clearSessionIdentityForEvent(event) {
   const webContentsId = event?.sender?.id;
   if (!webContentsId) return;
   rendererManagedAiSessions.delete(webContentsId);
+  rendererManagedAiStatusCache.delete(webContentsId);
   rendererSessionState.delete(webContentsId);
 }
 
@@ -483,6 +487,21 @@ function clearManagedAiSessionForEvent(event) {
   const webContentsId = event?.sender?.id;
   if (!webContentsId) return;
   rendererManagedAiSessions.delete(webContentsId);
+}
+
+function getManagedAiStatusCacheForEvent(event) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return null;
+  return rendererManagedAiStatusCache.get(webContentsId) || null;
+}
+
+function setManagedAiStatusCacheForEvent(event, value) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return;
+  rendererManagedAiStatusCache.set(webContentsId, {
+    updatedAt: Date.now(),
+    value
+  });
 }
 
 async function fetchManagedAiSession(event, { forceRefresh = false } = {}) {
@@ -1082,6 +1101,29 @@ function getManagedAiAgentUrl() {
 function getManagedAiHealthUrl() {
   const managed = getManagedAiConfig();
   return managed.healthUrl || managed.promptUrl || '';
+}
+
+function getManagedAiPublicHealthUrl() {
+  const managed = getManagedAiConfig();
+  const candidates = [
+    managed.healthUrl,
+    managed.promptUrl,
+    managed.agentUrl,
+    managed.sessionUrl
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = new URL(candidate);
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+      parsed.pathname = parsed.pathname.replace(/\/(?:managed-ai\/)?(?:session|prompt|agent|health)$/, '/healthz');
+      if (!parsed.pathname || parsed.pathname === '/') {
+        parsed.pathname = '/healthz';
+      }
+      return parsed.toString();
+    } catch (_) {}
+  }
+  return '';
 }
 
 function getManagedAiSessionUrl() {
@@ -3860,7 +3902,7 @@ function getProviderConnectionConfig(providerInput, apiKeyInput) {
   let model = getClaudeModel();
 
   if (provider === 'managed') {
-    baseUrl = getManagedAiHealthUrl();
+    baseUrl = getManagedAiPublicHealthUrl() || getManagedAiHealthUrl();
     healthPath = '';
     model = getManagedAiModel() || 'managed-ai';
   } else if (provider === 'localai') {
@@ -3912,19 +3954,14 @@ async function runProviderHealthCheck(connectionConfig, apiKeyInput, event = nul
       };
     }
 
-    if (!event) {
-      return {
-        ok: false,
-        status: 'session_required',
-        statusCode: 401,
-        endpoint: connectionConfig.healthEndpoint,
-        detail: 'Managed AI health checks require an active signed-in session.'
-      };
-    }
-
-    const response = await requestManagedAi(event, {
-      url: connectionConfig.baseUrl,
+    const response = await requestHttps({
+      baseUrl: connectionConfig.baseUrl,
+      path: '',
       method: 'GET',
+      headers: {
+        'X-EmmaNeigh-Version': APP_VERSION,
+        'X-EmmaNeigh-Machine': MACHINE_ID
+      },
       timeoutMs: 15000
     });
 
@@ -3934,7 +3971,7 @@ async function runProviderHealthCheck(connectionConfig, apiKeyInput, event = nul
         status: 'reachable',
         statusCode: response.statusCode,
         endpoint: connectionConfig.healthEndpoint,
-        detail: `Managed AI connection successful${connectionConfig.model ? ` using ${connectionConfig.model}` : ''}.`
+        detail: `Managed AI backend reachable${connectionConfig.model ? ` using ${connectionConfig.model}` : ''}.`
       };
     }
 
@@ -4010,6 +4047,40 @@ async function runProviderHealthCheck(connectionConfig, apiKeyInput, event = nul
     endpoint: connectionConfig.healthEndpoint,
     detail: getErrorDetail(response)
   };
+}
+
+async function getManagedAiStatusSnapshot(event, { forceRefresh = false } = {}) {
+  const config = getManagedAiConfig();
+  if (!config.promptUrl || !config.agentUrl || !config.sessionUrl) {
+    return {
+      success: true,
+      configured: false,
+      provider: getManagedAiProvider(),
+      model: getManagedAiModel(),
+      message: 'Managed AI is not configured in deployment settings.'
+    };
+  }
+
+  const cached = getManagedAiStatusCacheForEvent(event);
+  if (!forceRefresh && cached && cached.value && (Date.now() - cached.updatedAt) < MANAGED_AI_STATUS_CACHE_MS) {
+    return cached.value;
+  }
+
+  const connection = getProviderConnectionConfig('managed', '');
+  const value = {
+    success: true,
+    configured: true,
+    provider: connection.provider,
+    providerName: connection.providerName,
+    model: connection.model,
+    promptUrl: config.promptUrl,
+    agentUrl: config.agentUrl,
+    sessionUrl: config.sessionUrl,
+    health: await runProviderHealthCheck(connection, '', event)
+  };
+
+  setManagedAiStatusCacheForEvent(event, value);
+  return value;
 }
 
 const AGENT_TABS = new Set([
@@ -12904,7 +12975,9 @@ ipcMain.handle('agent-llm-diagnostics', async (event, payload) => {
     const requestedProvider = normalizeAIProvider(payload?.provider || getAIProvider());
     const apiKey = String(payload?.apiKey || getApiKey() || '').trim();
     const connection = getProviderConnectionConfig(requestedProvider, apiKey);
-    const health = await runProviderHealthCheck(connection, apiKey, event);
+    const health = connection.provider === 'managed'
+      ? (await getManagedAiStatusSnapshot(event)).health
+      : await runProviderHealthCheck(connection, apiKey, event);
     return {
       success: true,
       ...connection,
@@ -13364,29 +13437,7 @@ ipcMain.handle('get-agent-config', async () => {
 
 ipcMain.handle('get-managed-ai-status', async (event) => {
   try {
-    const config = getManagedAiConfig();
-    if (!config.promptUrl || !config.agentUrl || !config.sessionUrl) {
-      return {
-        success: true,
-        configured: false,
-        provider: getManagedAiProvider(),
-        model: getManagedAiModel(),
-        message: 'Managed AI is not configured in deployment settings.'
-      };
-    }
-    const connection = getProviderConnectionConfig('managed', '');
-    const health = await runProviderHealthCheck(connection, '', event);
-    return {
-      success: true,
-      configured: true,
-      provider: connection.provider,
-      providerName: connection.providerName,
-      model: connection.model,
-      promptUrl: config.promptUrl,
-      agentUrl: config.agentUrl,
-      sessionUrl: config.sessionUrl,
-      health
-    };
+    return await getManagedAiStatusSnapshot(event);
   } catch (e) {
     return { success: false, error: e.message };
   }
