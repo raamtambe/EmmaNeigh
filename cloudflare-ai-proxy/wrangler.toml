@@ -4,7 +4,7 @@ compatibility_date = "2026-03-25"
 
 [vars]
 MANAGED_AI_PROVIDER = "groq"
-MANAGED_AI_MODEL = "qwen/qwen3-32b"
+MANAGED_AI_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 MANAGED_AI_SESSION_TTL_SECONDS = "3600"
 MANAGED_AI_ALLOW_MODEL_OVERRIDE = "false"
 ACCESS_POLICY_MESSAGE = "Access to EmmaNeigh is managed by your administrator."
