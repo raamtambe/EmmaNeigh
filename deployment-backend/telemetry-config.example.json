@@ -2,5 +2,21 @@
   "telemetryIngestUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/telemetryIngest",
   "accessPolicyUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/accessPolicy",
   "accessPolicyFailClosed": true,
-  "allowedAiProviders": ["localai", "anthropic", "openai"]
+  "allowedAiProviders": ["managed", "anthropic", "openai"],
+  "managedAi": {
+    "provider": "managed",
+    "model": "qwen/qwen3-32b",
+    "sessionUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/managedAiSession",
+    "promptUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/managedAiPrompt",
+    "agentUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/managedAiAgent",
+    "healthUrl": "https://us-central1-your-firebase-project-id.cloudfunctions.net/managedAiHealth"
+  },
+  "firebaseConfig": {
+    "apiKey": "...",
+    "authDomain": "...",
+    "projectId": "...",
+    "storageBucket": "...",
+    "messagingSenderId": "...",
+    "appId": "..."
+  }
 }

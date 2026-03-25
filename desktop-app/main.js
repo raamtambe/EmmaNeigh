@@ -116,6 +116,8 @@ const ANALYTICS_ADMIN_IDENTIFIERS = new Set(
 
 const trackedChildProcesses = new Map();
 const rendererSessionState = new Map();
+const rendererManagedAiSessions = new Map();
+const MANAGED_AI_SESSION_REFRESH_SKEW_MS = 2 * 60 * 1000;
 let trackedProcessCounter = 0;
 const rawSpawn = spawn;
 let managedLocalAiServerProcess = null;
@@ -431,6 +433,7 @@ function getSessionIdentityFromEvent(event) {
 function setSessionIdentityForEvent(event, identity = {}) {
   const webContentsId = event?.sender?.id;
   if (!webContentsId) return;
+  rendererManagedAiSessions.delete(webContentsId);
   rendererSessionState.set(webContentsId, {
     userId: String(identity.userId || identity.id || '').trim(),
     username: String(identity.username || '').trim(),
@@ -443,7 +446,216 @@ function setSessionIdentityForEvent(event, identity = {}) {
 function clearSessionIdentityForEvent(event) {
   const webContentsId = event?.sender?.id;
   if (!webContentsId) return;
+  rendererManagedAiSessions.delete(webContentsId);
   rendererSessionState.delete(webContentsId);
+}
+
+function getManagedAiSessionForEvent(event) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return null;
+  return rendererManagedAiSessions.get(webContentsId) || null;
+}
+
+function setManagedAiSessionForEvent(event, session = {}) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return;
+  const token = String(session.token || '').trim();
+  if (!token) {
+    rendererManagedAiSessions.delete(webContentsId);
+    return;
+  }
+  const expiresAtMs = Number(session.expiresAtMs || 0);
+  const expiresAt = String(
+    session.expiresAt ||
+    (expiresAtMs ? new Date(expiresAtMs).toISOString() : '')
+  ).trim();
+  rendererManagedAiSessions.set(webContentsId, {
+    token,
+    expiresAtMs,
+    expiresAt,
+    model: String(session.model || '').trim(),
+    provider: String(session.provider || 'managed').trim(),
+    updatedAt: Date.now()
+  });
+}
+
+function clearManagedAiSessionForEvent(event) {
+  const webContentsId = event?.sender?.id;
+  if (!webContentsId) return;
+  rendererManagedAiSessions.delete(webContentsId);
+}
+
+async function fetchManagedAiSession(event, { forceRefresh = false } = {}) {
+  const sessionUrl = getManagedAiSessionUrl();
+  if (!sessionUrl) {
+    return {
+      success: false,
+      statusCode: 0,
+      error: 'Managed AI session endpoint is not configured. Ask your administrator to deploy the managed AI session endpoint.'
+    };
+  }
+
+  const identity = getSessionIdentityFromEvent(event);
+  if (!identity || !normalizeEmail(identity.email || '')) {
+    clearManagedAiSessionForEvent(event);
+    return {
+      success: false,
+      statusCode: 401,
+      error: 'Sign in with your work email before using Managed Remote AI.'
+    };
+  }
+
+  const cached = getManagedAiSessionForEvent(event);
+  if (!forceRefresh && cached && cached.token) {
+    const expiresAtMs = Number(cached.expiresAtMs || 0);
+    if (expiresAtMs && expiresAtMs > (Date.now() + MANAGED_AI_SESSION_REFRESH_SKEW_MS)) {
+      return {
+        success: true,
+        token: cached.token,
+        expiresAt: cached.expiresAt,
+        expiresAtMs,
+        provider: cached.provider || 'managed',
+        model: cached.model || getManagedAiModel() || 'managed-ai',
+        cached: true
+      };
+    }
+  }
+
+  const response = await requestHttps({
+    baseUrl: sessionUrl,
+    path: '',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-EmmaNeigh-Version': APP_VERSION,
+      'X-EmmaNeigh-Machine': MACHINE_ID
+    },
+    body: JSON.stringify({
+      email: identity.email || '',
+      username: identity.username || '',
+      user_id: identity.userId || '',
+      machine_id: MACHINE_ID,
+      app_version: APP_VERSION,
+      provider: getManagedAiProvider(),
+      model: getManagedAiModel() || undefined
+    }),
+    timeoutMs: 20000
+  });
+
+  if (response.statusCode !== 200) {
+    clearManagedAiSessionForEvent(event);
+    return {
+      success: false,
+      statusCode: response.statusCode || 0,
+      error: `Managed AI session request failed (${response.statusCode || 0}): ${getErrorDetail(response)}`
+    };
+  }
+
+  const token = String(
+    response.jsonBody?.token ||
+    response.jsonBody?.session_token ||
+    ''
+  ).trim();
+  if (!token) {
+    clearManagedAiSessionForEvent(event);
+    return {
+      success: false,
+      statusCode: 502,
+      error: 'Managed AI session response did not include a session token.'
+    };
+  }
+
+  const expiresAtRaw = String(
+    response.jsonBody?.expires_at ||
+    response.jsonBody?.expiresAt ||
+    ''
+  ).trim();
+  let expiresAtMs = Date.parse(expiresAtRaw);
+  if (!Number.isFinite(expiresAtMs)) {
+    const ttlSeconds = Number(response.jsonBody?.expires_in_seconds || response.jsonBody?.expiresInSeconds || 3600);
+    expiresAtMs = Date.now() + (Number.isFinite(ttlSeconds) ? ttlSeconds : 3600) * 1000;
+  }
+  setManagedAiSessionForEvent(event, {
+    token,
+    expiresAtMs,
+    model: String(response.jsonBody?.model || getManagedAiModel() || '').trim(),
+    provider: String(response.jsonBody?.provider || getManagedAiProvider() || 'managed').trim()
+  });
+
+  return {
+    success: true,
+    token,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    expiresAtMs,
+    provider: String(response.jsonBody?.provider || getManagedAiProvider() || 'managed').trim(),
+    model: String(response.jsonBody?.model || getManagedAiModel() || 'managed-ai').trim(),
+    cached: false
+  };
+}
+
+async function requestManagedAi(event, {
+  url,
+  method = 'GET',
+  headers = {},
+  body = null,
+  timeoutMs = 60000,
+  allowRefresh = true
+} = {}) {
+  const session = await fetchManagedAiSession(event);
+  if (!session.success) {
+    return {
+      statusCode: session.statusCode || 401,
+      rawBody: session.error || 'Managed AI session is unavailable.',
+      jsonBody: {
+        success: false,
+        error: session.error || 'Managed AI session is unavailable.'
+      }
+    };
+  }
+
+  const response = await requestHttps({
+    baseUrl: url,
+    path: '',
+    method,
+    headers: {
+      ...headers,
+      Authorization: `Bearer ${session.token}`,
+      'X-EmmaNeigh-Version': APP_VERSION,
+      'X-EmmaNeigh-Machine': MACHINE_ID
+    },
+    body,
+    timeoutMs
+  });
+
+  if ((response.statusCode === 401 || response.statusCode === 403) && allowRefresh) {
+    clearManagedAiSessionForEvent(event);
+    const refreshedSession = await fetchManagedAiSession(event, { forceRefresh: true });
+    if (!refreshedSession.success) {
+      return {
+        statusCode: refreshedSession.statusCode || response.statusCode || 401,
+        rawBody: refreshedSession.error || response.rawBody || '',
+        jsonBody: {
+          success: false,
+          error: refreshedSession.error || response.jsonBody?.error || 'Managed AI session refresh failed.'
+        }
+      };
+    }
+    return requestHttps({
+      baseUrl: url,
+      path: '',
+      method,
+      headers: {
+        ...headers,
+        Authorization: `Bearer ${refreshedSession.token}`,
+        'X-EmmaNeigh-Version': APP_VERSION,
+        'X-EmmaNeigh-Machine': MACHINE_ID
+      },
+      body,
+      timeoutMs
+    });
+  }
+
+  return response;
 }
 
 function canEventAccessAnalytics(event, requester = {}) {
@@ -743,6 +955,147 @@ function hasManagedAccessPolicyConfig() {
   );
 }
 
+function getManagedAiConfig() {
+  const envJson = getEnvJsonConfig('EMMANEIGH_MANAGED_AI_CONFIG_JSON');
+  if (envJson) {
+    const promptUrl = normalizeIngestUrl(
+      envJson.promptUrl ||
+      envJson.prompt_url ||
+      envJson.managedAiPromptUrl ||
+      envJson.managed_ai_prompt_url ||
+      envJson.url ||
+      ''
+    );
+    const agentUrl = normalizeIngestUrl(
+      envJson.agentUrl ||
+      envJson.agent_url ||
+      envJson.managedAiAgentUrl ||
+      envJson.managed_ai_agent_url ||
+      ''
+    );
+    const healthUrl = normalizeIngestUrl(
+      envJson.healthUrl ||
+      envJson.health_url ||
+      envJson.managedAiHealthUrl ||
+      envJson.managed_ai_health_url ||
+      promptUrl ||
+      ''
+    );
+    const sessionUrl = normalizeIngestUrl(
+      envJson.sessionUrl ||
+      envJson.session_url ||
+      envJson.managedAiSessionUrl ||
+      envJson.managed_ai_session_url ||
+      ''
+    );
+    if (promptUrl || agentUrl || healthUrl || sessionUrl) {
+      return {
+        source: 'environment',
+        provider: normalizeAIProvider(envJson.provider || envJson.mode || 'managed'),
+        model: String(envJson.model || envJson.defaultModel || '').trim(),
+        promptUrl,
+        agentUrl,
+        healthUrl,
+        sessionUrl
+      };
+    }
+  }
+
+  const bundled = loadBundledTelemetryConfig() || {};
+  const bundledConfig = bundled.managedAi || bundled.managed_ai || null;
+  if (bundledConfig && typeof bundledConfig === 'object') {
+    const promptUrl = normalizeIngestUrl(
+      bundledConfig.promptUrl ||
+      bundledConfig.prompt_url ||
+      bundledConfig.url ||
+      ''
+    );
+    const agentUrl = normalizeIngestUrl(
+      bundledConfig.agentUrl ||
+      bundledConfig.agent_url ||
+      ''
+    );
+    const healthUrl = normalizeIngestUrl(
+      bundledConfig.healthUrl ||
+      bundledConfig.health_url ||
+      promptUrl ||
+      ''
+    );
+    const sessionUrl = normalizeIngestUrl(
+      bundledConfig.sessionUrl ||
+      bundledConfig.session_url ||
+      ''
+    );
+    if (promptUrl || agentUrl || healthUrl || sessionUrl) {
+      return {
+        source: 'bundled',
+        provider: normalizeAIProvider(bundledConfig.provider || bundledConfig.mode || 'managed'),
+        model: String(bundledConfig.model || bundledConfig.defaultModel || '').trim(),
+        promptUrl,
+        agentUrl,
+        healthUrl,
+        sessionUrl
+      };
+    }
+  }
+
+  const promptUrl = normalizeIngestUrl(process.env.EMMANEIGH_MANAGED_AI_PROMPT_URL || '');
+  const agentUrl = normalizeIngestUrl(process.env.EMMANEIGH_MANAGED_AI_AGENT_URL || '');
+  const healthUrl = normalizeIngestUrl(process.env.EMMANEIGH_MANAGED_AI_HEALTH_URL || promptUrl || '');
+  const sessionUrl = normalizeIngestUrl(process.env.EMMANEIGH_MANAGED_AI_SESSION_URL || '');
+  if (promptUrl || agentUrl || healthUrl || sessionUrl) {
+    return {
+      source: 'environment',
+      provider: normalizeAIProvider(process.env.EMMANEIGH_MANAGED_AI_PROVIDER || 'managed'),
+      model: String(process.env.EMMANEIGH_MANAGED_AI_MODEL || '').trim(),
+      promptUrl,
+      agentUrl,
+      healthUrl,
+      sessionUrl
+    };
+  }
+
+  return {
+    source: 'none',
+    provider: 'managed',
+    model: '',
+    promptUrl: '',
+    agentUrl: '',
+    healthUrl: '',
+    sessionUrl: ''
+  };
+}
+
+function hasManagedAiConfig() {
+  const managed = getManagedAiConfig();
+  return !!(managed.promptUrl && managed.agentUrl && managed.sessionUrl);
+}
+
+function getManagedAiPromptUrl() {
+  return getManagedAiConfig().promptUrl || '';
+}
+
+function getManagedAiAgentUrl() {
+  return getManagedAiConfig().agentUrl || '';
+}
+
+function getManagedAiHealthUrl() {
+  const managed = getManagedAiConfig();
+  return managed.healthUrl || managed.promptUrl || '';
+}
+
+function getManagedAiSessionUrl() {
+  return getManagedAiConfig().sessionUrl || '';
+}
+
+function getManagedAiModel() {
+  return getManagedAiConfig().model || '';
+}
+
+function getManagedAiProvider() {
+  return normalizeAIProvider(getManagedAiConfig().provider || 'managed');
+}
+
 function hasManagedFirebaseConfig() {
   return !!getManagedFirebaseConfig().value;
 }
@@ -753,15 +1106,20 @@ function canEventManageSecuritySettings(event, requester = {}) {
 
 function getDeploymentSecurityStatus() {
   const managedFirebase = getManagedFirebaseConfig();
+  const managedAi = getManagedAiConfig();
   return {
     safeStorageAvailable: !!safeStorage.isEncryptionAvailable(),
     managedTelemetry: hasManagedTelemetryConfig(),
     managedAccessPolicy: hasManagedAccessPolicyConfig(),
+    managedAi: hasManagedAiConfig(),
     managedFirebase: !!managedFirebase.value,
     accessPolicyFailClosed: getAccessPolicyFailClosed(),
     allowedAiProviders: getAllowedAIProviders(),
+    managedAiProvider: managedAi.provider || 'managed',
+    managedAiModel: managedAi.model || '',
     telemetrySource: hasManagedTelemetryConfig() ? 'managed' : (getTelemetryIngestUrl() ? 'local' : 'none'),
     accessPolicySource: hasManagedAccessPolicyConfig() ? 'managed' : (getAccessPolicyUrl() ? 'local' : 'none'),
+    managedAiSource: managedAi.source || 'none',
     firebaseSource: managedFirebase.source === 'none'
       ? (loadFirebaseConfig() ? 'local' : 'none')
       : managedFirebase.source
@@ -1959,7 +2317,8 @@ function normalizeAIProvider(provider) {
   if (value === 'local' || value === 'built-in' || value === 'builtin' || value === 'local ai' || value === 'local-ai' || value === 'local pack' || value === 'localpack') return 'localai';
   if (value === 'chatgpt') return 'openai';
   if (value === 'claude') return 'anthropic';
-  if (value === 'localai' || value === 'ollama' || value === 'lmstudio' || value === 'anthropic' || value === 'openai' || value === 'harvey') return value;
+  if (value === 'managed ai' || value === 'managed-ai' || value === 'managed_remote' || value === 'managed-remote' || value === 'firm' || value === 'firm-managed' || value === 'firmmanaged') return 'managed';
+  if (value === 'localai' || value === 'ollama' || value === 'lmstudio' || value === 'anthropic' || value === 'openai' || value === 'harvey' || value === 'managed') return value;
   if (value === 'lm studio' || value === 'lm-studio') return 'lmstudio';
   return DEFAULT_AI_PROVIDER;
 }
@@ -2023,7 +2382,7 @@ function inferProviderFromApiKey(apiKey) {
 
 function resolveProviderForApiKey(provider, apiKey) {
   const preferred = normalizeAIProvider(provider);
-  if (isLocalProvider(preferred)) return preferred;
+  if (isLocalProvider(preferred) || preferred === 'managed') return preferred;
   const inferred = inferProviderFromApiKey(apiKey);
   return inferred || preferred;
 }
@@ -2034,7 +2393,7 @@ function resolveAiCallContext({ apiKey, requestedProvider }) {
   const inferredProvider = inferProviderFromApiKey(normalizedKey);
   const provider = resolveProviderForApiKey(preferredProvider, normalizedKey);
   const providerName = getAIProviderDisplayName(provider);
-  const providerAutoDetected = !isLocalProvider(preferredProvider) && !!(inferredProvider && inferredProvider !== preferredProvider);
+  const providerAutoDetected = preferredProvider !== 'managed' && !isLocalProvider(preferredProvider) && !!(inferredProvider && inferredProvider !== preferredProvider);
   const providerAutoDetectNote = providerAutoDetected
     ? `Selected provider did not match API key format; using ${providerName} automatically.`
     : null;
@@ -2050,6 +2409,8 @@ function resolveAiCallContext({ apiKey, requestedProvider }) {
 
 function getAIProviderDisplayName(provider) {
   switch (normalizeAIProvider(provider)) {
+    case 'managed':
+      return 'Managed AI';
     case 'localai':
       return 'Local AI';
     case 'ollama':
@@ -2060,8 +2421,10 @@ function getAIProviderDisplayName(provider) {
       return 'OpenAI';
     case 'harvey':
       return 'Harvey';
-    default:
+    case 'anthropic':
       return 'Anthropic';
+    default:
+      return 'Managed AI';
   }
 }
 
@@ -3413,8 +3776,53 @@ async function callLmStudioPrompt({ apiKey, prompt, maxTokens }) {
   });
 }
 
-async function callProviderPrompt({ provider, apiKey, prompt, maxTokens }) {
+async function callManagedAIPrompt({ event, prompt, maxTokens, system = '' }) {
+  const promptUrl = getManagedAiPromptUrl();
+  if (!promptUrl) {
+    return { success: false, error: 'Managed AI is not configured. Ask your administrator to deploy managed AI endpoints.' };
+  }
+
+  const response = await requestManagedAi(event, {
+    url: promptUrl,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      prompt,
+      system,
+      max_tokens: maxTokens,
+      model: getManagedAiModel() || undefined
+    }),
+    timeoutMs: 60000
+  });
+
+  if (response.statusCode !== 200) {
+    return { success: false, error: `Managed AI error (${response.statusCode || 0}): ${getErrorDetail(response)}` };
+  }
+
+  const text = String(
+    response.jsonBody?.text ||
+    response.jsonBody?.message ||
+    response.rawBody ||
+    ''
+  ).trim();
+  if (!text) {
+    return { success: false, error: 'Managed AI response was empty.' };
+  }
+
+  return {
+    success: true,
+    text,
+    modelUsed: String(response.jsonBody?.model || getManagedAiModel() || 'managed-ai').trim()
+  };
+}
+
+async function callProviderPrompt({ event, provider, apiKey, prompt, maxTokens }) {
   const normalized = resolveProviderForApiKey(provider, apiKey);
+  if (normalized === 'managed') {
+    return callManagedAIPrompt({ event, prompt, maxTokens });
+  }
   if (normalized === 'localai') {
     return callLocalAIPrompt({ prompt, maxTokens });
   }
@@ -3451,7 +3859,11 @@ function getProviderConnectionConfig(providerInput, apiKeyInput) {
   let healthPath = '/v1/models';
   let model = getClaudeModel();
 
-  if (provider === 'localai') {
+  if (provider === 'managed') {
+    baseUrl = getManagedAiHealthUrl();
+    healthPath = '';
+    model = getManagedAiModel() || 'managed-ai';
+  } else if (provider === 'localai') {
     baseUrl = getLocalAIBaseUrl();
     model = getLocalAIModel();
   } else if (provider === 'ollama') {
@@ -3483,10 +3895,56 @@ function getProviderConnectionConfig(providerInput, apiKeyInput) {
   };
 }
 
-async function runProviderHealthCheck(connectionConfig, apiKeyInput) {
+async function runProviderHealthCheck(connectionConfig, apiKeyInput, event = null) {
   const apiKey = String(apiKeyInput || '').trim();
   if (!connectionConfig) {
     return { ok: false, status: 'invalid_config', detail: 'Provider configuration missing.' };
+  }
+
+  if (connectionConfig.provider === 'managed') {
+    if (!connectionConfig.baseUrl) {
+      return {
+        ok: false,
+        status: 'not_configured',
+        statusCode: 0,
+        endpoint: '',
+        detail: 'Managed AI endpoint is not configured.'
+      };
+    }
+
+    if (!event) {
+      return {
+        ok: false,
+        status: 'session_required',
+        statusCode: 401,
+        endpoint: connectionConfig.healthEndpoint,
+        detail: 'Managed AI health checks require an active signed-in session.'
+      };
+    }
+
+    const response = await requestManagedAi(event, {
+      url: connectionConfig.baseUrl,
+      method: 'GET',
+      timeoutMs: 15000
+    });
+
+    if (response.statusCode === 200) {
+      return {
+        ok: true,
+        status: 'reachable',
+        statusCode: response.statusCode,
+        endpoint: connectionConfig.healthEndpoint,
+        detail: `Managed AI connection successful${connectionConfig.model ? ` using ${connectionConfig.model}` : ''}.`
+      };
+    }
+
+    return {
+      ok: false,
+      status: 'unreachable',
+      statusCode: response.statusCode || 0,
+      endpoint: connectionConfig.healthEndpoint,
+      detail: getErrorDetail(response)
+    };
   }
 
   if (isLocalProvider(connectionConfig.provider)) {
@@ -11465,6 +11923,7 @@ Respond with a JSON object containing:
 Respond ONLY with the JSON object, no other text.`;
 
     const aiResult = await callProviderPrompt({
+      event,
       provider,
       apiKey,
       prompt,
@@ -11687,6 +12146,7 @@ Rules:
 - Output valid JSON only.`;
 
     const aiResult = await callProviderPrompt({
+      event,
       provider,
       apiKey,
       prompt: plannerPrompt,
@@ -11796,6 +12256,7 @@ User request:
 ${prompt}`;
 
     const aiResult = await callProviderPrompt({
+      event,
       provider,
       apiKey,
       prompt: assistantPrompt,
@@ -11842,6 +12303,19 @@ function resolveAgentProvider() {
   const provider = getAIProvider();
   const apiKey = getApiKey();
   const isLocal = provider === 'localai' || provider === 'ollama' || provider === 'lmstudio';
+
+  if (provider === 'managed') {
+    const managedAgentUrl = getManagedAiAgentUrl();
+    if (managedAgentUrl) {
+      return {
+        mode: 'proxy',
+        provider: 'managed',
+        proxyUrl: managedAgentUrl,
+        proxyToken: '',
+        models: [getManagedAiModel()].filter(Boolean)
+      };
+    }
+  }
 
   // Local providers (Ollama, LM Studio) bypass proxy — they run on localhost
   if (!isLocal) {
@@ -12069,24 +12543,37 @@ ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the
       const conversationParts = [];
 
       for (let turn = 0; turn < maxToolTurns; turn += 1) {
-        const headers = { 'Content-Type': 'application/json' };
-        if (agentConfig.proxyToken) headers['Authorization'] = `Bearer ${agentConfig.proxyToken}`;
-        headers['X-EmmaNeigh-Version'] = APP_VERSION;
-        headers['X-EmmaNeigh-Machine'] = MACHINE_ID;
-
-        const response = await requestHttps({
-          baseUrl: agentConfig.proxyUrl,
-          path: '/v1/agent',
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            system: systemPrompt,
-            tools: COMMAND_TOOLS,
-            messages,
-            max_tokens: 1200
-          }),
-          timeoutMs: 60000
+        const proxyPath = agentConfig.provider === 'managed' ? '' : '/v1/agent';
+        const requestBody = JSON.stringify({
+          system: systemPrompt,
+          tools: COMMAND_TOOLS,
+          messages,
+          max_tokens: 1200
         });
+
+        const response = agentConfig.provider === 'managed'
+          ? await requestManagedAi(event, {
+              url: agentConfig.proxyUrl,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: requestBody,
+              timeoutMs: 60000
+            })
+          : await requestHttps({
+              baseUrl: agentConfig.proxyUrl,
+              path: proxyPath,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(agentConfig.proxyToken ? { Authorization: `Bearer ${agentConfig.proxyToken}` } : {}),
+                'X-EmmaNeigh-Version': APP_VERSION,
+                'X-EmmaNeigh-Machine': MACHINE_ID
+              },
+              body: requestBody,
+              timeoutMs: 60000
+            });
 
         if (response.statusCode !== 200) {
           if (isLikelyModelError(response)) break;
@@ -12417,7 +12904,7 @@ ipcMain.handle('agent-llm-diagnostics', async (event, payload) => {
     const requestedProvider = normalizeAIProvider(payload?.provider || getAIProvider());
     const apiKey = String(payload?.apiKey || getApiKey() || '').trim();
     const connection = getProviderConnectionConfig(requestedProvider, apiKey);
-    const health = await runProviderHealthCheck(connection, apiKey);
+    const health = await runProviderHealthCheck(connection, apiKey, event);
     return {
       success: true,
       ...connection,
@@ -12570,6 +13057,7 @@ EMAILS TO ANALYZE (${emailContext.length} emails):
 ${JSON.stringify(emailContext, null, 2)}`;
 
     const aiResult = await callProviderPrompt({
+      event,
       provider,
       apiKey,
       prompt: taskPrompt,
@@ -12704,6 +13192,20 @@ ipcMain.handle('test-api-key', async (event, payload) => {
     const provider = resolveProviderForApiKey(requestedProvider, apiKey);
     const providerLabel = getAIProviderDisplayName(provider);
     const providerAutoDetected = provider !== requestedProvider;
+
+    if (provider === 'managed') {
+      const connection = getProviderConnectionConfig('managed', '');
+      const health = await runProviderHealthCheck(connection, '', event);
+      if (health.ok) {
+        return {
+          success: true,
+          message: health.detail || 'Managed AI connection successful.',
+          provider,
+          model: connection.model
+        };
+      }
+      return { success: false, error: health.detail || 'Managed AI is unavailable.' };
+    }
 
     let response;
     if (provider === 'localai') {
@@ -12858,6 +13360,36 @@ ipcMain.handle('get-agent-config', async () => {
     models: config.models || [],
     allowedProviders: getAllowedAIProviders()
   };
+});
+
+ipcMain.handle('get-managed-ai-status', async (event) => {
+  try {
+    const config = getManagedAiConfig();
+    if (!config.promptUrl || !config.agentUrl || !config.sessionUrl) {
+      return {
+        success: true,
+        configured: false,
+        provider: getManagedAiProvider(),
+        model: getManagedAiModel(),
+        message: 'Managed AI is not configured in deployment settings.'
+      };
+    }
+    const connection = getProviderConnectionConfig('managed', '');
+    const health = await runProviderHealthCheck(connection, '', event);
+    return {
+      success: true,
+      configured: true,
+      provider: connection.provider,
+      providerName: connection.providerName,
+      model: connection.model,
+      promptUrl: config.promptUrl,
+      agentUrl: config.agentUrl,
+      sessionUrl: config.sessionUrl,
+      health
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // ========== USER ACCOUNT HANDLERS ==========
@@ -13902,6 +14434,10 @@ ipcMain.handle('get-setting', async (event, key) => {
   }
 });
 
+ipcMain.handle('get-ai-provider', async () => {
+  return { success: true, value: getAIProvider() };
+});
+
 ipcMain.handle('get-deployment-security-status', async (event, requester = {}) => {
   if (!canEventManageSecuritySettings(event, requester)) {
     return {
@@ -13910,9 +14446,11 @@ ipcMain.handle('get-deployment-security-status', async (event, requester = {}) =
         safeStorageAvailable: !!safeStorage.isEncryptionAvailable(),
         managedTelemetry: hasManagedTelemetryConfig(),
         managedAccessPolicy: hasManagedAccessPolicyConfig(),
+        managedAi: hasManagedAiConfig(),
         managedFirebase: hasManagedFirebaseConfig(),
         accessPolicyFailClosed: getAccessPolicyFailClosed(),
-        allowedAiProviders: getAllowedAIProviders()
+        allowedAiProviders: getAllowedAIProviders(),
+        managedAiSource: getManagedAiConfig().source || 'none'
       }
     };
   }
@@ -14173,7 +14711,9 @@ function getSettingValue(key, fallbackValue = null) {
 }
 
 function getAIProvider() {
-  return getEnforcedAIProvider(getSettingValue('ai_provider', DEFAULT_AI_PROVIDER));
+  const fallbackProvider = hasManagedAiConfig() ? 'managed' : DEFAULT_AI_PROVIDER;
+  const storedProvider = getSettingValue('ai_provider', '');
+  return getEnforcedAIProvider(storedProvider || fallbackProvider);
 }
 
 function initAIProvider() {
@@ -14631,24 +15171,40 @@ ipcMain.handle('update-checklist', async (event, config) => {
   });
   const { apiKey, provider, providerName, providerAutoDetectNote } = aiContext;
   const providerModel =
-    provider === 'openai' ? getOpenAIModel()
+    provider === 'managed' ? getManagedAiModel()
+    : provider === 'openai' ? getOpenAIModel()
     : provider === 'anthropic' ? getClaudeModel()
     : provider === 'localai' ? getLocalAIModel()
     : provider === 'ollama' ? getOllamaModel()
     : provider === 'lmstudio' ? getLmStudioModel()
     : '';
   let providerBaseUrl =
-    provider === 'harvey' ? getHarveyBaseUrl()
+    provider === 'managed' ? getManagedAiPromptUrl()
+    : provider === 'harvey' ? getHarveyBaseUrl()
     : provider === 'localai' ? getLocalAIBaseUrl()
     : provider === 'ollama' ? getOllamaBaseUrl()
     : provider === 'lmstudio' ? getLmStudioBaseUrl()
     : '';
+  let providerCredential = apiKey;
 
   if (providerRequiresApiKey(provider) && !apiKey) {
     return {
       success: false,
       error: `No API key configured. Please add your ${providerName} API key in Settings.`
     };
+  }
+  if (provider === 'managed' && !providerBaseUrl) {
+    return {
+      success: false,
+      error: 'Managed AI is not configured. Ask your administrator to deploy the managed AI prompt endpoint.'
+    };
+  }
+  if (provider === 'managed') {
+    const managedSession = await fetchManagedAiSession(event);
+    if (!managedSession.success) {
+      return { success: false, error: managedSession.error };
+    }
+    providerCredential = managedSession.token;
   }
   if (!checklistPath || !fs.existsSync(checklistPath)) {
     return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
@@ -14742,9 +15298,9 @@ ipcMain.handle('update-checklist', async (event, config) => {
     let args;
 
     if (app.isPackaged) {
-      args = [clModuleName, checklistPath, emailInputPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
+      args = [clModuleName, checklistPath, emailInputPath, outputFolder, providerCredential, provider, providerModel, providerBaseUrl];
     } else {
-      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailInputPath, outputFolder, apiKey, provider, providerModel, providerBaseUrl];
+      args = [clModuleName, path.join(__dirname, 'python', 'checklist_updater.py'), checklistPath, emailInputPath, outputFolder, providerCredential, provider, providerModel, providerBaseUrl];
     }
 
     if (providerAutoDetectNote) {
@@ -14819,24 +15375,40 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
   });
   const { apiKey, provider, providerName, providerAutoDetectNote } = aiContext;
   const providerModel =
-    provider === 'openai' ? getOpenAIModel()
+    provider === 'managed' ? getManagedAiModel()
+    : provider === 'openai' ? getOpenAIModel()
     : provider === 'anthropic' ? getClaudeModel()
     : provider === 'localai' ? getLocalAIModel()
     : provider === 'ollama' ? getOllamaModel()
     : provider === 'lmstudio' ? getLmStudioModel()
     : '';
   let providerBaseUrl =
-    provider === 'harvey' ? getHarveyBaseUrl()
+    provider === 'managed' ? getManagedAiPromptUrl()
+    : provider === 'harvey' ? getHarveyBaseUrl()
     : provider === 'localai' ? getLocalAIBaseUrl()
     : provider === 'ollama' ? getOllamaBaseUrl()
     : provider === 'lmstudio' ? getLmStudioBaseUrl()
     : '';
+  let providerCredential = apiKey;
 
   if (providerRequiresApiKey(provider) && !apiKey) {
     return {
       success: false,
       error: `No API key configured. Please add your ${providerName} API key in Settings.`
     };
+  }
+  if (provider === 'managed' && !providerBaseUrl) {
+    return {
+      success: false,
+      error: 'Managed AI is not configured. Ask your administrator to deploy the managed AI prompt endpoint.'
+    };
+  }
+  if (provider === 'managed') {
+    const managedSession = await fetchManagedAiSession(event);
+    if (!managedSession.success) {
+      return { success: false, error: managedSession.error };
+    }
+    providerCredential = managedSession.token;
   }
   if (!checklistPath || !fs.existsSync(checklistPath)) {
     return { success: false, error: 'Checklist file not found. Please select a valid .docx checklist.' };
@@ -14878,9 +15450,9 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
     const filtersJson = JSON.stringify(statusFilters || ['pending', 'review', 'signature']);
 
     if (app.isPackaged) {
-      args = [plModuleName, checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, providerBaseUrl];
+      args = [plModuleName, checklistPath, outputFolder, filtersJson, providerCredential, provider, providerModel, providerBaseUrl];
     } else {
-      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson, apiKey, provider, providerModel, providerBaseUrl];
+      args = [plModuleName, path.join(__dirname, 'python', 'punchlist_generator.py'), checklistPath, outputFolder, filtersJson, providerCredential, provider, providerModel, providerBaseUrl];
     }
 
     if (providerAutoDetectNote) {

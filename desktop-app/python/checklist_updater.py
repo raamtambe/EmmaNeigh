@@ -423,8 +423,10 @@ def normalize_provider(provider):
     value = str(provider or "").strip().lower()
     if value == "claude":
         return "anthropic"
-    if value in ("localai", "anthropic", "openai", "harvey", "ollama", "lmstudio"):
+    if value in ("managed", "localai", "anthropic", "openai", "harvey", "ollama", "lmstudio"):
         return value
+    if value in ("managed ai", "managed-ai", "managed remote", "managed-remote", "firm", "firm-managed", "firmmanaged"):
+        return "managed"
     if value in ("local", "local ai", "local-ai", "local pack", "localpack", "built-in", "builtin"):
         return "localai"
     if value in ("lm studio", "lm-studio"):
@@ -447,7 +449,7 @@ def infer_provider_from_api_key(api_key):
 
 def resolve_provider(provider, api_key):
     preferred = normalize_provider(provider)
-    if preferred in ("localai", "ollama", "lmstudio"):
+    if preferred in ("managed", "localai", "ollama", "lmstudio"):
         return preferred
     inferred = infer_provider_from_api_key(api_key)
     return inferred or preferred
@@ -811,6 +813,49 @@ def call_lmstudio_prompt(prompt, api_key, model_name, provider_base_url):
     )
 
 
+def call_managed_prompt(prompt, api_key, model_name, provider_base_url):
+    endpoint = str(provider_base_url or os.environ.get("MANAGED_AI_PROMPT_URL") or "").strip()
+    if not endpoint:
+        raise RuntimeError("Managed AI prompt endpoint is not configured.")
+
+    headers = {}
+    token = normalize_api_key(api_key)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    payload = {
+        "prompt": prompt,
+        "max_tokens": 2048,
+    }
+    if model_name:
+        payload["model"] = str(model_name).strip()
+
+    last_detail = "Unknown error"
+    for attempt_idx in range(MAX_HTTP_ATTEMPTS):
+        status_code, parsed, raw_text, network_error = perform_json_request(
+            endpoint,
+            headers,
+            payload,
+        )
+
+        if status_code != 200:
+            detail = parse_error_detail(raw_text, network_error=network_error)
+            last_detail = detail
+            if should_retry_request(status_code, detail) and attempt_idx < (MAX_HTTP_ATTEMPTS - 1):
+                backoff_sleep(attempt_idx)
+                continue
+            raise RuntimeError(format_provider_error("Managed AI", status_code, detail))
+
+        text = ""
+        if isinstance(parsed, dict):
+            text = str(parsed.get("text") or parsed.get("message") or "").strip()
+        if text:
+            return text, str(parsed.get("model") or model_name or "managed-ai").strip()
+        raise RuntimeError("Managed AI response was missing message content.")
+
+    raise RuntimeError(f"Managed AI error: {last_detail}")
+
+
 def call_harvey_prompt(prompt, api_key, max_tokens, provider_base_url):
     api_key = normalize_api_key(api_key)
     base_url = str(
@@ -864,7 +909,9 @@ def call_harvey_prompt(prompt, api_key, max_tokens, provider_base_url):
 
 def call_provider_prompt_json(prompt, api_key, provider, model_name=None, provider_base_url=None):
     provider_name = resolve_provider(provider, api_key)
-    if provider_name == "localai":
+    if provider_name == "managed":
+        response_text, _ = call_managed_prompt(prompt, api_key, model_name, provider_base_url)
+    elif provider_name == "localai":
         response_text, _ = call_localai_prompt(prompt, api_key, model_name, provider_base_url)
     elif provider_name == "openai":
         response_text, _ = call_openai_prompt(prompt, api_key, model_name)

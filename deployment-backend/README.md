@@ -12,7 +12,13 @@ This folder contains the minimum backend scaffolding to move EmmaNeigh away from
    - returns allow/block policy and admin-role data to the desktop app
    - supports a global policy doc plus identity-specific override docs
 
-3. locked-down Firestore rules
+3. `managedAiSession`, `managedAiHealth`, `managedAiPrompt`, `managedAiAgent`
+   - provide a server-held AI integration path
+   - keep the Groq API key on the backend, not in end-user machines
+   - issue short-lived managed AI session tokens after backend policy checks
+   - allow the desktop app to use a managed remote model without asking users for provider tokens
+
+4. locked-down Firestore rules
    - client access is denied by default
    - backend writes happen through the Admin SDK
 
@@ -52,8 +58,10 @@ Create these Firebase Functions secrets:
 
 - `EMMANEIGH_TELEMETRY_TOKEN`
 - `EMMANEIGH_ACCESS_POLICY_TOKEN`
+- `EMMANEIGH_SESSION_SIGNING_KEY`
+- `EMMANEIGH_GROQ_API_KEY`
 
-These are shared app-to-backend tokens. They are useful for basic endpoint protection, but they are not a substitute for true user authentication.
+`EMMANEIGH_SESSION_SIGNING_KEY` signs the short-lived managed AI session tokens returned by `managedAiSession`. Unlike the older shared-token model, this secret does not ship in the desktop app bundle.
 
 ## Local Setup
 
@@ -64,6 +72,8 @@ These are shared app-to-backend tokens. They are useful for basic endpoint prote
 5. Set the functions secrets:
    - `firebase functions:secrets:set EMMANEIGH_TELEMETRY_TOKEN`
    - `firebase functions:secrets:set EMMANEIGH_ACCESS_POLICY_TOKEN`
+   - `firebase functions:secrets:set EMMANEIGH_SESSION_SIGNING_KEY`
+   - `firebase functions:secrets:set EMMANEIGH_GROQ_API_KEY`
 6. Deploy:
    - `firebase deploy --only functions,firestore:rules`
 
@@ -78,11 +88,27 @@ Recommended config shape:
   "telemetryIngestUrl": "https://.../telemetryIngest",
   "accessPolicyUrl": "https://.../accessPolicy",
   "accessPolicyFailClosed": true,
-  "allowedAiProviders": ["localai", "anthropic", "openai"]
+  "allowedAiProviders": ["managed", "anthropic", "openai"],
+  "managedAi": {
+    "provider": "managed",
+    "model": "qwen/qwen3-32b",
+    "sessionUrl": "https://.../managedAiSession",
+    "promptUrl": "https://.../managedAiPrompt",
+    "agentUrl": "https://.../managedAiAgent",
+    "healthUrl": "https://.../managedAiHealth"
+  },
+  "firebaseConfig": {
+    "apiKey": "...",
+    "authDomain": "...",
+    "projectId": "...",
+    "storageBucket": "...",
+    "messagingSenderId": "...",
+    "appId": "..."
+  }
 }
 ```
 
-If you also want token-based protection, provide the matching tokens through managed deployment config, not end-user input.
+The managed AI block no longer needs a long-lived shared client token. EmmaNeigh signs in with the user’s email identity, requests a short-lived managed AI session from the backend, and keeps that token only in memory.
 
 ## Accounts To Create
 
@@ -98,3 +124,11 @@ For the current EmmaNeigh enterprise path, the admin should provision:
 ## Identity Provider Note
 
 This backend does not yet implement Microsoft Entra SSO. The right next step is to use Entra for administrator authentication and eventually user authentication, while keeping the app's current email identity only as a lightweight transitional mode.
+
+## Managed AI Note
+
+The current managed AI backend is implemented against Groq first, with the desktop app talking only to the backend endpoints. That gives you a free remote starting point without putting provider keys on user machines.
+
+The app-side contract is model/provider-agnostic, so later you can swap the backend implementation to Anthropic, OpenAI, or another provider without changing the desktop UX. The current implementation now issues short-lived backend session tokens for AI access instead of shipping a long-lived shared AI token in the app bundle.
+
+Important limitation: the desktop app still uses email-only identity today. That means the session token handling is now materially better, but true identity assurance still requires verified email or SSO.

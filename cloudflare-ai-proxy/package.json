@@ -1,0 +1,14 @@
+{
+  "name": "emmaneigh-cloudflare-ai-proxy",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cloudflare Worker proxy for EmmaNeigh managed AI",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

@@ -3599,6 +3599,7 @@
         <div style="margin-bottom: 8px;">
           <label style="font-size: 12px; color: #888; display: block; margin-bottom: 4px;">AI Provider</label>
           <select id="aiProviderSelect" style="width: 100%; padding: 8px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+            <option value="managed">Managed Remote AI (Firm)</option>
             <option value="localai">Local AI (Free, Recommended)</option>
             <option value="ollama">Ollama (Local, Recommended)</option>
             <option value="lmstudio">LM Studio (Local)</option>
@@ -3618,7 +3619,7 @@
           <button class="settings-btn settings-btn-secondary" id="testApiKeyBtn">Test Connection</button>
           <button class="settings-btn settings-btn-danger" id="deleteApiKeyBtn" style="display: none;">Delete</button>
         </div>
-        <p class="settings-info">
+        <p class="settings-info" id="providerConsoleHelp">
           Get your API key from <a href="#" id="providerConsoleLink">console.anthropic.com</a>.
           Your key is encrypted and stored locally.
         </p>
@@ -5285,6 +5286,7 @@
     const apiKeyActions = document.getElementById('apiKeyActions');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const apiKeyStatus = document.getElementById('apiKeyStatus');
+    const providerConsoleHelp = document.getElementById('providerConsoleHelp');
     const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
     const testApiKeyBtn = document.getElementById('testApiKeyBtn');
     const deleteApiKeyBtn = document.getElementById('deleteApiKeyBtn');
@@ -5322,6 +5324,14 @@
     const testFirebaseConfigBtn = document.getElementById('testFirebaseConfigBtn');
 
     const PROVIDER_META = {
+      managed: {
+        label: 'Managed AI',
+        title: 'Managed Remote AI',
+        placeholder: '',
+        consoleUrl: '',
+        consoleText: 'Managed by your organization backend',
+        requiresKey: false
+      },
       localai: {
         label: 'Local AI',
         title: 'Local AI (Free)',
@@ -5374,7 +5384,8 @@
 
     function normalizeProvider(provider) {
       const value = (provider || '').trim().toLowerCase();
-      if (value === 'localai' || value === 'ollama' || value === 'lmstudio' || value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'managed' || value === 'localai' || value === 'ollama' || value === 'lmstudio' || value === 'openai' || value === 'harvey' || value === 'anthropic') return value;
+      if (value === 'managed ai' || value === 'managed-ai' || value === 'managed remote' || value === 'managed-remote' || value === 'firm' || value === 'firm-managed' || value === 'firmmanaged') return 'managed';
       if (value === 'local' || value === 'built-in' || value === 'builtin' || value === 'local ai' || value === 'local-ai' || value === 'local pack' || value === 'localpack') return 'localai';
       if (value === 'lm studio' || value === 'lm-studio') return 'lmstudio';
       if (value === 'chatgpt') return 'openai';
@@ -5385,6 +5396,10 @@
     function isLocalProviderSelection(provider) {
       const normalized = normalizeProvider(provider);
       return normalized === 'localai' || normalized === 'ollama' || normalized === 'lmstudio';
+    }
+
+    function isManagedProviderSelection(provider) {
+      return normalizeProvider(provider) === 'managed';
     }
 
     function getSelectedProvider() {
@@ -5516,9 +5531,12 @@
       const provider = getSelectedProvider();
       const meta = getProviderMeta(provider);
       const localProvider = isLocalProviderSelection(provider);
+      const managedProvider = isManagedProviderSelection(provider);
 
       apiProviderTitle.textContent = `${meta.title}`;
-      if (provider === 'localai') {
+      if (managedProvider) {
+        apiKeyHelpText.textContent = 'AI is managed by your organization. Users do not enter API keys locally; EmmaNeigh uses the firm-managed backend.';
+      } else if (provider === 'localai') {
         apiKeyHelpText.textContent = 'Free local provider mode. EmmaNeigh can install and manage a local model for you, then you can switch to Claude, ChatGPT, Harvey, or another provider later.';
       } else if (provider === 'ollama') {
         apiKeyHelpText.textContent = 'Local provider mode. Save the base URL and model below. EmmaNeigh will try to start Ollama automatically, but you still need Ollama installed and at least one model pulled.';
@@ -5527,30 +5545,58 @@
       } else {
         apiKeyHelpText.textContent = `Required for AI-powered features like natural language search, checklist updates, and punchlist generation.`;
       }
-      apiKeyInputGroup.style.display = localProvider ? 'none' : '';
+      apiKeyInputGroup.style.display = (localProvider || managedProvider) ? 'none' : '';
       apiKeyActions.style.display = '';
       apiKeyInput.placeholder = apiKeyInput.value ? '••••••••••••••••' : meta.placeholder;
-      providerConsoleLink.textContent = meta.consoleText;
+      if (providerConsoleHelp) {
+        if (managedProvider) {
+          providerConsoleHelp.textContent = 'Managed by your organization backend. Users do not need to enter API keys.';
+        } else if (localProvider) {
+          providerConsoleHelp.textContent = 'No API key is required for local provider mode.';
+        } else {
+          providerConsoleHelp.innerHTML = `Get your API key from <a href="#" id="providerConsoleLink">${meta.consoleText}</a>. Your key is encrypted and stored locally.`;
+        }
+      }
+      const dynamicProviderConsoleLink = document.getElementById('providerConsoleLink');
+      if (dynamicProviderConsoleLink) {
+        dynamicProviderConsoleLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          const currentMeta = getProviderMeta(getSelectedProvider());
+          if (!currentMeta.consoleUrl) return;
+          ipcRenderer.openExternal(currentMeta.consoleUrl).catch((err) => {
+            apiKeyStatus.innerHTML = `<span style="color: #ef4444;">${(err && err.message) || 'Unable to open provider console.'}</span>`;
+          });
+        });
+      }
       claudeModelRow.style.display = provider === 'anthropic' ? '' : 'none';
       localAiConfigRow.style.display = provider === 'localai' ? '' : 'none';
       ollamaConfigRow.style.display = provider === 'ollama' ? '' : 'none';
       lmstudioConfigRow.style.display = provider === 'lmstudio' ? '' : 'none';
+      saveApiKeyBtn.style.display = managedProvider ? 'none' : '';
+      deleteApiKeyBtn.style.display = managedProvider ? 'none' : deleteApiKeyBtn.style.display;
       saveApiKeyBtn.textContent = localProvider ? 'Save Provider Settings' : 'Save Key';
       testApiKeyBtn.textContent = localProvider ? 'Test Local Connection' : 'Test Connection';
     }
 
     async function loadProviderSetting() {
+      let managedSecurityStatus = null;
+      let savedProviderValue = '';
       try {
         const result = await ipcRenderer.invoke('get-setting', 'ai_provider');
-        aiProviderSelect.value = normalizeProvider(result && result.success ? result.value : null);
+        savedProviderValue = result && result.success ? String(result.value || '').trim() : '';
+        aiProviderSelect.value = normalizeProvider(savedProviderValue || null);
       } catch (_) {
         aiProviderSelect.value = 'localai';
       }
       try {
         const securityResult = await ipcRenderer.invoke('get-deployment-security-status', getSecurityRequester());
-        applyAllowedProviderPolicy(securityResult && securityResult.success ? securityResult.status?.allowedAiProviders : []);
+        managedSecurityStatus = securityResult && securityResult.success ? securityResult.status : null;
+        applyAllowedProviderPolicy(managedSecurityStatus ? managedSecurityStatus.allowedAiProviders : []);
       } catch (_) {
         applyAllowedProviderPolicy([]);
+      }
+      if (!savedProviderValue && managedSecurityStatus && managedSecurityStatus.managedAi) {
+        aiProviderSelect.value = 'managed';
       }
       await loadLocalProviderSettings(aiProviderSelect.value);
       applyProviderUi();
@@ -5560,6 +5606,21 @@
     async function checkApiKeyStatus() {
       const provider = getSelectedProvider();
       const meta = getProviderMeta(provider);
+      if (isManagedProviderSelection(provider)) {
+        const result = await ipcRenderer.invoke('get-managed-ai-status');
+        if (result && result.success && result.configured) {
+          const detail = result.health && result.health.ok
+            ? (result.health.detail || 'Managed AI is connected.')
+            : ((result.health && result.health.detail) || 'Managed AI is configured.');
+          apiKeyStatus.innerHTML = `<span style="color: ${result.health && result.health.ok ? '#22c55e' : '#f59e0b'};">${detail}</span>`;
+          apiKeyStatus.className = 'api-key-status connected';
+        } else {
+          apiKeyStatus.innerHTML = `<span>${(result && (result.message || result.error)) || 'Managed AI is not configured.'}</span>`;
+          apiKeyStatus.className = 'api-key-status';
+        }
+        deleteApiKeyBtn.style.display = 'none';
+        return;
+      }
       if (isLocalProviderSelection(provider)) {
         apiKeyStatus.innerHTML = `<span style="color: #60a5fa;">${provider === 'localai' ? 'Local AI uses EmmaNeigh-managed local runtime settings. No API key is required.' : `${meta.label} uses local connection settings. API key is optional.`}</span>`;
         apiKeyStatus.className = 'api-key-status connected';
@@ -5685,7 +5746,11 @@
       parts.push(status.accessPolicyFailClosed ? 'Access policy is fail-closed.' : 'Access policy is fail-open.');
       parts.push(`Telemetry config: ${status.telemetrySource || 'unknown'}.`);
       parts.push(`Access policy config: ${status.accessPolicySource || 'unknown'}.`);
+      parts.push(`Managed AI config: ${status.managedAiSource || 'unknown'}.`);
       parts.push(`Tracking config: ${status.firebaseSource || 'unknown'}.`);
+      if (status.managedAi) {
+        parts.push(`Managed AI endpoint active${status.managedAiModel ? ` (${status.managedAiModel})` : ''}.`);
+      }
       if (Array.isArray(status.allowedAiProviders) && status.allowedAiProviders.length > 0) {
         parts.push(`Allowed AI providers: ${status.allowedAiProviders.join(', ')}.`);
       } else {
@@ -5984,6 +6049,11 @@
 
     saveApiKeyBtn.addEventListener('click', async () => {
       const provider = getSelectedProvider();
+      if (isManagedProviderSelection(provider)) {
+        apiKeyStatus.innerHTML = '<span style="color: #60a5fa;">Managed AI is configured by your administrator. No user API key is needed.</span>';
+        apiKeyStatus.className = 'api-key-status connected';
+        return;
+      }
       if (isLocalProviderSelection(provider)) {
         saveApiKeyBtn.disabled = true;
         saveApiKeyBtn.textContent = 'Saving...';
@@ -6032,11 +6102,11 @@
       let keyToTest = apiKeyInput.value.trim();
 
       // If no key in input, test the stored key
-      if (!keyToTest && !isLocalProviderSelection(provider)) {
+      if (!keyToTest && !isLocalProviderSelection(provider) && !isManagedProviderSelection(provider)) {
         keyToTest = await ipcRenderer.invoke('get-api-key-value');
       }
 
-      if (!keyToTest && !isLocalProviderSelection(provider)) {
+      if (!keyToTest && !isLocalProviderSelection(provider) && !isManagedProviderSelection(provider)) {
         apiKeyStatus.innerHTML = '<span style="color: #ef4444;">No API key to test</span>';
         return;
       }
@@ -6115,14 +6185,6 @@
         await checkApiKeyStatus();
         apiKeyStatus.innerHTML = '<span>API key deleted</span>';
       }
-    });
-
-    providerConsoleLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      const meta = getProviderMeta(getSelectedProvider());
-      ipcRenderer.openExternal(meta.consoleUrl).catch((err) => {
-        apiKeyStatus.innerHTML = `<span style="color: #ef4444;">${(err && err.message) || 'Unable to open provider console.'}</span>`;
-      });
     });
 
     aiProviderSelect.addEventListener('change', async () => {
@@ -6981,6 +7043,9 @@
     async function loadUserApiKey() {
       if (currentUser && !currentUser.isGuest && currentUser.id) {
         try {
+          if (isManagedProviderSelection(getSelectedProvider())) {
+            return;
+          }
           const result = await ipcRenderer.invoke('get-user-api-key', { userId: currentUser.id });
           if (result.success && result.apiKey) {
             // API key is available - update status display
@@ -8072,7 +8137,7 @@
         const query = promptText || 'Summarize key takeaways from the loaded emails.';
         let provider = 'localai';
         try {
-          const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
+          const providerResult = await ipcRenderer.invoke('get-ai-provider');
           provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'localai');
         } catch (_) {}
 
@@ -11009,13 +11074,13 @@
       if (!hasEmails) return;
       let provider = 'localai';
       try {
-        const providerResult = await ipcRenderer.invoke('get-setting', 'ai_provider');
+        const providerResult = await ipcRenderer.invoke('get-ai-provider');
         provider = normalizeProvider(providerResult && providerResult.success ? providerResult.value : 'localai');
       } catch (_) {}
       const providerLabel = getProviderMeta(provider).label;
 
       // Check if API key is configured
-      const providerNeedsApiKey = !isLocalProviderSelection(provider);
+      const providerNeedsApiKey = !!getProviderMeta(provider).requiresKey;
       const apiKeyResult = providerNeedsApiKey
         ? await ipcRenderer.invoke('get-api-key')
         : { hasKey: true };
