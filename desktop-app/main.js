@@ -5226,7 +5226,7 @@ ipcMain.handle('process-sigblocks', async (event, config) => {
 
 // Process execution version
 // originalsInput can be a folder path string (legacy) or { folder: string } or { files: string[] }
-// signedPath can be a folder path (new two-folder workflow) or a single PDF file (legacy)
+// signedPath can be a folder path, a single PDF file, or a string[] of signed PDF files
 ipcMain.handle('process-execution-version', async (event, originalsInput, signedPath) => {
   return new Promise((resolve, reject) => {
     const moduleName = 'execution_version';
@@ -5250,28 +5250,43 @@ ipcMain.handle('process-execution-version', async (event, originalsInput, signed
     let args;
     let configPath = null;
 
-    // Determine signed path type (folder vs file)
-    const signedIsFolder = fs.existsSync(signedPath) && fs.statSync(signedPath).isDirectory();
+    const signedIsFileList = Array.isArray(signedPath);
+    const signedIsFolder = typeof signedPath === 'string' && fs.existsSync(signedPath) && fs.statSync(signedPath).isDirectory();
+    const originalsIsFolderString = typeof originalsInput === 'string';
+    const originalsIsFolderObject = !!(originalsInput && originalsInput.folder);
+    const originalsIsFileList = !!(originalsInput && originalsInput.files);
+    const canUseDirectArgs = !signedIsFileList && (originalsIsFolderString || originalsIsFolderObject);
 
     // Handle different input types
-    if (typeof originalsInput === 'string') {
-      // Legacy: folder path string - pass directly
-      args = [originalsInput, signedPath];
-    } else if (originalsInput.folder) {
-      // Object with folder property
-      args = [originalsInput.folder, signedPath];
-    } else if (originalsInput.files) {
-      // List of individual files - need config file
+    if (canUseDirectArgs) {
+      args = [originalsIsFolderString ? originalsInput : originalsInput.folder, signedPath];
+    } else if (originalsIsFileList || originalsIsFolderString || originalsIsFolderObject) {
       configPath = path.join(app.getPath('temp'), `exec-config-${Date.now()}.json`);
-      const config = {
-        files: originalsInput.files
-      };
-      // Use signed_folder or signed_pdf based on path type
-      if (signedIsFolder) {
+      const config = {};
+
+      if (originalsIsFolderString) {
+        config.originals_folder = originalsInput;
+      } else if (originalsIsFolderObject) {
+        config.originals_folder = originalsInput.folder;
+      } else if (originalsIsFileList) {
+        config.files = originalsInput.files;
+      }
+
+      if (signedIsFileList) {
+        config.signed_files = signedPath;
+      } else if (signedIsFolder) {
         config.signed_folder = signedPath;
       } else {
         config.signed_pdf = signedPath;
       }
+
+      // When either side is supplied as loose files, write output to a persistent folder
+      // instead of a temporary working directory that may be cleaned up after processing.
+      if (originalsIsFileList || signedIsFileList) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        config.output_folder = path.join(app.getPath('downloads'), 'EmmaNeigh Execution Output', timestamp);
+      }
+
       fs.writeFileSync(configPath, JSON.stringify(config));
       args = ['--config', configPath];
     } else {
@@ -15403,6 +15418,7 @@ ipcMain.handle('update-checklist', async (event, config) => {
         emailSource,
         daysBack: emailSource === 'outlook' ? collectedEmailDaysBack : null,
         folderPaths: emailSource === 'outlook' ? (Array.isArray(config.folderPaths) ? config.folderPaths : []) : [],
+        warning: result.warning || '',
         error: result.error
       });
     });
@@ -15546,6 +15562,7 @@ ipcMain.handle('generate-punchlist', async (event, config) => {
         outputPath: result.output_path,
         itemCount: result.item_count,
         categories: result.categories,
+        warning: result.warning || '',
         error: result.error
       });
     });

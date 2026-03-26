@@ -893,20 +893,23 @@ def categorize_items_with_llm(
 
         return normalized
 
-    # Prepare items for the prompt.
-    items_for_prompt = [
-        {
-            "row_id": item.get('row_id'),
-            "document_name": item.get('document_name', ''),
-            "status": item.get('status', ''),
-            "party": item.get('party', ''),
-            "notes": item.get('notes', ''),
-            "row_context": item.get('row_context', ''),
-        }
-        for item in items[:100]  # Limit to 100 items
-    ]
+    normalized = {"by_row": {}, "by_doc": {}, "warnings": []}
 
-    prompt = f"""You are categorizing legal transaction checklist rows for a daily punchlist.
+    for start in range(0, len(items), 40):
+        batch = items[start:start + 40]
+        items_for_prompt = [
+            {
+                "row_id": item.get('row_id'),
+                "document_name": item.get('document_name', ''),
+                "status": item.get('status', ''),
+                "party": item.get('party', ''),
+                "notes": item.get('notes', ''),
+                "row_context": item.get('row_context', ''),
+            }
+            for item in batch
+        ]
+
+        prompt = f"""You are categorizing legal transaction checklist rows for a daily punchlist.
 
 For each row, classify into one of these categories:
 - "pending": Needs drafting, not started, to be drafted, TBD
@@ -921,6 +924,7 @@ Guidance:
 - Use document name + status + party + notes together; do not rely on exact header names.
 - If information is ambiguous but appears open, prefer "pending" over "executed".
 - If it is clearly signed/complete, use "executed".
+- Return EVERY row_id from the input exactly once.
 
 Return JSON only in this exact shape:
 {{
@@ -935,17 +939,25 @@ Return JSON only in this exact shape:
   ]
 }}
 
-Include EVERY row_id from the input exactly once.
 ONLY return JSON, no extra text."""
 
-    parsed = call_provider_prompt_json(
-        prompt,
-        api_key,
-        provider,
-        model_name=model_name,
-        provider_base_url=provider_base_url,
-    )
-    return normalize_response(parsed)
+        try:
+            parsed = call_provider_prompt_json(
+                prompt,
+                api_key,
+                provider,
+                model_name=model_name,
+                provider_base_url=provider_base_url,
+            )
+        except Exception as exc:
+            normalized["warnings"].append(str(exc))
+            continue
+
+        batch_result = normalize_response(parsed)
+        normalized["by_row"].update(batch_result.get("by_row", {}))
+        normalized["by_doc"].update(batch_result.get("by_doc", {}))
+
+    return normalized
 
 
 def parse_checklist_for_punchlist(doc):
@@ -1139,7 +1151,7 @@ def generate_punchlist(
             result['error'] = 'No checklist items found to categorize.'
             return result
 
-        # LLM categorization is mandatory for this workflow.
+        llm_warning = None
         try:
             llm_categories = categorize_items_with_llm(
                 all_items,
@@ -1149,8 +1161,8 @@ def generate_punchlist(
                 provider_base_url=provider_base_url,
             )
         except Exception as e:
-            result['error'] = f'LLM punchlist categorization failed: {e}'
-            return result
+            llm_categories = {"by_row": {}, "by_doc": {}, "warnings": [str(e)]}
+            llm_warning = str(e)
 
         # Categorize all items
         categorized_items = {cat: [] for cat in STATUS_CATEGORIES.keys()}
@@ -1305,6 +1317,7 @@ def generate_punchlist(
         result['categories'] = category_counts
         result['llm_assigned_count'] = llm_assigned_count
         result['fallback_assigned_count'] = fallback_assigned_count
+        result['warning'] = llm_warning or '; '.join((llm_categories or {}).get('warnings', []))
 
         return result
 

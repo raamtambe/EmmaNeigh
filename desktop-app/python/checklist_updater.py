@@ -164,6 +164,19 @@ NOTES_COLUMN_PATTERNS = [
     r'^details?',
 ]
 
+CHECKLIST_LLM_BATCH_SIZE = 16
+MAX_CANDIDATE_EMAILS_PER_ROW = 8
+MAX_EMAILS_PER_BATCH = 42
+SEARCH_TOKEN_STOPWORDS = {
+    'agreement', 'agreements', 'amendment', 'amended', 'and', 'annex', 'appendix',
+    'certificate', 'consent', 'copy', 'counsel', 'credit', 'date', 'document',
+    'documents', 'draft', 'email', 'exhibit', 'execution', 'final', 'for', 'from',
+    'guaranty', 'guarantee', 'hereof', 'incumbency', 'indenture', 'intercreditor',
+    'joinder', 'letter', 'loan', 'name', 'note', 'officer', 'page', 'pages',
+    'party', 'pledge', 'promissory', 'review', 'schedule', 'security', 'sent',
+    'signature', 'signed', 'status', 'the', 'title', 'version', 'with'
+}
+
 
 def normalize_email_record(raw_email):
     """Normalize one email record from CSV or JSON input."""
@@ -934,6 +947,182 @@ def normalize_cell_text(value):
     return re.sub(r'\s+', ' ', str(value or '')).strip()
 
 
+def normalize_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return default
+    if normalized in ('true', 'yes', 'y', '1', 'active', 'found'):
+        return True
+    if normalized in ('false', 'no', 'n', '0', 'none', 'not found'):
+        return False
+    return default
+
+
+def extract_search_tokens(text):
+    tokens = []
+    seen = set()
+    for token in re.findall(r'[a-z0-9]+', normalize_cell_text(text).lower()):
+        if len(token) < 3 or token in SEARCH_TOKEN_STOPWORDS:
+            continue
+        if token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def score_email_candidate(checklist_item, email):
+    searchable = str(email.get('searchable', '') or '').lower()
+    subject = str(email.get('subject', '') or '').lower()
+    attachments = str(email.get('attachments', '') or '').lower()
+    recipients = " ".join([
+        str(email.get('from', '') or ''),
+        str(email.get('to', '') or ''),
+        str(email.get('cc', '') or ''),
+    ]).lower()
+
+    doc_name = normalize_cell_text(checklist_item.get('document_name', '')).lower()
+    row_context = normalize_cell_text(checklist_item.get('row_context', '')).lower()
+    score = 0.0
+
+    if doc_name and doc_name in attachments:
+        score += 7.0
+    elif doc_name and doc_name in subject:
+        score += 5.5
+    elif doc_name and doc_name in searchable:
+        score += 4.0
+
+    doc_tokens = extract_search_tokens(doc_name)
+    context_tokens = extract_search_tokens(row_context)
+
+    doc_token_hits = 0
+    for token in doc_tokens:
+        if token in attachments:
+            score += 2.4
+            doc_token_hits += 1
+        elif token in subject:
+            score += 1.8
+            doc_token_hits += 1
+        elif token in searchable:
+            score += 0.9
+            doc_token_hits += 1
+
+    if doc_token_hits >= 2:
+        score += 1.6
+
+    context_hits = 0
+    for token in context_tokens[:8]:
+        if token in subject or token in attachments:
+            score += 0.9
+            context_hits += 1
+        elif token in recipients:
+            score += 0.6
+            context_hits += 1
+        elif token in searchable:
+            score += 0.35
+            context_hits += 1
+
+    if context_hits >= 2:
+        score += 0.7
+    if email.get('has_attachments'):
+        score += 0.2
+
+    return score
+
+
+def select_candidate_email_indices(checklist_item, emails, limit=MAX_CANDIDATE_EMAILS_PER_ROW):
+    scored = []
+    for idx, email in enumerate(emails):
+        score = score_email_candidate(checklist_item, email)
+        if score >= 1.2:
+            scored.append((idx, round(score, 4)))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return scored[:limit]
+
+
+def chunk_items(items, chunk_size):
+    for start in range(0, len(items), chunk_size):
+        yield items[start:start + chunk_size]
+
+
+def format_email_evidence(email):
+    if not isinstance(email, dict):
+        return ''
+
+    date_value = normalize_cell_text(
+        email.get('date_received') or email.get('date_sent') or email.get('date')
+    )
+    if date_value:
+        try:
+            parsed = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+            date_value = parsed.strftime('%m/%d/%Y')
+        except Exception:
+            date_value = date_value[:10]
+
+    direction = ''
+    sender = normalize_cell_text(email.get('from'))
+    recipients = normalize_cell_text(email.get('to'))
+    subject = normalize_cell_text(email.get('subject')) or 'No subject'
+    attachments = normalize_cell_text(email.get('attachments'))
+
+    if sender:
+        direction = f'from {sender}'
+    elif recipients:
+        direction = f'to {recipients}'
+
+    parts = [part for part in [date_value, direction, f'"{subject}"'] if part]
+    summary = " ".join(parts).strip()
+    if attachments:
+        summary = f"{summary} (attachments: {attachments[:140]})".strip()
+    return summary[:320]
+
+
+def build_checklist_comment(match, emails):
+    if not isinstance(match, dict):
+        return ''
+
+    llm_comment = normalize_cell_text(match.get('checklist_comment') or match.get('comment'))
+    evidence_parts = []
+    for idx in match.get('matching_email_indices', [])[:2]:
+        if 0 <= idx < len(emails):
+            evidence = format_email_evidence(emails[idx])
+            if evidence:
+                evidence_parts.append(evidence)
+
+    if llm_comment and evidence_parts:
+        return f"{llm_comment} Evidence: {'; '.join(evidence_parts)}"
+    if llm_comment:
+        return llm_comment
+    if evidence_parts:
+        status = normalize_cell_text(match.get('status'))
+        prefix = f"{status}: " if status else ''
+        return f"{prefix}{'; '.join(evidence_parts)}".strip()
+
+    reasoning = normalize_cell_text(match.get('reasoning'))
+    return reasoning[:400]
+
+
+def merge_checklist_comment(existing_text, new_comment):
+    existing = normalize_cell_text(existing_text)
+    comment = normalize_cell_text(new_comment)
+    if not comment:
+        return existing
+    generated = f"EmmaNeigh: {comment}"
+    if not existing:
+        return generated
+    if existing == generated or generated in existing:
+        return existing
+    if existing.startswith('EmmaNeigh:'):
+        return generated
+    return f"{existing} | {generated}"
+
+
 def infer_document_column(headers, rows):
     """
     Infer the document/title column when header names differ across templates/firms.
@@ -1009,6 +1198,7 @@ def score_header_candidate(all_rows, header_idx):
         'header_idx': header_idx,
         'doc_col': doc_col,
         'status_col': status_col,
+        'notes_col': notes_col,
     }
 
 
@@ -1018,10 +1208,10 @@ def parse_checklist_table(doc):
     and non-standard column names.
 
     Returns:
-        headers, rows, table, doc_col_idx, status_col_idx, data_row_start_idx
+        headers, rows, table, doc_col_idx, status_col_idx, notes_col_idx, data_row_start_idx
     """
     if not doc.tables:
-        return None, None, None, -1, -1, -1
+        return None, None, None, -1, -1, -1, -1
 
     best_candidate = None
 
@@ -1044,7 +1234,7 @@ def parse_checklist_table(doc):
                 best_candidate = candidate
 
     if not best_candidate:
-        return None, None, None, -1, -1, -1
+        return None, None, None, -1, -1, -1, -1
 
     table = best_candidate['table']
     all_rows = best_candidate['all_rows']
@@ -1060,7 +1250,9 @@ def parse_checklist_table(doc):
     if status_col_idx == -1:
         status_col_idx = len(headers)  # Signals "no existing status column".
 
-    return headers, rows, table, doc_col_idx, status_col_idx, header_idx + 1
+    notes_col_idx = best_candidate.get('notes_col', -1)
+
+    return headers, rows, table, doc_col_idx, status_col_idx, notes_col_idx, header_idx + 1
 
 
 def detect_document_status(doc_name, emails):
@@ -1131,8 +1323,6 @@ def normalize_checklist_llm_matches(raw_payload):
         if not isinstance(entry, dict):
             return None
         status = normalize_llm_status(entry.get("status"))
-        if not status:
-            return None
         raw_indices = entry.get("matching_email_indices", [])
         email_indices = []
         if isinstance(raw_indices, list):
@@ -1153,14 +1343,23 @@ def normalize_checklist_llm_matches(raw_payload):
 
         doc_name = str(entry.get("document_name") or default_doc_name or "").strip()
         row_id = _parse_row_id(entry.get("row_id"))
+        has_activity = normalize_bool(entry.get("has_activity"), default=bool(status or email_indices))
+        checklist_comment = str(
+            entry.get("checklist_comment") or entry.get("comment") or ""
+        ).strip()
+
+        if not doc_name and row_id is None:
+            return None
 
         return {
             "row_id": row_id,
             "document_name": doc_name,
             "status": status,
+            "has_activity": has_activity,
             "matching_email_indices": email_indices,
             "confidence": confidence,
             "reasoning": str(entry.get("reasoning") or "").strip(),
+            "checklist_comment": checklist_comment,
         }
 
     # New format: { "matches": [ ... ] }
@@ -1205,34 +1404,61 @@ def match_documents_with_llm(
     """
     if provider_requires_api_key(provider) and not api_key:
         raise ValueError("API key is required for checklist LLM analysis.")
+    normalized = {"by_row": {}, "by_doc": {}, "warnings": []}
 
-    # Prepare richer email context so the model can infer "sent", "under review", etc.
-    email_context = []
-    for i, email in enumerate(emails[:180]):
-        email_context.append({
-            "index": i,
-            "from": str(email.get("from", "") or "")[:160],
-            "to": str(email.get("to", "") or "")[:220],
-            "cc": str(email.get("cc", "") or "")[:220],
-            "subject": str(email.get("subject", "") or "")[:260],
-            "attachments": str(email.get("attachments", "") or "")[:260],
-            "has_attachments": bool(email.get("has_attachments", False)),
-            "date": email.get("date_received") or email.get("date_sent") or email.get("date") or "",
-            "body_preview": str(email.get("body", "") or "")[:700],
-        })
+    for batch in chunk_items(checklist_items[:220], CHECKLIST_LLM_BATCH_SIZE):
+        candidate_scores_by_row = {}
+        aggregate_scores = {}
 
-    checklist_context = []
-    for item in checklist_items[:220]:
-        checklist_context.append({
-            "row_id": item.get("row_id"),
-            "document_name": item.get("document_name", ""),
-            "current_status": item.get("current_status", ""),
-            "row_context": item.get("row_context", ""),
-        })
+        for item in batch:
+            row_id = item.get("row_id")
+            row_candidates = select_candidate_email_indices(item, emails)
+            candidate_scores_by_row[row_id] = row_candidates
+            for email_idx, score in row_candidates:
+                aggregate_scores[email_idx] = aggregate_scores.get(email_idx, 0.0) + score
 
-    prompt = f"""You are a legal transaction assistant updating a checklist from email evidence.
+        selected_email_indices = [
+            idx for idx, _ in sorted(
+                aggregate_scores.items(),
+                key=lambda pair: pair[1],
+                reverse=True,
+            )[:MAX_EMAILS_PER_BATCH]
+        ]
+        selected_index_set = set(selected_email_indices)
 
-Your task is to determine whether each checklist row shows real document activity in email and, if so, infer the best current status.
+        email_context = []
+        for email_idx in selected_email_indices:
+            email = emails[email_idx]
+            email_context.append({
+                "index": email_idx,
+                "from": str(email.get("from", "") or "")[:160],
+                "to": str(email.get("to", "") or "")[:220],
+                "cc": str(email.get("cc", "") or "")[:220],
+                "subject": str(email.get("subject", "") or "")[:260],
+                "attachments": str(email.get("attachments", "") or "")[:260],
+                "has_attachments": bool(email.get("has_attachments", False)),
+                "date": email.get("date_received") or email.get("date_sent") or email.get("date") or "",
+                "body_preview": str(email.get("body", "") or "")[:500],
+            })
+
+        checklist_context = []
+        for item in batch:
+            row_id = item.get("row_id")
+            candidate_indices = [
+                email_idx for email_idx, _ in candidate_scores_by_row.get(row_id, [])
+                if email_idx in selected_index_set
+            ]
+            checklist_context.append({
+                "row_id": row_id,
+                "document_name": item.get("document_name", ""),
+                "current_status": item.get("current_status", ""),
+                "row_context": item.get("row_context", ""),
+                "candidate_email_indices": candidate_indices,
+            })
+
+        prompt = f"""You are a legal transaction assistant updating a checklist from email evidence.
+
+For EACH checklist row, determine whether the listed emails show meaningful document activity.
 
 CHECKLIST ROWS:
 {json.dumps(checklist_context, indent=2)}
@@ -1240,7 +1466,7 @@ CHECKLIST ROWS:
 EMAILS:
 {json.dumps(email_context, indent=2)}
 
-Status options (use exactly one):
+Status options (use exactly one when there is activity):
 - "Pending Draft"
 - "Draft Circulated"
 - "With Opposing Counsel"
@@ -1249,16 +1475,18 @@ Status options (use exactly one):
 - "Executed"
 
 Interpretation guidance:
-- If a draft or markup was sent but external review is not clear: "Draft Circulated".
-- If it was sent to counterparty/opposing counsel/client for comments/review: "With Opposing Counsel".
-- If form is settled/final with no material open comments: "Agreed Form".
-- If ready for signatures or signature pages circulated: "Execution Version".
-- If fully signed / executed copies circulated: "Executed".
+- "Draft Circulated": a draft or markup was sent internally or generally circulated.
+- "With Opposing Counsel": sent to counterparty/opposing counsel/client for review or comments.
+- "Agreed Form": settled/final form with no material open comments.
+- "Execution Version": ready for signature, signature pages circulated, or sent for execution.
+- "Executed": fully signed, executed copies received, or executed versions circulated.
 
-Matching guidance:
-- Match by semantic meaning, abbreviations, related phrasing, and attachment names.
-- Do NOT require exact column/header text matches.
-- Ignore unrelated admin emails.
+Instructions:
+- Use the candidate_email_indices for each row as the most likely evidence.
+- Match by document meaning, abbreviations, attachment names, and signature-page language.
+- Distinguish whether the document was received, revised, sent out for review, or signed.
+- Ignore unrelated admin traffic.
+- Return EVERY row_id exactly once.
 
 Return JSON only in this exact shape:
 {{
@@ -1266,25 +1494,44 @@ Return JSON only in this exact shape:
     {{
       "row_id": 12,
       "document_name": "Credit Agreement",
+      "has_activity": true,
       "status": "With Opposing Counsel",
       "matching_email_indices": [3, 9],
       "confidence": 0.82,
-      "reasoning": "Email 3 sends draft to counterparty counsel for review."
+      "reasoning": "Emails 3 and 9 show a revised draft sent to buyer counsel for review.",
+      "checklist_comment": "Revised draft sent to buyer counsel for review."
+    }},
+    {{
+      "row_id": 13,
+      "document_name": "Security Agreement",
+      "has_activity": false,
+      "status": "",
+      "matching_email_indices": [],
+      "confidence": 0.12,
+      "reasoning": "No relevant document activity found in the listed emails.",
+      "checklist_comment": ""
     }}
   ]
 }}
-
-Include only rows with meaningful evidence from email. Do not include rows with no evidence.
 """
 
-    parsed = call_provider_prompt_json(
-        prompt,
-        api_key,
-        provider,
-        model_name=model_name,
-        provider_base_url=provider_base_url,
-    )
-    return normalize_checklist_llm_matches(parsed)
+        try:
+            parsed = call_provider_prompt_json(
+                prompt,
+                api_key,
+                provider,
+                model_name=model_name,
+                provider_base_url=provider_base_url,
+            )
+        except Exception as exc:
+            normalized["warnings"].append(str(exc))
+            continue
+
+        batch_matches = normalize_checklist_llm_matches(parsed)
+        normalized["by_row"].update(batch_matches.get("by_row", {}))
+        normalized["by_doc"].update(batch_matches.get("by_doc", {}))
+
+    return normalized
 
 
 def update_checklist(
@@ -1337,7 +1584,7 @@ def update_checklist(
         doc = Document(checklist_path)
 
         # Parse the checklist table
-        headers, rows, table, doc_col_idx, status_col_idx, data_row_start_idx = parse_checklist_table(doc)
+        headers, rows, table, doc_col_idx, status_col_idx, notes_col_idx, data_row_start_idx = parse_checklist_table(doc)
 
         if table is None:
             result['error'] = 'No table found in checklist document'
@@ -1380,6 +1627,10 @@ def update_checklist(
             if status_col_idx < len(row_data):
                 current_status = normalize_cell_text(row_data[status_col_idx])
 
+            existing_notes = ''
+            if notes_col_idx >= 0 and notes_col_idx < len(row_data):
+                existing_notes = normalize_cell_text(row_data[notes_col_idx])
+
             context_parts = []
             for col_idx, cell_value in enumerate(row_data):
                 if col_idx in (doc_col_idx, status_col_idx):
@@ -1397,6 +1648,7 @@ def update_checklist(
                 'row_id': data_row_start_idx + row_idx,
                 'document_name': doc_name,
                 'current_status': current_status,
+                'existing_notes': existing_notes,
                 'row_context': ' | '.join(context_parts[:8]),
                 'row_data': row_data,
             })
@@ -1406,6 +1658,7 @@ def update_checklist(
             return result
 
         # LLM matching is mandatory for checklist updates in this workflow.
+        llm_warning = None
         try:
             llm_matches = match_documents_with_llm(
                 checklist_items,
@@ -1416,8 +1669,8 @@ def update_checklist(
                 provider_base_url=provider_base_url,
             )
         except Exception as e:
-            result['error'] = f'LLM checklist analysis failed: {e}'
-            return result
+            llm_matches = {"by_row": {}, "by_doc": {}, "warnings": [str(e)]}
+            llm_warning = str(e)
 
         # Process each row
         items_updated = 0
@@ -1429,8 +1682,10 @@ def update_checklist(
             row_id = item.get('row_id')
 
             current_status = item.get('current_status', '')
+            existing_notes = item.get('existing_notes', '')
             new_status = None
             matching_emails = []
+            generated_comment = ''
 
             llm_result = None
             if isinstance(llm_matches, dict):
@@ -1440,36 +1695,60 @@ def update_checklist(
                 if not llm_result and isinstance(by_doc, dict):
                     llm_result = by_doc.get(canonical_doc_key(doc_name))
 
-            if llm_result:
+            if llm_result and llm_result.get('has_activity'):
                 new_status = normalize_llm_status(llm_result.get('status'))
+                generated_comment = build_checklist_comment(llm_result, emails)
                 # Get matching email subjects from indices
                 email_indices = llm_result.get('matching_email_indices', [])
                 for idx in email_indices[:3]:
                     if 0 <= idx < len(emails):
                         matching_emails.append(emails[idx].get('subject', 'No subject'))
+            else:
+                fallback_status, _, fallback_subjects = detect_document_status(doc_name, emails)
+                if fallback_status:
+                    new_status = fallback_status
+                    matching_emails = fallback_subjects[:3]
+                    generated_comment = f"Email activity indicates {fallback_status}. Example emails: {'; '.join(matching_emails[:2])}".strip()
 
-            if new_status and new_status != current_status:
-                # Update the cell in the table
-                if row_id is None or row_id < 0 or row_id >= len(table.rows):
-                    continue
-                table_row = table.rows[row_id]
-                if status_col_idx < len(table_row.cells):
-                    cell = table_row.cells[status_col_idx]
+            merged_comment = merge_checklist_comment(existing_notes, generated_comment)
+            status_changed = bool(new_status and new_status != current_status)
+            notes_changed = bool(merged_comment and merged_comment != existing_notes and notes_col_idx >= 0)
 
-                    # Preserve formatting, just update text
-                    if cell.paragraphs:
-                        cell.paragraphs[0].text = new_status
-                    else:
-                        cell.text = new_status
+            if not status_changed and not notes_changed:
+                continue
 
-                    items_updated += 1
-                    details.append({
-                        'document': doc_name,
-                        'old_status': current_status,
-                        'new_status': new_status,
-                        'confidence': llm_result.get('confidence') if isinstance(llm_result, dict) else None,
-                        'emails': matching_emails[:3]  # Limit to 3 examples
-                    })
+            if row_id is None or row_id < 0 or row_id >= len(table.rows):
+                continue
+
+            table_row = table.rows[row_id]
+            row_updated = False
+
+            if status_changed and status_col_idx < len(table_row.cells):
+                status_cell = table_row.cells[status_col_idx]
+                if status_cell.paragraphs:
+                    status_cell.paragraphs[0].text = new_status
+                else:
+                    status_cell.text = new_status
+                row_updated = True
+
+            if notes_changed and notes_col_idx < len(table_row.cells):
+                notes_cell = table_row.cells[notes_col_idx]
+                if notes_cell.paragraphs:
+                    notes_cell.paragraphs[0].text = merged_comment
+                else:
+                    notes_cell.text = merged_comment
+                row_updated = True
+
+            if row_updated:
+                items_updated += 1
+                details.append({
+                    'document': doc_name,
+                    'old_status': current_status,
+                    'new_status': new_status or current_status,
+                    'comment': merged_comment,
+                    'confidence': llm_result.get('confidence') if isinstance(llm_result, dict) else None,
+                    'emails': matching_emails[:3]
+                })
 
         # Save updated document
         os.makedirs(output_folder, exist_ok=True)
@@ -1486,7 +1765,11 @@ def update_checklist(
         result['items_updated'] = items_updated
         result['details'] = details
         result['emails_processed'] = len(emails)
-        result['llm_documents_with_activity'] = len((llm_matches or {}).get('by_row', {}))
+        result['llm_documents_with_activity'] = sum(
+            1 for item in (llm_matches or {}).get('by_row', {}).values()
+            if isinstance(item, dict) and item.get('has_activity')
+        )
+        result['warning'] = llm_warning or '; '.join((llm_matches or {}).get('warnings', []))
 
         return result
 

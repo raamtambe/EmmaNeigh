@@ -4104,14 +4104,15 @@
     <div id="executionTab" style="display: none;">
       <!-- Execution Inputs -->
       <div class="exec-inputs" id="execInputs">
-        <p class="subtitle" style="margin-bottom: 8px;">Merge signed DocuSign pages back into original agreements</p>
+        <p class="subtitle" style="margin-bottom: 8px;">Match signed DocuSign pages back to the correct agreement and replace the exact unsigned signature page</p>
+        <p class="input-hint" style="margin: 0 0 20px 0;">Upload many original agreements plus either one sig packet PDF, a folder of signed PDFs, or individual signed page PDFs. EmmaNeigh will match by footer, signature-block text, and page layout.</p>
 
         <div class="input-section" id="originalsInput">
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
           </svg>
           <p class="input-label">Original Agreements</p>
-          <p class="input-hint">Folder or individual PDF files</p>
+          <p class="input-hint">Folder or individual agreement PDFs</p>
           <p class="input-selected" id="originalsSelected"></p>
         </div>
 
@@ -4120,7 +4121,7 @@
             <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
           </svg>
           <p class="input-label">Signed Pages</p>
-          <p class="input-hint">Folder of signed PDFs or single combined PDF</p>
+          <p class="input-hint">Sig packet PDF, folder of signed PDFs, or individual signed page PDFs</p>
           <p class="input-selected" id="signedSelected"></p>
         </div>
 
@@ -8873,7 +8874,7 @@
     const execRetryBtn = document.getElementById('execRetryBtn');
 
     let originalsPath = null; // Can be folder path (string) or array of file paths
-    let signedPath = null;
+    let signedPath = null; // Can be folder path (string), single PDF path, or array of PDF paths
     let execResult = null;
     let execZipPath = null;
 
@@ -8886,7 +8887,8 @@
 
     function updateExecButton() {
       const hasOriginals = originalsPath && (typeof originalsPath === 'string' || originalsPath.length > 0);
-      processExecBtn.disabled = !(hasOriginals && signedPath);
+      const hasSigned = signedPath && (typeof signedPath === 'string' || signedPath.length > 0);
+      processExecBtn.disabled = !(hasOriginals && hasSigned);
     }
 
     function truncatePath(p, maxLen = 40) {
@@ -8905,6 +8907,19 @@
       } else {
         originalsSelected.textContent = `${originalsPath.length} file${originalsPath.length !== 1 ? 's' : ''} selected`;
         originalsInput.classList.add('selected');
+      }
+    }
+
+    function updateSignedDisplay() {
+      if (!signedPath) {
+        signedSelected.textContent = '';
+        signedInput.classList.remove('selected');
+      } else if (typeof signedPath === 'string') {
+        signedSelected.textContent = truncatePath(signedPath);
+        signedInput.classList.add('selected');
+      } else {
+        signedSelected.textContent = `${signedPath.length} file${signedPath.length !== 1 ? 's' : ''} selected`;
+        signedInput.classList.add('selected');
       }
     }
 
@@ -8962,20 +8977,19 @@
       }
     });
 
-    // Signed pages selection (folder or file)
+    // Signed pages selection (folder, single packet PDF, or multiple signed page PDFs)
     signedInput.addEventListener('click', async () => {
-      // Show choice dialog
-      const useFolder = confirm('Click OK to select a folder of signed PDFs, or Cancel to select a single combined PDF.');
-      let path;
+      const useFolder = confirm('Click OK to select a folder of signed PDFs, or Cancel to select one sig packet PDF or one/more signed PDF files.');
       if (useFolder) {
-        path = await ipcRenderer.invoke('select-folder');
+        signedPath = await ipcRenderer.invoke('select-folder');
       } else {
-        path = await ipcRenderer.invoke('select-pdf');
+        const paths = await ipcRenderer.invoke('select-pdfs-multiple');
+        if (paths && paths.length > 0) {
+          signedPath = paths.length === 1 ? paths[0] : paths;
+        }
       }
-      if (path) {
-        signedPath = path;
-        signedSelected.textContent = truncatePath(path);
-        signedInput.classList.add('selected');
+      if (signedPath) {
+        updateSignedDisplay();
         updateExecButton();
       }
     });
@@ -8994,17 +9008,18 @@
       signedInput.classList.remove('active');
       const files = e.dataTransfer.files;
       if (files.length > 0) {
-        // Check if it's a folder or PDF file
-        const firstFile = files[0];
-        if (firstFile.name.toLowerCase().endsWith('.pdf')) {
-          // Single PDF file
-          signedPath = firstFile.path;
+        const pdfPaths = Array.from(files)
+          .filter(f => f.name.toLowerCase().endsWith('.pdf'))
+          .map(f => f.path);
+
+        if (pdfPaths.length > 1) {
+          signedPath = pdfPaths;
+        } else if (pdfPaths.length === 1) {
+          signedPath = pdfPaths[0];
         } else {
-          // Assume it's a folder
-          signedPath = firstFile.path;
+          signedPath = files[0].path;
         }
-        signedSelected.textContent = truncatePath(signedPath);
-        signedInput.classList.add('selected');
+        updateSignedDisplay();
         updateExecButton();
       }
     });
@@ -9012,7 +9027,8 @@
     // Process execution version
     processExecBtn.addEventListener('click', async () => {
       const hasOriginals = originalsPath && (typeof originalsPath === 'string' || originalsPath.length > 0);
-      if (!hasOriginals || !signedPath) return;
+      const hasSigned = signedPath && (typeof signedPath === 'string' || signedPath.length > 0);
+      if (!hasOriginals || !hasSigned) return;
 
       showExecState('processing');
       execProgressFill.style.width = '0%';
@@ -9032,7 +9048,7 @@
 
         execResultText.textContent = `Created ${result.executedCount} executed document${result.executedCount !== 1 ? 's' : ''}`;
 
-        let summary = `Matched ${result.matchedPages} of ${result.totalSignedPages} signature pages`;
+        let summary = `Matched ${result.matchedPages} of ${result.totalSignedPages} signed page${result.totalSignedPages !== 1 ? 's' : ''} across ${result.matchedDocuments} of ${result.totalOriginalDocuments} agreement${result.totalOriginalDocuments !== 1 ? 's' : ''}`;
         if (result.matchedSchedules > 0) {
           summary += ` • ${result.matchedSchedules} schedule${result.matchedSchedules !== 1 ? 's' : ''} appended`;
         }
@@ -9041,6 +9057,9 @@
         }
         if (result.unmatchedPages > 0) {
           summary += ` • ${result.unmatchedPages} unmatched page${result.unmatchedPages !== 1 ? 's' : ''}`;
+        }
+        if (result.reportPath) {
+          summary += ' • match report included in output';
         }
         execResultSummary.textContent = summary;
 
@@ -9069,6 +9088,7 @@
       originalsInput.classList.remove('selected');
       signedInput.classList.remove('selected');
       updateOriginalsDisplay();
+      updateSignedDisplay();
       updateExecButton();
       showExecState('idle');
     }
@@ -11550,7 +11570,7 @@
           const sourceText = result.emailSource === 'outlook'
             ? `Outlook activity from the last ${result.daysBack || requestConfig.daysBack || checklistEmailLookbackDays} day${(result.daysBack || requestConfig.daysBack || checklistEmailLookbackDays) === 1 ? '' : 's'}`
             : 'the supplied email activity';
-          checklistResultText.textContent = `Updated ${result.itemsUpdated || 0} checklist items based on ${sourceText}`;
+          checklistResultText.textContent = `Updated ${result.itemsUpdated || 0} checklist row${(result.itemsUpdated || 0) === 1 ? '' : 's'} based on ${sourceText}${result.warning ? ' (AI fallback used for some items)' : ''}`;
           showChecklistState('complete');
           logUsage('update_checklist', 'complete', 2, result.itemsUpdated || 0);
         } else {
@@ -11720,7 +11740,7 @@
 
         if (result.success) {
           punchlistOutputPath = result.outputPath;
-          punchlistResultText.textContent = `Generated punchlist with ${result.itemCount || 0} open items`;
+          punchlistResultText.textContent = `Generated punchlist with ${result.itemCount || 0} open items${result.warning ? ' (AI fallback used for some items)' : ''}`;
           showPunchlistState('complete');
           logUsage('generate_punchlist', 'complete', 1, result.itemCount || 0);
         } else {
