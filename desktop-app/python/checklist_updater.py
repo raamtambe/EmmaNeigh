@@ -21,9 +21,15 @@ import urllib.request
 import uuid
 from datetime import datetime
 import pandas as pd
-from docx import Document
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+try:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+except ImportError:  # pragma: no cover - environment dependent
+    Document = None
+    Pt = None
+    Inches = None
+    WD_ALIGN_PARAGRAPH = None
 
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
@@ -164,9 +170,12 @@ NOTES_COLUMN_PATTERNS = [
     r'^details?',
 ]
 
-CHECKLIST_LLM_BATCH_SIZE = 16
+CHECKLIST_LLM_BATCH_SIZE = 10
 MAX_CANDIDATE_EMAILS_PER_ROW = 8
-MAX_EMAILS_PER_BATCH = 42
+MAX_CANDIDATE_THREADS_PER_ROW = 3
+MAX_THREAD_EVENTS_PER_SUMMARY = 4
+MAX_THREAD_ISSUES_PER_SUMMARY = 3
+HIGH_CONFIDENCE_THREAD_SCORE = 8.5
 SEARCH_TOKEN_STOPWORDS = {
     'agreement', 'agreements', 'amendment', 'amended', 'and', 'annex', 'appendix',
     'certificate', 'consent', 'copy', 'counsel', 'credit', 'date', 'document',
@@ -176,6 +185,24 @@ SEARCH_TOKEN_STOPWORDS = {
     'party', 'pledge', 'promissory', 'review', 'schedule', 'security', 'sent',
     'signature', 'signed', 'status', 'the', 'title', 'version', 'with'
 }
+DEAL_TOKEN_STOPWORDS = SEARCH_TOKEN_STOPWORDS | {
+    'buyer', 'seller', 'company', 'holdings', 'parent', 'merger', 'acquisition',
+    'closing', 'deal', 'transaction', 'group', 'corp', 'corporation', 'inc',
+    'llc', 'ltd', 'limited', 'lp', 'plc', 'co', 'drafts', 'checklist'
+}
+THREAD_SUBJECT_PREFIX_RE = re.compile(r'^\s*(?:(?:re|fw|fwd|aw|wg)\s*:\s*)+', re.IGNORECASE)
+THREAD_SUBJECT_TAG_RE = re.compile(r'^\s*\[[^\]]+\]\s*')
+ISSUE_KEYWORDS = (
+    'issue', 'issues', 'comment', 'comments', 'open point', 'outstanding', 'concern',
+    'concerns', 'requested', 'request', 'revise', 'revision', 'revisions', 'markup',
+    'redline', 'blackline', 'tbd', 'confirm', 'missing', 'need', 'needs', 'pending',
+    'question', 'questions', 'bracket', 'fix', 'update', 'change'
+)
+DOCUMENT_ACTIVITY_KEYWORDS = (
+    'attached', 'attachment', 'draft', 'revised draft', 'markup', 'redline',
+    'blackline', 'comments', 'execution version', 'executed', 'signed', 'for review',
+    'for signature', 'circulated'
+)
 
 
 def normalize_email_record(raw_email):
@@ -206,6 +233,11 @@ def normalize_email_record(raw_email):
         'attachments': attachment_text,
         'has_attachments': has_attachments,
         'date': str(raw_email.get('date', '') or '').strip(),
+        'folder': str(raw_email.get('folder', '') or '').strip(),
+        'root_folder': str(raw_email.get('root_folder', '') or '').strip(),
+        'entry_id': str(raw_email.get('entry_id', '') or '').strip(),
+        'conversation_id': str(raw_email.get('conversation_id', '') or '').strip(),
+        'conversation_topic': str(raw_email.get('conversation_topic', '') or '').strip(),
     }
 
     sent_value = str(raw_email.get('date_sent', raw_email.get('sent', '')) or '').strip()
@@ -228,6 +260,9 @@ def normalize_email_record(raw_email):
         email['to'],
         email['cc'],
         email['attachments'],
+        email['folder'],
+        email['root_folder'],
+        email['conversation_topic'],
     ]).lower()
     return email
 
@@ -976,6 +1011,350 @@ def extract_search_tokens(text):
     return tokens
 
 
+def extract_deal_tokens(text):
+    tokens = []
+    seen = set()
+    for token in re.findall(r'[a-z0-9]+', normalize_cell_text(text).lower()):
+        if len(token) < 4 or token in DEAL_TOKEN_STOPWORDS:
+            continue
+        if token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def dedupe_preserve_order(values):
+    items = []
+    seen = set()
+    for value in values:
+        cleaned = normalize_cell_text(value)
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(cleaned)
+    return items
+
+
+def split_attachment_names(raw_value):
+    return dedupe_preserve_order(re.split(r'[;,]', str(raw_value or '')))
+
+
+def split_recipients(raw_value):
+    return dedupe_preserve_order(re.split(r';', str(raw_value or '')))
+
+
+def parse_datetime_value(value):
+    text = normalize_cell_text(value)
+    if not text:
+        return None
+    for candidate in (text, text.replace('Z', '+00:00')):
+        try:
+            return datetime.fromisoformat(candidate)
+        except Exception:
+            continue
+    try:
+        parsed = pd.to_datetime(text, errors='coerce')
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime() if hasattr(parsed, 'to_pydatetime') else None
+    except Exception:
+        return None
+
+
+def format_date_value(value):
+    parsed = parse_datetime_value(value)
+    if parsed is not None:
+        try:
+            return parsed.strftime('%m/%d/%Y')
+        except Exception:
+            pass
+    text = normalize_cell_text(value)
+    return text[:10] if text else ''
+
+
+def strip_thread_subject_markers(subject):
+    text = normalize_cell_text(subject)
+    previous = None
+    while text and text != previous:
+        previous = text
+        text = THREAD_SUBJECT_PREFIX_RE.sub('', text)
+        text = THREAD_SUBJECT_TAG_RE.sub('', text)
+        text = normalize_cell_text(text)
+    return text
+
+
+def normalize_thread_subject(subject):
+    return strip_thread_subject_markers(subject).lower()
+
+
+def clean_email_body_for_analysis(body):
+    lines = []
+    header_lines_seen = 0
+    for raw_line in str(body or '').splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower_line = line.lower()
+        if line.startswith('>'):
+            continue
+        if re.match(r'^(from|sent|to|cc|subject):', lower_line):
+            header_lines_seen += 1
+            if header_lines_seen >= 2:
+                break
+            continue
+        if 'privileged and confidential' in lower_line or 'confidentiality notice' in lower_line:
+            break
+        lines.append(line)
+        if len(lines) >= 80:
+            break
+    return " ".join(lines)
+
+
+def extract_issue_snippets(text, limit=MAX_THREAD_ISSUES_PER_SUMMARY):
+    cleaned = clean_email_body_for_analysis(text)
+    if not cleaned:
+        return []
+
+    snippets = []
+    for piece in re.split(r'(?<=[.!?])\s+|\n+', cleaned):
+        snippet = normalize_cell_text(piece)
+        if len(snippet) < 25 or len(snippet) > 240:
+            continue
+        lower_snippet = snippet.lower()
+        if re.match(r'^(from|sent|to|cc|subject):', lower_snippet):
+            continue
+        if any(keyword in lower_snippet for keyword in ISSUE_KEYWORDS):
+            snippets.append(snippet)
+    return dedupe_preserve_order(snippets)[:limit]
+
+
+def infer_email_direction(email):
+    root_folder = normalize_cell_text(email.get('root_folder') or email.get('folder')).lower()
+    sender = normalize_cell_text(email.get('from')).lower()
+    if 'sent items' in root_folder or root_folder.endswith('sent items'):
+        return 'sent'
+    if sender in ('me', 'myself'):
+        return 'sent'
+    if email.get('date_sent') and not email.get('date_received'):
+        return 'sent'
+    return 'received'
+
+
+def short_party_label(text, fallback='someone'):
+    cleaned = normalize_cell_text(text)
+    if not cleaned:
+        return fallback
+    primary = re.split(r';', cleaned)[0].strip()
+    primary = re.sub(r'\s+', ' ', primary)
+    return primary[:80] if primary else fallback
+
+
+def highest_status_from_text(text):
+    searchable = str(text or '').lower()
+    best_status = None
+    best_priority = 0
+    for status_config in STATUS_PATTERNS:
+        for pattern in status_config['patterns']:
+            if re.search(pattern, searchable):
+                if status_config['priority'] > best_priority:
+                    best_status = status_config['status']
+                    best_priority = status_config['priority']
+                break
+    return best_status, best_priority
+
+
+def classify_email_activity(email):
+    searchable = str(email.get('searchable', '') or '').lower()
+    status, priority = highest_status_from_text(searchable)
+    has_document_activity = bool(email.get('has_attachments')) or any(
+        keyword in searchable for keyword in DOCUMENT_ACTIVITY_KEYWORDS
+    )
+    has_draft_language = 'draft' in searchable or ('revised' in searchable and bool(email.get('has_attachments')))
+    has_markup_language = any(
+        marker in searchable for marker in ('redline', 'blackline', 'markup', 'comments')
+    )
+
+    if status == 'Executed':
+        label = 'executed copy'
+    elif status == 'Execution Version':
+        label = 'execution version'
+    elif has_draft_language:
+        label = 'draft'
+    elif has_markup_language:
+        label = 'markup/comments'
+    elif 'draft' in searchable or has_document_activity:
+        label = 'draft'
+    else:
+        label = ''
+
+    return {
+        'status': status,
+        'priority': priority,
+        'has_document_activity': has_document_activity or bool(status),
+        'label': label,
+        'issue_snippets': extract_issue_snippets(email.get('body', '')),
+    }
+
+
+def build_email_activity_event(email):
+    activity = classify_email_activity(email)
+    direction = infer_email_direction(email)
+    counterparty = short_party_label(
+        email.get('to') if direction == 'sent' else email.get('from'),
+        fallback='counterparty',
+    )
+    date_text = format_date_value(email.get('date_received') or email.get('date_sent') or email.get('date'))
+    actor = 'Sent' if direction == 'sent' else 'Received'
+    preposition = 'to' if direction == 'sent' else 'from'
+    object_label = activity.get('label') or 'document update'
+
+    parts = [actor, object_label, preposition, counterparty]
+    sentence = " ".join(part for part in parts if part)
+    if date_text:
+        sentence = f"{sentence} on {date_text}"
+    sentence = sentence.strip()
+    if sentence and not sentence.endswith('.'):
+        sentence += '.'
+
+    return {
+        'text': sentence,
+        'direction': direction,
+        'party': counterparty,
+        'date': date_text,
+        'status': activity.get('status'),
+        'priority': activity.get('priority', 0),
+        'has_document_activity': activity.get('has_document_activity', False),
+        'issue_snippets': activity.get('issue_snippets', []),
+    }
+
+
+def build_deal_profile(checklist_path, checklist_items):
+    base_name = os.path.splitext(os.path.basename(str(checklist_path or '')))[0]
+    anchor_tokens = extract_deal_tokens(base_name)
+
+    token_counts = {}
+    for item in checklist_items[:250]:
+        combined = f"{item.get('document_name', '')} {item.get('row_context', '')}"
+        for token in extract_deal_tokens(combined):
+            token_counts[token] = token_counts.get(token, 0) + 1
+
+    shared_tokens = [
+        token for token, count in sorted(token_counts.items(), key=lambda item: (-item[1], item[0]))
+        if count >= 2 and token not in anchor_tokens
+    ]
+    anchor_tokens.extend(shared_tokens[:6])
+
+    return {
+        'base_name': base_name,
+        'anchor_tokens': anchor_tokens[:12],
+    }
+
+
+def build_thread_key(email, fallback_index):
+    conversation_id = normalize_cell_text(email.get('conversation_id'))
+    if conversation_id:
+        return f"conversation:{conversation_id.lower()}"
+
+    conversation_topic = normalize_thread_subject(email.get('conversation_topic'))
+    if conversation_topic:
+        return f"topic:{conversation_topic}"
+
+    subject_key = normalize_thread_subject(email.get('subject'))
+    if subject_key:
+        return f"subject:{subject_key}"
+
+    attachment_names = split_attachment_names(email.get('attachments'))
+    if attachment_names:
+        return f"attachment:{canonical_doc_key(os.path.splitext(attachment_names[0])[0])}"
+
+    entry_id = normalize_cell_text(email.get('entry_id'))
+    if entry_id:
+        return f"entry:{entry_id.lower()}"
+
+    return f"email:{fallback_index}"
+
+
+def build_email_threads(emails):
+    grouped = {}
+
+    for idx, raw_email in enumerate(emails):
+        email = dict(raw_email or {})
+        email['index'] = idx
+        email['sort_date'] = parse_datetime_value(
+            email.get('date_received') or email.get('date_sent') or email.get('date')
+        )
+        email['thread_subject'] = strip_thread_subject_markers(email.get('subject'))
+        email['activity_event'] = build_email_activity_event(email)
+        thread_key = build_thread_key(email, idx)
+        grouped.setdefault(thread_key, []).append(email)
+
+    threads = []
+    for thread_idx, (thread_key, thread_emails) in enumerate(grouped.items()):
+        thread_emails.sort(key=lambda item: (
+            item.get('sort_date') or datetime.min,
+            item.get('index', 0),
+        ))
+        latest_subject = next(
+            (normalize_cell_text(item.get('subject')) for item in reversed(thread_emails) if normalize_cell_text(item.get('subject'))),
+            thread_emails[-1].get('thread_subject', '') if thread_emails else ''
+        )
+        aggregate_searchable = " ".join(str(item.get('searchable', '') or '') for item in thread_emails)
+        attachment_names = []
+        participants = []
+        folders = []
+        root_folders = []
+        all_issue_snippets = []
+        status_signal = None
+        status_priority = 0
+
+        for email in thread_emails:
+            attachment_names.extend(split_attachment_names(email.get('attachments')))
+            participants.append(email.get('from'))
+            participants.extend(split_recipients(email.get('to')))
+            participants.extend(split_recipients(email.get('cc')))
+            folders.append(email.get('folder'))
+            root_folders.append(email.get('root_folder'))
+            all_issue_snippets.extend(email.get('activity_event', {}).get('issue_snippets', []))
+            email_priority = email.get('activity_event', {}).get('priority', 0)
+            if email_priority > status_priority:
+                status_priority = email_priority
+                status_signal = email.get('activity_event', {}).get('status')
+
+        first_email = thread_emails[0] if thread_emails else {}
+        last_email = thread_emails[-1] if thread_emails else {}
+        threads.append({
+            'thread_id': f"thread-{thread_idx + 1}",
+            'thread_key': thread_key,
+            'subject': latest_subject or first_email.get('thread_subject') or '',
+            'normalized_subject': normalize_thread_subject(latest_subject or first_email.get('thread_subject') or ''),
+            'searchable': aggregate_searchable.lower(),
+            'emails': thread_emails,
+            'message_count': len(thread_emails),
+            'folders': dedupe_preserve_order(folders),
+            'root_folders': dedupe_preserve_order(root_folders),
+            'participants': dedupe_preserve_order(participants)[:8],
+            'attachment_names': dedupe_preserve_order(attachment_names),
+            'attachments_text': " ".join(attachment_names).lower(),
+            'first_date': format_date_value(first_email.get('date_received') or first_email.get('date_sent') or first_email.get('date')),
+            'last_date': format_date_value(last_email.get('date_received') or last_email.get('date_sent') or last_email.get('date')),
+            'status_signal': status_signal,
+            'status_priority': status_priority,
+            'issue_snippets': dedupe_preserve_order(all_issue_snippets)[:MAX_THREAD_ISSUES_PER_SUMMARY],
+        })
+
+    threads.sort(
+        key=lambda thread: (
+            parse_datetime_value(thread.get('last_date')) or datetime.min,
+            thread.get('thread_id', ''),
+        ),
+        reverse=True,
+    )
+    return threads
+
+
 def score_email_candidate(checklist_item, email):
     searchable = str(email.get('searchable', '') or '').lower()
     subject = str(email.get('subject', '') or '').lower()
@@ -1046,6 +1425,178 @@ def select_candidate_email_indices(checklist_item, emails, limit=MAX_CANDIDATE_E
     return scored[:limit]
 
 
+def score_thread_candidate(checklist_item, thread, deal_profile=None):
+    doc_name = normalize_cell_text(checklist_item.get('document_name', '')).lower()
+    thread_subject = str(thread.get('subject', '') or '').lower()
+    thread_searchable = str(thread.get('searchable', '') or '').lower()
+    thread_attachments = str(thread.get('attachments_text', '') or '').lower()
+    relevant_email_scores = []
+
+    for email in thread.get('emails', []):
+        base_score = score_email_candidate(checklist_item, email)
+        if base_score >= 0.9:
+            relevant_email_scores.append((email.get('index', -1), round(base_score, 4)))
+
+    exact_doc_hit = bool(doc_name and (
+        doc_name in thread_attachments or
+        doc_name in thread_subject or
+        doc_name in thread_searchable
+    ))
+
+    score = 0.0
+    if relevant_email_scores:
+        relevant_email_scores.sort(key=lambda item: item[1], reverse=True)
+        score = relevant_email_scores[0][1]
+        score += sum(max(item[1] - 0.75, 0.0) * 0.35 for item in relevant_email_scores[1:3])
+        if len(relevant_email_scores) >= 2:
+            score += 1.2
+    elif exact_doc_hit:
+        score += 4.5
+
+    doc_tokens = extract_search_tokens(doc_name)
+    attachment_hits = sum(1 for token in doc_tokens[:8] if token in thread_attachments)
+    subject_hits = sum(1 for token in doc_tokens[:8] if token in thread_subject)
+    score += (attachment_hits * 0.9) + (subject_hits * 0.6)
+
+    deal_anchor_hits = []
+    if deal_profile and deal_profile.get('anchor_tokens'):
+        for token in deal_profile.get('anchor_tokens', []):
+            if token in thread_searchable:
+                deal_anchor_hits.append(token)
+        if deal_anchor_hits:
+            score += min(2.5, 0.8 * len(deal_anchor_hits))
+        elif score < 6.0:
+            score -= 1.8
+
+    score += min(1.0, 0.2 * max(0, int(thread.get('message_count', 0)) - 1))
+    score += min(0.6, 0.2 * len(thread.get('issue_snippets', [])))
+    if thread.get('status_priority', 0) > 0:
+        score += min(0.8, 0.2 * thread.get('status_priority', 0))
+
+    return {
+        'score': round(score, 4),
+        'relevant_email_indices': [idx for idx, _ in relevant_email_scores[:MAX_CANDIDATE_EMAILS_PER_ROW] if idx >= 0],
+        'email_scores': relevant_email_scores[:MAX_CANDIDATE_EMAILS_PER_ROW],
+        'deal_anchor_hits': deal_anchor_hits,
+        'exact_doc_hit': exact_doc_hit,
+    }
+
+
+def derive_candidate_status(relevant_emails, thread):
+    best_status = None
+    best_priority = 0
+    sent_count = 0
+    received_count = 0
+    issue_count = 0
+
+    for email in relevant_emails:
+        event = email.get('activity_event', {})
+        priority = int(event.get('priority', 0) or 0)
+        if priority > best_priority:
+            best_priority = priority
+            best_status = event.get('status')
+        if event.get('direction') == 'sent':
+            sent_count += 1
+        else:
+            received_count += 1
+        issue_count += len(event.get('issue_snippets', []))
+
+    if best_priority <= 1 and sent_count and (received_count or issue_count):
+        return 'With Opposing Counsel'
+    if best_status:
+        return best_status
+    if sent_count and (received_count or issue_count):
+        return 'With Opposing Counsel'
+    if sent_count and thread.get('message_count', 0) >= 1:
+        return 'With Opposing Counsel'
+    if received_count:
+        return 'Draft Circulated'
+    return thread.get('status_signal')
+
+
+def compose_candidate_comment(events, issues):
+    event_sentences = [normalize_cell_text(event) for event in events if normalize_cell_text(event)]
+    issue_sentences = [normalize_cell_text(issue) for issue in issues if normalize_cell_text(issue)]
+
+    comment = " ".join(event_sentences[:2]).strip()
+    if issue_sentences:
+        issues_text = "; ".join(issue_sentences[:2])
+        comment = f"{comment} Issues flagged: {issues_text}.".strip() if comment else f"Issues flagged: {issues_text}."
+    return comment.strip()
+
+
+def summarize_thread_for_row(checklist_item, thread, score_info):
+    relevant_index_set = set(score_info.get('relevant_email_indices', []))
+    relevant_emails = [
+        email for email in thread.get('emails', [])
+        if email.get('index') in relevant_index_set
+    ]
+    if not relevant_emails and score_info.get('exact_doc_hit'):
+        relevant_emails = thread.get('emails', [])[:MAX_THREAD_EVENTS_PER_SUMMARY]
+
+    relevant_emails = relevant_emails[:MAX_THREAD_EVENTS_PER_SUMMARY]
+    events = []
+    issues = []
+    matching_subjects = []
+    for email in relevant_emails:
+        event = email.get('activity_event', {})
+        event_text = normalize_cell_text(event.get('text'))
+        if event_text and event_text not in events:
+            events.append(event_text)
+        matching_subjects.append(normalize_cell_text(email.get('subject')) or 'No subject')
+        issues.extend(event.get('issue_snippets', []))
+
+    issues = dedupe_preserve_order(issues)[:MAX_THREAD_ISSUES_PER_SUMMARY]
+    status_signal = derive_candidate_status(relevant_emails, thread)
+    suggested_comment = compose_candidate_comment(events, issues)
+
+    return {
+        'thread_id': thread.get('thread_id'),
+        'score': score_info.get('score', 0.0),
+        'subject': thread.get('subject', ''),
+        'message_count': thread.get('message_count', 0),
+        'folders': thread.get('folders', []),
+        'participants': thread.get('participants', []),
+        'first_date': thread.get('first_date', ''),
+        'last_date': thread.get('last_date', ''),
+        'deal_anchor_hits': score_info.get('deal_anchor_hits', []),
+        'relevant_email_indices': score_info.get('relevant_email_indices', []),
+        'matching_subjects': dedupe_preserve_order(matching_subjects)[:3],
+        'events': events[:MAX_THREAD_EVENTS_PER_SUMMARY],
+        'issues': issues,
+        'status_signal': status_signal or '',
+        'exact_doc_hit': bool(score_info.get('exact_doc_hit')),
+        'suggested_comment': suggested_comment,
+    }
+
+
+def build_row_thread_candidates(checklist_path, checklist_items, emails):
+    deal_profile = build_deal_profile(checklist_path, checklist_items)
+    threads = build_email_threads(emails)
+    candidate_map = {}
+    thread_lookup = {thread.get('thread_id'): thread for thread in threads}
+
+    for item in checklist_items:
+        row_id = item.get('row_id')
+        thread_candidates = []
+        for thread in threads:
+            score_info = score_thread_candidate(item, thread, deal_profile=deal_profile)
+            if score_info.get('score', 0.0) < 2.0:
+                continue
+            thread_candidates.append(summarize_thread_for_row(item, thread, score_info))
+
+        thread_candidates.sort(
+            key=lambda candidate: (
+                float(candidate.get('score', 0.0)),
+                parse_datetime_value(candidate.get('last_date')) or datetime.min,
+            ),
+            reverse=True,
+        )
+        candidate_map[row_id] = thread_candidates[:MAX_CANDIDATE_THREADS_PER_ROW]
+
+    return candidate_map, thread_lookup, deal_profile
+
+
 def chunk_items(items, chunk_size):
     for start in range(0, len(items), chunk_size):
         yield items[start:start + chunk_size]
@@ -1083,15 +1634,41 @@ def format_email_evidence(email):
     return summary[:320]
 
 
-def build_checklist_comment(match, emails):
+def build_checklist_comment(match, row_candidates=None, emails=None):
     if not isinstance(match, dict):
         return ''
 
     llm_comment = normalize_cell_text(match.get('checklist_comment') or match.get('comment'))
+    candidate_lookup = {}
+    for candidate in row_candidates or []:
+        thread_id = normalize_cell_text(candidate.get('thread_id'))
+        if thread_id:
+            candidate_lookup[thread_id] = candidate
+
+    candidate_comments = []
+    candidate_subjects = []
+    for thread_id in match.get('matching_thread_ids', [])[:2]:
+        candidate = candidate_lookup.get(normalize_cell_text(thread_id))
+        if not isinstance(candidate, dict):
+            continue
+        comment = normalize_cell_text(candidate.get('suggested_comment'))
+        if comment:
+            candidate_comments.append(comment)
+        subject = normalize_cell_text(candidate.get('subject'))
+        if subject:
+            candidate_subjects.append(subject)
+
+    if candidate_comments:
+        deterministic_comment = " ".join(candidate_comments[:2]).strip()
+        if llm_comment and llm_comment.lower() not in deterministic_comment.lower():
+            return f"{deterministic_comment} Notes: {llm_comment}"
+        return deterministic_comment
+
     evidence_parts = []
+    email_items = emails or []
     for idx in match.get('matching_email_indices', [])[:2]:
-        if 0 <= idx < len(emails):
-            evidence = format_email_evidence(emails[idx])
+        if 0 <= idx < len(email_items):
+            evidence = format_email_evidence(email_items[idx])
             if evidence:
                 evidence_parts.append(evidence)
 
@@ -1099,6 +1676,10 @@ def build_checklist_comment(match, emails):
         return f"{llm_comment} Evidence: {'; '.join(evidence_parts)}"
     if llm_comment:
         return llm_comment
+    if candidate_subjects:
+        status = normalize_cell_text(match.get('status'))
+        prefix = f"{status}: " if status else ''
+        return f"{prefix}{'; '.join(candidate_subjects[:2])}".strip()
     if evidence_parts:
         status = normalize_cell_text(match.get('status'))
         prefix = f"{status}: " if status else ''
@@ -1333,6 +1914,13 @@ def normalize_checklist_llm_matches(raw_payload):
                     continue
                 if parsed_idx >= 0:
                     email_indices.append(parsed_idx)
+        raw_thread_ids = entry.get("matching_thread_ids", [])
+        thread_ids = []
+        if isinstance(raw_thread_ids, list):
+            for raw_thread_id in raw_thread_ids[:8]:
+                parsed_thread_id = str(raw_thread_id or "").strip()
+                if parsed_thread_id and parsed_thread_id not in thread_ids:
+                    thread_ids.append(parsed_thread_id)
 
         confidence = entry.get("confidence", 0.5)
         try:
@@ -1357,6 +1945,7 @@ def normalize_checklist_llm_matches(raw_payload):
             "status": status,
             "has_activity": has_activity,
             "matching_email_indices": email_indices,
+            "matching_thread_ids": thread_ids,
             "confidence": confidence,
             "reasoning": str(entry.get("reasoning") or "").strip(),
             "checklist_comment": checklist_comment,
@@ -1393,7 +1982,7 @@ def normalize_checklist_llm_matches(raw_payload):
 
 def match_documents_with_llm(
     checklist_items,
-    emails,
+    row_thread_candidates,
     api_key,
     provider="anthropic",
     model_name=None,
@@ -1407,64 +1996,61 @@ def match_documents_with_llm(
     normalized = {"by_row": {}, "by_doc": {}, "warnings": []}
 
     for batch in chunk_items(checklist_items[:220], CHECKLIST_LLM_BATCH_SIZE):
-        candidate_scores_by_row = {}
-        aggregate_scores = {}
-
-        for item in batch:
-            row_id = item.get("row_id")
-            row_candidates = select_candidate_email_indices(item, emails)
-            candidate_scores_by_row[row_id] = row_candidates
-            for email_idx, score in row_candidates:
-                aggregate_scores[email_idx] = aggregate_scores.get(email_idx, 0.0) + score
-
-        selected_email_indices = [
-            idx for idx, _ in sorted(
-                aggregate_scores.items(),
-                key=lambda pair: pair[1],
-                reverse=True,
-            )[:MAX_EMAILS_PER_BATCH]
-        ]
-        selected_index_set = set(selected_email_indices)
-
-        email_context = []
-        for email_idx in selected_email_indices:
-            email = emails[email_idx]
-            email_context.append({
-                "index": email_idx,
-                "from": str(email.get("from", "") or "")[:160],
-                "to": str(email.get("to", "") or "")[:220],
-                "cc": str(email.get("cc", "") or "")[:220],
-                "subject": str(email.get("subject", "") or "")[:260],
-                "attachments": str(email.get("attachments", "") or "")[:260],
-                "has_attachments": bool(email.get("has_attachments", False)),
-                "date": email.get("date_received") or email.get("date_sent") or email.get("date") or "",
-                "body_preview": str(email.get("body", "") or "")[:500],
-            })
-
         checklist_context = []
         for item in batch:
             row_id = item.get("row_id")
-            candidate_indices = [
-                email_idx for email_idx, _ in candidate_scores_by_row.get(row_id, [])
-                if email_idx in selected_index_set
-            ]
+            candidates = []
+            for candidate in (row_thread_candidates or {}).get(row_id, [])[:MAX_CANDIDATE_THREADS_PER_ROW]:
+                candidates.append({
+                    "thread_id": candidate.get("thread_id"),
+                    "score": candidate.get("score"),
+                    "subject": candidate.get("subject", ""),
+                    "message_count": candidate.get("message_count", 0),
+                    "folders": candidate.get("folders", []),
+                    "participants": candidate.get("participants", []),
+                    "date_range": {
+                        "first": candidate.get("first_date", ""),
+                        "last": candidate.get("last_date", ""),
+                    },
+                    "deal_anchor_hits": candidate.get("deal_anchor_hits", []),
+                    "status_signal": candidate.get("status_signal", ""),
+                    "matching_subjects": candidate.get("matching_subjects", []),
+                    "relevant_events": candidate.get("events", []),
+                    "issues": candidate.get("issues", []),
+                    "suggested_comment": candidate.get("suggested_comment", ""),
+                })
             checklist_context.append({
                 "row_id": row_id,
                 "document_name": item.get("document_name", ""),
                 "current_status": item.get("current_status", ""),
                 "row_context": item.get("row_context", ""),
-                "candidate_email_indices": candidate_indices,
+                "candidate_threads": candidates,
             })
+
+        if not any(row.get("candidate_threads") for row in checklist_context):
+            for item in batch:
+                row_id = item.get("row_id")
+                doc_name = item.get("document_name", "")
+                normalized["by_row"][row_id] = {
+                    "row_id": row_id,
+                    "document_name": doc_name,
+                    "status": "",
+                    "has_activity": False,
+                    "matching_email_indices": [],
+                    "matching_thread_ids": [],
+                    "confidence": 0.0,
+                    "reasoning": "No candidate threads were found for this checklist row.",
+                    "checklist_comment": "",
+                }
+                normalized["by_doc"][canonical_doc_key(doc_name)] = normalized["by_row"][row_id]
+            continue
 
         prompt = f"""You are a legal transaction assistant updating a checklist from email evidence.
 
-For EACH checklist row, determine whether the listed emails show meaningful document activity.
+For EACH checklist row, decide whether any candidate thread directly concerns the exact checklist document for the correct deal.
 
 CHECKLIST ROWS:
 {json.dumps(checklist_context, indent=2)}
-
-EMAILS:
-{json.dumps(email_context, indent=2)}
 
 Status options (use exactly one when there is activity):
 - "Pending Draft"
@@ -1482,10 +2068,11 @@ Interpretation guidance:
 - "Executed": fully signed, executed copies received, or executed versions circulated.
 
 Instructions:
-- Use the candidate_email_indices for each row as the most likely evidence.
-- Match by document meaning, abbreviations, attachment names, and signature-page language.
-- Distinguish whether the document was received, revised, sent out for review, or signed.
-- Ignore unrelated admin traffic.
+- Use ONLY the listed candidate_threads for each row.
+- A thread is relevant only if it is clearly about the same deal and the same checklist document, not just the same workstream.
+- Prefer threads with direct document cues, matching deal_anchor_hits, and concrete draft/execution events.
+- Ignore unrelated admin traffic, scheduling, or threads about different deal documents.
+- When there is activity, the checklist_comment should say who sent or received the draft/version, on what date, and note material issues or comments raised in the thread.
 - Return EVERY row_id exactly once.
 
 Return JSON only in this exact shape:
@@ -1496,19 +2083,19 @@ Return JSON only in this exact shape:
       "document_name": "Credit Agreement",
       "has_activity": true,
       "status": "With Opposing Counsel",
-      "matching_email_indices": [3, 9],
+      "matching_thread_ids": ["thread-2"],
       "confidence": 0.82,
-      "reasoning": "Emails 3 and 9 show a revised draft sent to buyer counsel for review.",
-      "checklist_comment": "Revised draft sent to buyer counsel for review."
+      "reasoning": "Thread 2 is for the same agreement and deal, and it shows a revised draft sent to buyer counsel for review.",
+      "checklist_comment": "Received revised draft from seller counsel on 03/11/2026 and sent markup to buyer counsel on 03/13/2026. Issues flagged: open point on working capital adjustment."
     }},
     {{
       "row_id": 13,
       "document_name": "Security Agreement",
       "has_activity": false,
       "status": "",
-      "matching_email_indices": [],
+      "matching_thread_ids": [],
       "confidence": 0.12,
-      "reasoning": "No relevant document activity found in the listed emails.",
+      "reasoning": "No candidate thread directly concerns this checklist row.",
       "checklist_comment": ""
     }}
   ]
@@ -1530,6 +2117,23 @@ Return JSON only in this exact shape:
         batch_matches = normalize_checklist_llm_matches(parsed)
         normalized["by_row"].update(batch_matches.get("by_row", {}))
         normalized["by_doc"].update(batch_matches.get("by_doc", {}))
+
+        for item in batch:
+            row_id = item.get("row_id")
+            doc_name = item.get("document_name", "")
+            if row_id not in normalized["by_row"]:
+                normalized["by_row"][row_id] = {
+                    "row_id": row_id,
+                    "document_name": doc_name,
+                    "status": "",
+                    "has_activity": False,
+                    "matching_email_indices": [],
+                    "matching_thread_ids": [],
+                    "confidence": 0.0,
+                    "reasoning": "Model did not return a decision for this row.",
+                    "checklist_comment": "",
+                }
+                normalized["by_doc"][canonical_doc_key(doc_name)] = normalized["by_row"][row_id]
 
     return normalized
 
@@ -1578,6 +2182,10 @@ def update_checklist(
         emails = parse_email_input(email_input_path)
         if not emails:
             result['error'] = 'No emails found in the supplied email activity.'
+            return result
+
+        if Document is None:
+            result['error'] = 'python-docx is required to update checklist documents in this environment.'
             return result
 
         # Open checklist document
@@ -1657,12 +2265,18 @@ def update_checklist(
             result['error'] = 'No checklist document names found to analyze.'
             return result
 
+        row_thread_candidates, _, deal_profile = build_row_thread_candidates(
+            checklist_path,
+            checklist_items,
+            emails,
+        )
+
         # LLM matching is mandatory for checklist updates in this workflow.
         llm_warning = None
         try:
             llm_matches = match_documents_with_llm(
                 checklist_items,
-                emails,
+                row_thread_candidates,
                 api_key,
                 provider=provider,
                 model_name=model_name,
@@ -1686,6 +2300,12 @@ def update_checklist(
             new_status = None
             matching_emails = []
             generated_comment = ''
+            row_candidates = row_thread_candidates.get(row_id, [])
+            row_candidate_lookup = {
+                normalize_cell_text(candidate.get('thread_id')): candidate
+                for candidate in row_candidates
+                if normalize_cell_text(candidate.get('thread_id'))
+            }
 
             llm_result = None
             if isinstance(llm_matches, dict):
@@ -1697,18 +2317,41 @@ def update_checklist(
 
             if llm_result and llm_result.get('has_activity'):
                 new_status = normalize_llm_status(llm_result.get('status'))
-                generated_comment = build_checklist_comment(llm_result, emails)
-                # Get matching email subjects from indices
-                email_indices = llm_result.get('matching_email_indices', [])
-                for idx in email_indices[:3]:
-                    if 0 <= idx < len(emails):
-                        matching_emails.append(emails[idx].get('subject', 'No subject'))
+                matching_thread_ids = llm_result.get('matching_thread_ids', [])
+                if not new_status and matching_thread_ids:
+                    primary_candidate = row_candidate_lookup.get(normalize_cell_text(matching_thread_ids[0]))
+                    if isinstance(primary_candidate, dict):
+                        new_status = normalize_llm_status(primary_candidate.get('status_signal'))
+
+                generated_comment = build_checklist_comment(
+                    llm_result,
+                    row_candidates=row_candidates,
+                    emails=emails,
+                )
+
+                for thread_id in matching_thread_ids[:2]:
+                    candidate = row_candidate_lookup.get(normalize_cell_text(thread_id))
+                    if not isinstance(candidate, dict):
+                        continue
+                    matching_emails.extend(candidate.get('matching_subjects', [])[:2])
+
+                if not matching_emails:
+                    email_indices = llm_result.get('matching_email_indices', [])
+                    for idx in email_indices[:3]:
+                        if 0 <= idx < len(emails):
+                            matching_emails.append(emails[idx].get('subject', 'No subject'))
             else:
-                fallback_status, _, fallback_subjects = detect_document_status(doc_name, emails)
-                if fallback_status:
-                    new_status = fallback_status
-                    matching_emails = fallback_subjects[:3]
-                    generated_comment = f"Email activity indicates {fallback_status}. Example emails: {'; '.join(matching_emails[:2])}".strip()
+                strongest_candidate = row_candidates[0] if row_candidates else None
+                if strongest_candidate and float(strongest_candidate.get('score', 0.0) or 0.0) >= HIGH_CONFIDENCE_THREAD_SCORE:
+                    new_status = normalize_llm_status(strongest_candidate.get('status_signal')) or 'Draft Circulated'
+                    generated_comment = normalize_cell_text(strongest_candidate.get('suggested_comment'))
+                    matching_emails = strongest_candidate.get('matching_subjects', [])[:3]
+                else:
+                    fallback_status, _, fallback_subjects = detect_document_status(doc_name, emails)
+                    if fallback_status:
+                        new_status = fallback_status
+                        matching_emails = fallback_subjects[:3]
+                        generated_comment = f"Email activity indicates {fallback_status}. Example emails: {'; '.join(matching_emails[:2])}".strip()
 
             merged_comment = merge_checklist_comment(existing_notes, generated_comment)
             status_changed = bool(new_status and new_status != current_status)
@@ -1769,6 +2412,7 @@ def update_checklist(
             1 for item in (llm_matches or {}).get('by_row', {}).values()
             if isinstance(item, dict) and item.get('has_activity')
         )
+        result['deal_anchor_tokens'] = (deal_profile or {}).get('anchor_tokens', [])
         result['warning'] = llm_warning or '; '.join((llm_matches or {}).get('warnings', []))
 
         return result

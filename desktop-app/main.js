@@ -3883,6 +3883,398 @@ async function callProviderPrompt({ event, provider, apiKey, prompt, maxTokens }
   return callAnthropicPrompt({ apiKey, prompt, maxTokens });
 }
 
+const DOCUMENT_EDIT_EXTENSIONS = new Set(['pdf', 'docx']);
+
+function isDocumentEditExtension(value) {
+  const ext = String(value || '').trim().toLowerCase().replace(/^\./, '');
+  return DOCUMENT_EDIT_EXTENSIONS.has(ext);
+}
+
+function getDocumentEditAttachments(attachments = []) {
+  return (Array.isArray(attachments) ? attachments : []).filter((file) => isDocumentEditExtension(file && file.ext));
+}
+
+function getDevPythonCommand() {
+  const explicit = String(process.env.PYTHON || '').trim();
+  if (explicit) return explicit;
+  const candidates = process.platform === 'win32'
+    ? ['py', 'python']
+    : ['python3', 'python'];
+  for (const candidate of candidates) {
+    const resolved = findExecutableOnPath(candidate);
+    if (resolved) return resolved;
+  }
+  return '';
+}
+
+function buildDocumentEditOutputPath(filePath, requestedOutputFolder = '') {
+  const resolvedPath = resolveExistingLocalPath(filePath);
+  const outputFolder = normalizeLocalPath(requestedOutputFolder) || path.dirname(resolvedPath);
+  fs.mkdirSync(outputFolder, { recursive: true });
+
+  const parsed = path.parse(resolvedPath);
+  const safeStem = sanitizeFilenameSegment(parsed.name, 'document');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let candidate = path.join(outputFolder, `${safeStem}_edited_${timestamp}${parsed.ext}`);
+  let counter = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(outputFolder, `${safeStem}_edited_${timestamp}_${counter}${parsed.ext}`);
+    counter += 1;
+  }
+  return candidate;
+}
+
+function buildDocumentEditPlanningPrompt({ instructions, filePath, excerptText, extractedTextTruncated }) {
+  const parsed = path.parse(filePath || '');
+  const fileName = parsed.base || 'document';
+  const fileExt = String(parsed.ext || '').replace(/^\./, '').toLowerCase() || 'unknown';
+
+  return `You are preparing deterministic document edits for EmmaNeigh.
+Your job is to convert a user's requested document changes into exact visible-text replacements.
+
+Return JSON only with this exact shape:
+{
+  "needs_clarification": false,
+  "clarification_question": "",
+  "warnings": [],
+  "edits": [
+    {
+      "find_text": "exact text currently visible in the document",
+      "replace_text": "new text to substitute",
+      "reason": "short explanation"
+    }
+  ]
+}
+
+Rules:
+- Only propose exact literal replacements.
+- Only use find_text that appears verbatim in the document excerpt.
+- Prefer the smallest exact span that safely implements the requested change.
+- If the request cannot be implemented reliably as exact text substitutions from the excerpt, set needs_clarification to true and leave edits empty.
+- Do not mention running a redline; EmmaNeigh will do that automatically after editing.
+- Do not invent that a change already happened.
+- Keep warnings short and practical.
+
+Document name: ${fileName}
+Document type: ${fileExt.toUpperCase()}
+Excerpt truncated: ${extractedTextTruncated ? 'yes' : 'no'}
+
+User instruction:
+${instructions}
+
+Document excerpt:
+"""${excerptText}"""`;
+}
+
+function normalizeDocumentEditPlan(rawPlan) {
+  const candidate = rawPlan && typeof rawPlan === 'object' ? rawPlan : {};
+  const normalized = {
+    needs_clarification: !!candidate.needs_clarification,
+    clarification_question: String(candidate.clarification_question || '').trim(),
+    warnings: Array.isArray(candidate.warnings)
+      ? candidate.warnings.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8)
+      : [],
+    edits: []
+  };
+
+  const seen = new Set();
+  const edits = Array.isArray(candidate.edits) ? candidate.edits : [];
+  for (const item of edits) {
+    if (!item || typeof item !== 'object') continue;
+    const findText = String(item.find_text || '').trim();
+    const replaceText = String(item.replace_text || '');
+    const reason = String(item.reason || '').trim();
+    if (!findText || findText.length < 2) continue;
+    if (findText === replaceText) continue;
+    const key = `${findText}\n${replaceText}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.edits.push({
+      find_text: findText,
+      replace_text: replaceText,
+      reason
+    });
+    if (normalized.edits.length >= 20) break;
+  }
+
+  return normalized;
+}
+
+function createDocumentEditFailure(message, extra = {}) {
+  return {
+    success: false,
+    error: String(message || 'Document edit failed.').trim(),
+    ...extra
+  };
+}
+
+function summarizeDocumentEditWarnings(warnings = []) {
+  return Array.isArray(warnings)
+    ? warnings.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+}
+
+async function runDocumentEditorProcessor(config = {}) {
+  return await new Promise((resolve, reject) => {
+    const moduleName = 'document_editor';
+    const configPath = path.join(app.getPath('temp'), `document-editor-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`);
+    fs.writeFileSync(configPath, JSON.stringify(config));
+
+    const cleanup = () => {
+      try { fs.unlinkSync(configPath); } catch (_) {}
+    };
+
+    let command = '';
+    let args = [];
+    if (app.isPackaged) {
+      const processorPath = getProcessorPath(moduleName);
+      if (!processorPath) {
+        cleanup();
+        reject(new Error('Document editor processor is not available.'));
+        return;
+      }
+      if (!fs.existsSync(processorPath)) {
+        cleanup();
+        reject(new Error('Processor not found: ' + processorPath));
+        return;
+      }
+      if (process.platform === 'darwin') {
+        try { fs.chmodSync(processorPath, '755'); } catch (_) {}
+      }
+      command = processorPath;
+      args = [moduleName, configPath];
+    } else {
+      const pythonCommand = getDevPythonCommand();
+      const scriptPath = path.join(__dirname, 'python', 'document_editor.py');
+      if (!pythonCommand) {
+        cleanup();
+        reject(new Error('Python is not available for document editing in development mode.'));
+        return;
+      }
+      if (!fs.existsSync(scriptPath)) {
+        cleanup();
+        reject(new Error('Document editor script not found: ' + scriptPath));
+        return;
+      }
+      command = pythonCommand;
+      args = [scriptPath, configPath];
+    }
+
+    let result = null;
+    let stderr = '';
+    const proc = spawnTracked(command, args);
+
+    proc.stdout.on('data', (data) => {
+      const lines = String(data || '').split('\n').filter((line) => line.trim());
+      for (const line of lines) {
+        try {
+          const payload = JSON.parse(line);
+          if (payload.type === 'result') {
+            result = payload;
+          } else if (payload.type === 'error') {
+            cleanup();
+            reject(new Error(payload.message || 'Document editor processor failed.'));
+            return;
+          }
+        } catch (_) {}
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += String(data || '');
+    });
+
+    proc.on('close', (code) => {
+      cleanup();
+      if (code === 0 && result) {
+        resolve(result);
+        return;
+      }
+      reject(new Error(String(stderr || `Document editor failed with code ${code}`).trim()));
+    });
+
+    proc.on('error', (err) => {
+      cleanup();
+      reject(err);
+    });
+  });
+}
+
+async function runDocumentEditWorkflow({
+  event,
+  instructions,
+  filePath,
+  outputFolder,
+  redlineOutputFormat = 'native',
+  changePagesOnly = false,
+  provider,
+  apiKey
+} = {}) {
+  const normalizedInstructions = String(instructions || '').trim();
+  if (!normalizedInstructions) {
+    return createDocumentEditFailure('Document edit instructions are required.');
+  }
+
+  const resolvedFilePath = resolveExistingLocalPath(filePath);
+  if (!resolvedFilePath || !fs.existsSync(resolvedFilePath)) {
+    return createDocumentEditFailure('A valid PDF or DOCX file is required for document editing.');
+  }
+
+  const fileExt = String(path.extname(resolvedFilePath) || '').toLowerCase().replace(/^\./, '');
+  if (!isDocumentEditExtension(fileExt)) {
+    return createDocumentEditFailure('EmmaNeigh document editing currently supports PDF and DOCX files.');
+  }
+
+  let extracted;
+  try {
+    extracted = await runDocumentEditorProcessor({
+      mode: 'extract',
+      input_path: resolvedFilePath,
+      max_chars: 60000
+    });
+  } catch (e) {
+    return createDocumentEditFailure(`Could not read the document for editing: ${e.message}`);
+  }
+
+  const excerptText = String(extracted && extracted.text ? extracted.text : '').trim();
+  if (!excerptText) {
+    return createDocumentEditFailure(
+      fileExt === 'pdf'
+        ? 'EmmaNeigh could not extract visible text from this PDF. Image-only or scanned PDFs are not supported yet.'
+        : 'EmmaNeigh could not extract visible text from this DOCX.'
+    );
+  }
+
+  const aiContext = resolveAiCallContext({
+    apiKey: apiKey || getApiKey(),
+    requestedProvider: provider || getAIProvider()
+  });
+  const { apiKey: resolvedApiKey, provider: resolvedProvider, providerName, providerAutoDetectNote } = aiContext;
+  if (providerRequiresApiKey(resolvedProvider) && !resolvedApiKey) {
+    return createDocumentEditFailure(`No API key configured. Please add your ${providerName} API key in Settings.`);
+  }
+
+  const planningPrompt = buildDocumentEditPlanningPrompt({
+    instructions: normalizedInstructions,
+    filePath: resolvedFilePath,
+    excerptText,
+    extractedTextTruncated: !!(extracted && extracted.truncated)
+  });
+
+  const aiResult = await callProviderPrompt({
+    event,
+    provider: resolvedProvider,
+    apiKey: resolvedApiKey,
+    prompt: planningPrompt,
+    maxTokens: 1200
+  });
+  if (!aiResult.success) {
+    return createDocumentEditFailure(`${providerName} could not prepare the requested edits: ${aiResult.error}`);
+  }
+
+  const editPlan = normalizeDocumentEditPlan(extractJsonResponse(aiResult.text || ''));
+  if (editPlan.needs_clarification || editPlan.edits.length === 0) {
+    const clarification = editPlan.clarification_question || 'EmmaNeigh could not determine exact text substitutions for this request.';
+    return createDocumentEditFailure(clarification, {
+      needs_clarification: true,
+      warnings: summarizeDocumentEditWarnings(editPlan.warnings),
+      provider: resolvedProvider,
+      providerName,
+      modelUsed: aiResult.modelUsed || null
+    });
+  }
+
+  const editedPath = buildDocumentEditOutputPath(resolvedFilePath, outputFolder || '');
+
+  let applyResult;
+  try {
+    applyResult = await runDocumentEditorProcessor({
+      mode: 'apply',
+      input_path: resolvedFilePath,
+      output_path: editedPath,
+      replacements: editPlan.edits
+    });
+  } catch (e) {
+    return createDocumentEditFailure(`EmmaNeigh could not apply the requested edits: ${e.message}`, {
+      provider: resolvedProvider,
+      providerName,
+      modelUsed: aiResult.modelUsed || null
+    });
+  }
+
+  const appliedEdits = Array.isArray(applyResult && applyResult.applied_edits)
+    ? applyResult.applied_edits
+    : [];
+  const appliedCount = appliedEdits.reduce((sum, item) => sum + Math.max(0, Number(item && item.count ? item.count : 0)), 0);
+  const warnings = [
+    ...summarizeDocumentEditWarnings(editPlan.warnings),
+    ...summarizeDocumentEditWarnings(applyResult && applyResult.warnings)
+  ];
+
+  if (appliedCount <= 0) {
+    return createDocumentEditFailure('EmmaNeigh could not find the requested text to replace in the document.', {
+      edited_path: applyResult && applyResult.output_path ? applyResult.output_path : editedPath,
+      warnings,
+      provider: resolvedProvider,
+      providerName,
+      modelUsed: aiResult.modelUsed || null
+    });
+  }
+
+  let redlineResult;
+  try {
+    redlineResult = await runRedlineDocuments({
+      original: resolvedFilePath,
+      modified: applyResult.output_path || editedPath,
+      engine: 'auto',
+      output_format: redlineOutputFormat || 'native',
+      change_pages_only: !!changePagesOnly
+    });
+  } catch (e) {
+    return createDocumentEditFailure(`The document edits were applied, but the redline failed: ${e.message}`, {
+      edited_path: applyResult.output_path || editedPath,
+      warnings,
+      provider: resolvedProvider,
+      providerName,
+      modelUsed: aiResult.modelUsed || null
+    });
+  }
+
+  const redlinePath = redlineResult && redlineResult.output_path
+    ? redlineResult.output_path
+    : (redlineResult && Array.isArray(redlineResult.results)
+      ? (redlineResult.results.find((item) => item && item.output_path) || {}).output_path || null
+      : null);
+
+  const summaryParts = [
+    `Edited ${path.basename(resolvedFilePath)} and generated a redline against the original.`,
+    `Edited copy: ${applyResult.output_path || editedPath}`
+  ];
+  if (redlinePath) {
+    summaryParts.push(`Redline: ${redlinePath}`);
+  }
+  if (providerAutoDetectNote) {
+    warnings.unshift(providerAutoDetectNote);
+  }
+  if (warnings.length > 0) {
+    summaryParts.push(`Warnings: ${warnings.join(' ')}`);
+  }
+
+  return {
+    success: true,
+    message: summaryParts.join(' '),
+    edited_path: applyResult.output_path || editedPath,
+    redline_path: redlinePath,
+    redline_result: redlineResult,
+    applied_edits: appliedEdits,
+    total_replacements: appliedCount,
+    warnings,
+    provider: resolvedProvider,
+    providerName,
+    modelUsed: aiResult.modelUsed || null
+  };
+}
+
 function buildProviderHealthEndpoint(baseUrl, requestPath) {
   try {
     return new URL(requestPath, baseUrl).toString();
@@ -4120,11 +4512,26 @@ function normalizeAgentTabName(value) {
   return AGENT_TABS.has(mapped) ? mapped : null;
 }
 
+function promptSuggestsDirectDocumentEdit(commandText) {
+  const prompt = String(commandText || '').toLowerCase();
+  if (!prompt) return false;
+
+  const editVerbPattern = /\b(change|edit|modify|update|replace|revise|fix|correct|swap|insert|remove|delete|adjust|amend)\b/;
+  const documentTargetPattern = /\b(pdf|docx|doc|word document|document|agreement|contract|file)\b/;
+  const contentTargetPattern = /\b(date|dates|text|wording|language|name|address|number|defined term|term|clause|section|header|footer|signature block)\b/;
+
+  if (/\b(change|update|replace)\s+the\s+date\b/.test(prompt)) return true;
+  if (/\b(edit|modify|change|update|replace)\s+(?:this|the)?\s*(pdf|document|docx|doc|agreement|contract|file)\b/.test(prompt)) return true;
+
+  return editVerbPattern.test(prompt) && (documentTargetPattern.test(prompt) || contentTargetPattern.test(prompt));
+}
+
 function buildAgentFallbackPlan(commandText, attachments) {
   const prompt = String(commandText || '').toLowerCase();
   const files = Array.isArray(attachments) ? attachments : [];
   const hasPdf = files.some(file => file.ext === 'pdf');
   const docxFiles = files.filter(file => file.ext === 'docx');
+  const editableFiles = getDocumentEditAttachments(files);
   const redlineExts = new Set(['pdf', 'docx', 'doc', 'rtf', 'txt', 'htm', 'html', 'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'xls', 'xlsx', 'xlsm', 'xlsb']);
   const redlineCandidates = files.filter(file => redlineExts.has(file.ext));
   const hasDocLike = files.some(file => file.ext === 'pdf' || file.ext === 'docx' || file.ext === 'doc');
@@ -4137,6 +4544,27 @@ function buildAgentFallbackPlan(commandText, attachments) {
       required_extensions: [],
       missing_requirements: [],
       user_message: 'Analyzing your emails with AI.'
+    };
+  }
+
+  if (promptSuggestsDirectDocumentEdit(prompt)) {
+    if (editableFiles.length > 0) {
+      return {
+        action: 'run_document_edit_and_redline',
+        target_tab: null,
+        run_now: true,
+        required_extensions: Array.from(DOCUMENT_EDIT_EXTENSIONS),
+        missing_requirements: [],
+        user_message: `Editing ${editableFiles[0].name} and generating a redline against the original.`
+      };
+    }
+    return {
+      action: 'run_document_edit_and_redline',
+      target_tab: null,
+      run_now: false,
+      required_extensions: Array.from(DOCUMENT_EDIT_EXTENSIONS),
+      missing_requirements: ['Attach one PDF or DOCX file to edit before generating a redline.'],
+      user_message: 'Attach one PDF or DOCX file and run the edit again.'
     };
   }
 
@@ -4347,6 +4775,7 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
   const fallback = fallbackPlan || buildAgentFallbackPlan('', files);
   const candidate = rawPlan && typeof rawPlan === 'object' ? rawPlan : {};
   const allowedActions = new Set([
+    'run_document_edit_and_redline',
     'run_signature_packets',
     'run_packet_shell',
     'run_redline',
@@ -4383,6 +4812,12 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
     if (!hasPdf) {
       runNow = false;
       missingRequirements = ['Attach one or more PDF files to run signature packets.'];
+    }
+  } else if (action === 'run_document_edit_and_redline') {
+    targetTab = null;
+    if (getDocumentEditAttachments(files).length < 1) {
+      runNow = false;
+      missingRequirements = ['Attach one PDF or DOCX file to edit before generating a redline.'];
     }
   } else if (action === 'run_packet_shell') {
     targetTab = 'packetshell';
@@ -5547,6 +5982,21 @@ const COMMAND_TOOLS = [
         change_pages_only: { type: 'boolean', description: 'If true, generates a Change Pages Only (CPO) redline — only pages with differences. Default: false.' }
       },
       required: ['original', 'modified']
+    }
+  },
+  {
+    name: 'document_edit_and_redline',
+    description: 'Edit one attached local PDF or DOCX by applying precise text substitutions derived from the user instruction, save an edited copy, and automatically generate a redline against the original.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Optional local file path. If omitted, Agent Mode uses the first attached PDF or DOCX.' },
+        instructions: { type: 'string', description: 'The requested document changes in natural language, such as changing a date or party name.' },
+        output_folder: { type: 'string', description: 'Optional folder for the edited copy and redline output.' },
+        redline_output_format: { type: 'string', enum: ['native', 'pdf', 'docx'], description: 'Optional redline output format. Default: native.' },
+        change_pages_only: { type: 'boolean', description: 'If true, request Change Pages Only output where supported.' }
+      },
+      required: ['instructions']
     }
   },
   {
@@ -9393,7 +9843,10 @@ function normalizeLoadedEmail(record = {}) {
     attachments: attachments.join('; '),
     has_attachments: Boolean(record.has_attachments) || attachments.length > 0,
     folder: String(record.folder || '').trim(),
-    entry_id: String(record.entry_id || '').trim()
+    root_folder: String(record.root_folder || '').trim(),
+    entry_id: String(record.entry_id || '').trim(),
+    conversation_id: String(record.conversation_id || '').trim(),
+    conversation_topic: String(record.conversation_topic || '').trim()
   };
 }
 
@@ -9625,12 +10078,18 @@ try {
       try { if ($item.SenderName) { $senderName = $item.SenderName } } catch {}
       $senderEmail = ''
       try { if ($item.SenderEmailAddress) { $senderEmail = $item.SenderEmailAddress } } catch {}
+      $conversationId = ''
+      try { if ($item.ConversationID) { $conversationId = $item.ConversationID } } catch {}
+      $conversationTopic = ''
+      try { if ($item.ConversationTopic) { $conversationTopic = $item.ConversationTopic } } catch {}
       if (-not $senderName -and $rootFolderName -eq 'Sent Items') { $senderName = 'Me' }
 
       $emails.Add(@{
         entry_id = $item.EntryID
         folder = $folderName
         root_folder = $folderInfo.Root
+        conversation_id = $conversationId
+        conversation_topic = $conversationTopic
         subject = if ($item.Subject) { $item.Subject } else { '' }
         from = $senderName
         sender_email = $senderEmail
@@ -9703,6 +10162,16 @@ try {
 
 function getToolUsageEvent(toolName, input = {}, toolResult = null) {
   const result = toolResult && typeof toolResult === 'object' ? toolResult : {};
+  if (toolName === 'document_edit_and_redline') {
+    return {
+      feature: 'document_edit',
+      action: 'agent_document_edit_and_redline',
+      input_count: 1,
+      output_count: result.success ? 1 : 0,
+      engine: result.redline_result && result.redline_result.engine ? result.redline_result.engine : null
+    };
+  }
+
   if (toolName === 'run_checklist_precedent_redlines') {
     const total = Number(result.total_items || 0);
     const successful = Number(result.successful || 0);
@@ -9736,6 +10205,7 @@ async function dispatchTool(toolName, input, session = {}) {
   const loadedFiles = session && typeof session === 'object'
     ? normalizeToolLoadedFiles(session.loadedFiles || [])
     : [];
+  const rendererEvent = session && typeof session === 'object' ? (session.event || null) : null;
   const safeInput = input && typeof input === 'object' ? input : {};
   const startedAt = Date.now();
   let result;
@@ -9857,6 +10327,19 @@ async function dispatchTool(toolName, input, session = {}) {
         mainWindow.webContents.send('trigger-redline', config);
       }
       result = { success: true, message: `Redline started: comparing documents with ${engine} engine.` };
+      break;
+    }
+
+    case 'document_edit_and_redline': {
+      const filePath = resolveToolFilePath(safeInput, loadedFiles, 0);
+      result = await runDocumentEditWorkflow({
+        event: rendererEvent,
+        instructions: safeInput.instructions,
+        filePath,
+        outputFolder: safeInput.output_folder || '',
+        redlineOutputFormat: safeInput.redline_output_format || 'native',
+        changePagesOnly: !!safeInput.change_pages_only
+      });
       break;
     }
 
@@ -11502,7 +11985,7 @@ function ensureRedlineInputFilesExist(config = {}) {
 }
 
 // Redline documents — routes through Litera Compare when available, falls back to EmmaNeigh table comparison
-ipcMain.handle('redline-documents', async (event, config) => {
+async function runRedlineDocuments(config) {
   config = normalizeRedlineConfigPaths(config || {});
   ensureRedlineInputFilesExist(config);
 
@@ -11639,7 +12122,7 @@ ipcMain.handle('redline-documents', async (event, config) => {
   }
 
   // ---- EMMANEIGH TABLE COMPARISON PATH (fallback) ----
-  return new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     const moduleName = 'document_redline';
     const processorPath = getProcessorPath(moduleName);
 
@@ -11698,6 +12181,10 @@ ipcMain.handle('redline-documents', async (event, config) => {
 
     proc.on('error', reject);
   });
+}
+
+ipcMain.handle('redline-documents', async (event, config) => {
+  return await runRedlineDocuments(config);
 });
 
 // ========== EMAIL CSV PARSING ==========
@@ -12166,6 +12653,7 @@ ipcMain.handle('agent-plan', async (event, payload) => {
     }
 
     const capabilities = [
+      'docedit: Edit one local PDF/DOCX and automatically redline against the original',
       'packets: Create Sig Packets',
       'packetshell: Create Packet Shell',
       'execution: Execution Versions',
@@ -12185,6 +12673,7 @@ ipcMain.handle('agent-plan', async (event, payload) => {
 Decide how to route the user command into one app action that EmmaNeigh can execute.
 
 Allowed actions:
+- run_document_edit_and_redline (requires one PDF or DOCX attachment)
 - run_signature_packets (requires PDF attachments)
 - run_packet_shell (requires PDF/DOC/DOCX attachments)
 - run_redline (requires two compatible document attachments)
@@ -12210,7 +12699,7 @@ ${attachmentSummary}
 
 Return JSON only with this exact shape:
 {
-  "action": "run_signature_packets|run_packet_shell|run_redline|run_collate|run_update_checklist|run_generate_punchlist|run_email_ai_search|run_general_llm_chat|open_tab|no_op",
+  "action": "run_document_edit_and_redline|run_signature_packets|run_packet_shell|run_redline|run_collate|run_update_checklist|run_generate_punchlist|run_email_ai_search|run_general_llm_chat|open_tab|no_op",
   "target_tab": "packets|packetshell|execution|sigblocks|collate|redline|email|updatechecklist|punchlist|null",
   "run_now": true,
   "required_extensions": ["pdf"],
@@ -12219,6 +12708,7 @@ Return JSON only with this exact shape:
 }
 
 Rules:
+- If request asks to edit or revise the contents of a local PDF or DOCX and one compatible file is attached, choose run_document_edit_and_redline.
 - If request is clearly for signature packets and PDFs are attached, choose run_signature_packets and run_now true.
 - If request is clearly for packet shell and compatible docs are attached, choose run_packet_shell and run_now true.
 - If request is a direct question about emails, choose run_email_ai_search.
@@ -12226,8 +12716,10 @@ Rules:
 - If request asks to generate punchlist and checklist is attached, choose run_generate_punchlist.
 - If request asks to redline/compare and two docs are attached, choose run_redline.
 - If request asks to collate/consolidate markups and DOCX files are attached, choose run_collate.
+- If request asks to edit, revise, or change the contents of a local document/PDF (for example change a date, replace text, or update wording) and a compatible attachment is present, prefer run_document_edit_and_redline.
 - If request is a general question or drafting request that does not map to a specific workflow, choose run_general_llm_chat.
 - If required files are missing, choose open_tab with run_now false and list missing_requirements.
+- Never choose signature packets, packet shell, or plain redline as a substitute for requested document editing.
 - Never invent files or claim a workflow ran if run_now is false.
 - Output valid JSON only.`;
 
@@ -12333,7 +12825,9 @@ ipcMain.handle('agent-general-ask', async (event, payload) => {
 
     const assistantPrompt = `You are EmmaNeigh Agent Mode.
 You can answer user questions and help draft workflow steps.
-When relevant, recommend the correct EmmaNeigh workflow (redline, collate, update checklist, punchlist, sig packets, packet shell, execution version, email search).
+When relevant, recommend the correct EmmaNeigh workflow (document edit + redline, redline, collate, update checklist, punchlist, sig packets, packet shell, execution version, email search).
+Only claim a local file was edited, saved, compared, or routed when EmmaNeigh actually has and uses a matching execution path.
+If the user asks to directly edit a local PDF or document and EmmaNeigh does not have a matching execution tool, say that plainly and do not redirect them into an unrelated workflow.
 Keep answers concise and practical.
 
 Attached file names (if any): ${attachmentSummary.length ? attachmentSummary.join(', ') : 'None'}
@@ -12365,6 +12859,38 @@ ${prompt}`;
       modelUsed: aiResult.modelUsed || null,
       text: String(aiResult.text || '').trim()
     };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('agent-document-edit', async (event, payload) => {
+  try {
+    const prompt = String(payload?.prompt || payload?.instructions || '').trim();
+    if (!prompt) {
+      return { success: false, error: 'Please enter document edit instructions for Agent Mode.' };
+    }
+
+    const attachments = Array.isArray(payload?.attachments)
+      ? payload.attachments.map((item) => {
+          const itemPath = String(item?.path || '').trim();
+          const name = String(item?.name || path.basename(itemPath || '')).trim();
+          const ext = String(path.extname(name || itemPath || '') || '').toLowerCase().replace(/^\./, '');
+          return { path: itemPath, name, ext };
+        })
+      : [];
+    const editableAttachment = getDocumentEditAttachments(attachments)[0];
+
+    return await runDocumentEditWorkflow({
+      event,
+      instructions: prompt,
+      filePath: String(payload?.file_path || '').trim() || (editableAttachment ? editableAttachment.path : ''),
+      outputFolder: String(payload?.output_folder || '').trim(),
+      redlineOutputFormat: String(payload?.redline_output_format || 'native').trim().toLowerCase() || 'native',
+      changePagesOnly: !!payload?.change_pages_only,
+      provider: payload?.provider || getAIProvider(),
+      apiKey: payload?.apiKey || getApiKey()
+    });
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -12550,8 +13076,12 @@ Current state:
 
 When the user asks you to perform an action (save to iManage, open a file, navigate, run a redline, etc.), use the appropriate tool.
 You can chain multiple tools across steps in one request until the full task is complete.
+Only use a tool when it directly matches the user's requested operation.
+If no available tool can actually perform the requested edit, explain that limitation instead of forcing a nearby workflow or pretending the action succeeded.
 
 Common multi-step workflows you should handle:
+- "Change the party name in this draft and redline it" → document_edit_and_redline
+- "Change the date in this PDF and run a redline" → document_edit_and_redline
 - "Save this and redline against precedent" → imanage_save → use the returned profile_id → imanage_redline_versions (auto-detects V1 vs latest)
 - "Redline V1 to V2 and email to someone" → imanage_redline_versions with email_to parameter (handles redline + email in one tool call)
 - "Redline V1 to V2, CPO, and reply to that email thread" → imanage_redline_versions with change_pages_only=true → outlook_reply_email with the redline as attachment
@@ -12565,6 +13095,8 @@ Key terminology:
 For imanage_redline_versions: you can omit version_1 and version_2 to auto-detect (V1 vs latest), or specify them explicitly.
 If the user wants to email the result, pass email_to directly to imanage_redline_versions — it handles checkout, Litera comparison, and Outlook email in one call.
 If the user wants to reply to an existing email thread with the redline, first use outlook_search to find the thread, then imanage_redline_versions to create the redline, then outlook_reply_email with the redline_path as an attachment.
+For Word documents, simple text substitutions can use word_find_replace. Do not assume PDFs are safely editable unless there is a direct tool for that operation.
+For local PDF or DOCX content edits that should end with a redline, use document_edit_and_redline.
 
 If the user reports iManage connection issues, use imanage_test_connection first to diagnose the problem.
 When they ask a question or want advice, respond with helpful text.
@@ -12572,8 +13104,8 @@ Keep responses concise and practical.
 ${!isWindows ? '\nIMPORTANT: iManage tools are only available on Windows. If the user asks for iManage features, let them know.' : ''}`;
 
     const session = context && typeof context === 'object'
-      ? { actor: context.actor || {}, loadedFiles: context.loadedFiles || [] }
-      : { actor: {}, loadedFiles: [] };
+      ? { actor: context.actor || {}, loadedFiles: context.loadedFiles || [], event }
+      : { actor: {}, loadedFiles: [], event };
 
     const formatToolSummary = (toolName, toolResult) => {
       const toolLabel = String(toolName || 'tool').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

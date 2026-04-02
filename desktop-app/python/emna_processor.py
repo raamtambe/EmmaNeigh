@@ -23,7 +23,7 @@ def main():
         print("  incumbency_parser, sigblock_workflow, document_collator,", file=sys.stderr)
         print("  email_csv_parser, time_tracker, checklist_updater,", file=sys.stderr)
         print("  punchlist_generator, email_nl_search, packet_shell_generator,", file=sys.stderr)
-        print("  document_redline, checklist_docname_extractor", file=sys.stderr)
+        print("  document_redline, document_editor, checklist_docname_extractor", file=sys.stderr)
         sys.exit(1)
 
     module_name = sys.argv[1]
@@ -73,6 +73,9 @@ def main():
     elif module_name == 'document_redline':
         import document_redline
         document_redline.main()
+    elif module_name == 'document_editor':
+        import document_editor
+        document_editor.main()
     elif module_name == 'checklist_docname_extractor':
         import checklist_docname_extractor
         checklist_docname_extractor.main()

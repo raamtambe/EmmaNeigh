@@ -7959,14 +7959,65 @@
     function agentPromptNeedsWorkflowRouting(promptText) {
       const prompt = String(promptText || '').toLowerCase();
       if (!prompt) return false;
+      if (agentPromptNeedsDirectDocumentEdit(prompt)) return true;
       return /(?:did|does|has|have|who|when|what|where|find|search|check|show|was|were|sent|review|approved|circulated).*(?:email|inbox|attachment|message)|(?:email|inbox|attachment|message).*(?:did|has|who|when|what|find|search|check)|update\s+checklist|checklist\s+update|refresh\s+checklist|generate\s+punchlist|create\s+punchlist|\bpunch\s*list\b|redline|blackline|compare|comparison|markup changes|mark up changes|(?:signature|sig)\s*(?:packet|packets|page|pages)|signing set|execution pages?|packet\s*shell|signature\s*shell|execution version|conformed|insert signed|sig\s*block|signature block|incumbency|collat(?:e|ion)|merge comments|consolidate|combine markups|i-?manage|save down|version up|create folder|workspace/.test(prompt);
+    }
+
+    function agentPromptNeedsDirectDocumentEdit(promptText) {
+      const prompt = String(promptText || '').toLowerCase();
+      if (!prompt) return false;
+
+      const editVerbPattern = /\b(change|edit|modify|update|replace|revise|fix|correct|swap|insert|remove|delete|adjust|amend)\b/;
+      const documentTargetPattern = /\b(pdf|docx|doc|word document|document|agreement|contract|file)\b/;
+      const contentTargetPattern = /\b(date|dates|text|wording|language|name|address|number|defined term|term|clause|section|header|footer|signature block)\b/;
+
+      if (/\b(change|update|replace)\s+the\s+date\b/.test(prompt)) return true;
+      if (/\b(edit|modify|change|update|replace)\s+(?:this|the)?\s*(pdf|document|docx|doc|agreement|contract|file)\b/.test(prompt)) return true;
+
+      return editVerbPattern.test(prompt) && (documentTargetPattern.test(prompt) || contentTargetPattern.test(prompt));
     }
 
     function shouldRouteAgentCommandThroughPlanner(selectedProvider, promptText, cmdResult) {
       if (!cmdResult || !cmdResult.success) return true;
       if (cmdResult.tool) return false;
-      if (!isLocalProviderSelection(selectedProvider)) return false;
       return agentPromptNeedsWorkflowRouting(promptText);
+    }
+
+    async function askAgentGeneral(promptText) {
+      const askResult = await ipcRenderer.invoke('agent-general-ask', {
+        prompt: String(promptText || '').trim(),
+        attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
+      });
+      if (!askResult || !askResult.success) {
+        return {
+          success: false,
+          error: `Agent LLM request failed: ${(askResult && askResult.error) || 'Unknown error'}`
+        };
+      }
+      return {
+        success: true,
+        message: String(askResult.text || '').trim() || 'No response returned by the model.',
+        modelUsed: askResult.modelUsed || null,
+        providerName: askResult.providerName || null
+      };
+    }
+
+    async function askAgentDocumentEdit(promptText) {
+      const editResult = await ipcRenderer.invoke('agent-document-edit', {
+        prompt: String(promptText || '').trim(),
+        attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
+      });
+      if (!editResult || !editResult.success) {
+        return {
+          success: false,
+          error: (editResult && editResult.error) || 'Document edit workflow failed.'
+        };
+      }
+      return {
+        success: true,
+        message: String(editResult.message || '').trim() || 'Document edit completed.',
+        result: editResult
+      };
     }
 
     async function executeAgentPlan(plan, originalPrompt) {
@@ -8016,6 +8067,13 @@
         agentAttachments = [];
         renderAgentAttachments();
         return { message: `Started Create Packet Shell for ${shellInputPaths.length} file(s).` };
+      }
+
+      if (action === 'run_document_edit_and_redline') {
+        const editResult = await askAgentDocumentEdit(promptText);
+        return {
+          message: editResult.success ? editResult.message : editResult.error
+        };
       }
 
       if (action === 'run_redline') {
@@ -8158,17 +8216,9 @@
       }
 
       if (action === 'run_general_llm_chat') {
-        const askResult = await ipcRenderer.invoke('agent-general-ask', {
-          prompt: promptText,
-          attachments: agentAttachments.map(file => ({ path: file.path, name: file.name }))
-        });
-        if (!askResult || !askResult.success) {
-          return {
-            message: `Agent LLM request failed: ${(askResult && askResult.error) || 'Unknown error'}`
-          };
-        }
+        const askResult = await askAgentGeneral(promptText);
         return {
-          message: String(askResult.text || '').trim() || 'No response returned by the model.'
+          message: askResult.success ? askResult.message : askResult.error
         };
       }
 
@@ -8255,7 +8305,10 @@
         }
       }
 
-      addAgentLiveStepToThread(threadId, message, isError);
+      const shouldAppendToLiveLog = status !== 'complete' && status !== 'error';
+      if (shouldAppendToLiveLog) {
+        addAgentLiveStepToThread(threadId, message, isError);
+      }
       if (threadId === activeAgentThreadId) {
         if (status === 'error') {
           setAgentStatus(message, true);
@@ -8302,7 +8355,20 @@
         const selectedProvider = getSelectedProvider();
         let cmdResult = null;
 
-        if (selectedProvider !== 'harvey') {
+        if (selectedProvider === 'harvey') {
+          if (!agentPromptNeedsWorkflowRouting(prompt)) {
+            const generalResult = await askAgentGeneral(prompt);
+            if (generalResult.success) {
+              cmdResult = {
+                success: true,
+                message: generalResult.message,
+                modelUsed: generalResult.modelUsed || null
+              };
+            } else {
+              throw new Error(generalResult.error || 'Harvey general chat request failed.');
+            }
+          }
+        } else {
           // First try execute-command (agent tool use — supports Anthropic, OpenAI, Ollama, LM Studio)
           const context = getAgentContext();
           context.thread_id = activeAgentRunThreadId;
@@ -8332,8 +8398,8 @@
           if (selectedProvider === 'harvey') {
             setAgentStatus('Routing via agent planner...');
           } else if (usePlannerFallback) {
-            console.log('[Agent] Local model returned text without using tools for a workflow request; routing via agent-plan instead.');
-            setAgentStatus('Local model answered without using app tools. Routing via planner...');
+            console.log('[Agent] Model returned text without using tools for a workflow request; routing via agent-plan instead.');
+            setAgentStatus('Model answered without using app tools. Routing via planner...');
           } else {
             console.log('[Agent] execute-command unavailable, falling back to agent-plan:', cmdResult?.error);
             setAgentStatus('Routing via agent planner...');
