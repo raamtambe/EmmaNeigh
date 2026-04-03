@@ -3377,6 +3377,963 @@
       user-select: none;
     }
 
+    /* Light workspace refresh */
+    :root {
+      --theme-bg: #edf3f9;
+      --theme-surface: rgba(255, 255, 255, 0.96);
+      --theme-surface-strong: #ffffff;
+      --theme-surface-soft: #f5f8fd;
+      --theme-border: #d7e1ee;
+      --theme-border-strong: #c5d3e6;
+      --theme-text: #17324d;
+      --theme-text-soft: #5f7288;
+      --theme-text-faint: #8a99ab;
+      --theme-accent: #2f6fed;
+      --theme-accent-deep: #1d4fb9;
+      --theme-accent-soft: #eaf2ff;
+      --theme-accent-alt: #7aa5ff;
+      --theme-success: #2e8b62;
+      --theme-success-soft: #ebf8f2;
+      --theme-warning: #b8791f;
+      --theme-warning-soft: #fff4e5;
+      --theme-danger: #c85a5a;
+      --theme-danger-soft: #fff3f2;
+      --theme-shadow: 0 18px 40px rgba(36, 63, 98, 0.08);
+      --theme-shadow-soft: 0 10px 26px rgba(36, 63, 98, 0.08);
+      --theme-shadow-strong: 0 24px 70px rgba(24, 45, 74, 0.16);
+    }
+
+    body,
+    button,
+    input,
+    select,
+    textarea {
+      font-family: 'Avenir Next', 'SF Pro Display', 'Segoe UI', sans-serif;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at 14% 18%, rgba(122, 165, 255, 0.2), transparent 22%),
+        radial-gradient(circle at 88% 10%, rgba(46, 139, 98, 0.12), transparent 18%),
+        linear-gradient(180deg, #ffffff 0%, #f7f9fc 28%, #edf3f9 100%);
+      color: var(--theme-text);
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0));
+    }
+
+    .container {
+      padding: 42px 28px 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    header {
+      margin-bottom: 22px;
+      padding: 0 6px;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      color: var(--theme-accent-deep);
+    }
+
+    .logo::before {
+      content: '';
+      width: 12px;
+      height: 12px;
+      border-radius: 4px;
+      background: linear-gradient(135deg, #65a4ff, #2f6fed);
+      box-shadow: 0 0 0 6px rgba(47, 111, 237, 0.08);
+    }
+
+    h1,
+    .complete h2,
+    .error h2 {
+      color: var(--theme-text);
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--theme-text-soft);
+    }
+
+    footer p {
+      color: var(--theme-text-soft);
+    }
+
+    .workspace-layout {
+      gap: 18px;
+    }
+
+    .workspace-resizer::after,
+    .agent-shell-resizer::after {
+      background: #d4ddeb;
+    }
+
+    .workspace-resizer:hover::after,
+    .workspace-layout.is-resizing .workspace-resizer::after,
+    .agent-shell-resizer:hover::after,
+    .agent-shell.is-resizing .agent-shell-resizer::after {
+      background: var(--theme-accent);
+    }
+
+    .manual-panel,
+    .agent-panel {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(245, 248, 252, 0.96));
+      border: 1px solid rgba(207, 220, 236, 0.95);
+      border-radius: 30px;
+      box-shadow: var(--theme-shadow);
+    }
+
+    .manual-panel {
+      padding: 18px;
+    }
+
+    .agent-panel {
+      width: min(580px, 48vw);
+      padding: 18px;
+      border-radius: 30px;
+    }
+
+    .main-layout {
+      gap: 24px;
+    }
+
+    .nav-sidebar {
+      width: 248px;
+      padding-right: 6px;
+    }
+
+    .nav-sidebar::-webkit-scrollbar-track {
+      background: rgba(199, 212, 229, 0.45);
+    }
+
+    .nav-sidebar::-webkit-scrollbar-thumb {
+      background: #b5c4d7;
+    }
+
+    .nav-sidebar::-webkit-scrollbar-thumb:hover {
+      background: #95a9c2;
+    }
+
+    .nav-category {
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid var(--theme-border);
+      border-radius: 24px;
+      box-shadow: 0 8px 20px rgba(44, 65, 92, 0.06);
+      margin-bottom: 10px;
+    }
+
+    .nav-category-header {
+      padding: 16px 18px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: var(--theme-text-soft);
+    }
+
+    .nav-category-header:hover {
+      color: var(--theme-text);
+      background: rgba(239, 244, 251, 0.8);
+    }
+
+    .nav-category-header .icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--theme-accent);
+      background: linear-gradient(180deg, #f6fbff, #e9f1ff);
+      box-shadow: inset 0 0 0 1px rgba(132, 166, 228, 0.25);
+    }
+
+    .nav-category:nth-child(2) .nav-category-header .icon {
+      color: #5b7dd8;
+      background: linear-gradient(180deg, #f5f7ff, #edf1ff);
+    }
+
+    .nav-category:nth-child(3) .nav-category-header .icon {
+      color: #14806a;
+      background: linear-gradient(180deg, #f2fbf8, #e6f7f1);
+    }
+
+    .nav-category-header .arrow {
+      color: var(--theme-text-faint);
+    }
+
+    .nav-items {
+      padding: 0 10px 10px;
+      gap: 4px;
+    }
+
+    .nav-item {
+      padding: 12px 14px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--theme-text-soft);
+      border-radius: 18px;
+    }
+
+    .nav-item:hover {
+      color: var(--theme-text);
+      background: #f4f8fd;
+    }
+
+    .nav-item.active {
+      background: #ffffff;
+      color: var(--theme-text);
+      box-shadow: inset 0 0 0 1px var(--theme-border), 0 10px 20px rgba(36, 63, 98, 0.08);
+      position: relative;
+    }
+
+    .nav-item.active::after {
+      content: '';
+      position: absolute;
+      left: 14px;
+      bottom: 8px;
+      width: 58px;
+      height: 4px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--theme-accent), var(--theme-accent-alt));
+    }
+
+    .nav-item.disabled:hover {
+      color: var(--theme-text-soft);
+      background: transparent;
+    }
+
+    .nav-item.disabled::after {
+      background: #e6edf6;
+      color: var(--theme-text-faint);
+    }
+
+    .content-area {
+      padding-right: 4px;
+    }
+
+    .content-area > div[id$='Tab'] {
+      padding: 4px 4px 28px;
+    }
+
+    .output-format-row,
+    #redlineEngineBar,
+    .search-mode-toggle,
+    .email-filters,
+    .ai-search-loading,
+    .ai-answer-box,
+    .privacy-toggle,
+    .sigblock-results,
+    .entity-mapping,
+    .file-list,
+    .email-preview-attachments,
+    .outlook-folder-list,
+    .security-question-display,
+    .feedback-popover,
+    .update-banner,
+    .modal,
+    .login-box,
+    .history-content,
+    .settings-content,
+    .email-preview,
+    .version-enforcement-box {
+      background: var(--theme-surface) !important;
+      border: 1px solid var(--theme-border) !important;
+      box-shadow: var(--theme-shadow-soft);
+    }
+
+    .output-format-row,
+    #redlineEngineBar,
+    .search-mode-toggle,
+    .email-filters,
+    .ai-search-loading,
+    .ai-answer-box,
+    .privacy-toggle,
+    .sigblock-results,
+    .entity-mapping,
+    .file-list,
+    .email-preview-attachments,
+    .outlook-folder-list,
+    .security-question-display,
+    .update-banner,
+    .modal,
+    .login-box,
+    .history-content,
+    .settings-content,
+    .email-preview,
+    .version-enforcement-box {
+      border-radius: 24px !important;
+    }
+
+    .modal-overlay,
+    .login-modal,
+    .email-preview-overlay,
+    .settings-modal,
+    .history-modal,
+    .version-enforcement-modal {
+      background: rgba(22, 41, 68, 0.22) !important;
+      backdrop-filter: blur(10px);
+    }
+
+    .modal h2,
+    .login-box h2,
+    .history-header h2,
+    .settings-header h2,
+    .email-preview-subject,
+    .version-enforcement-title,
+    #updatechecklistTab h3,
+    #punchlistTab h3,
+    #securitySection h3,
+    #userStatsSection h3 {
+      color: var(--theme-text) !important;
+    }
+
+    #updatechecklistTab h3,
+    #punchlistTab h3 {
+      font-size: 23px !important;
+      font-weight: 700 !important;
+      margin-bottom: 8px !important;
+    }
+
+    .modal-content,
+    .login-box .subtitle,
+    .history-empty,
+    .current-version,
+    .version-enforcement-message,
+    .version-enforcement-info,
+    .outlook-scope-helper,
+    .settings-info,
+    .feedback-status,
+    .feedback-recent-meta {
+      color: var(--theme-text-soft) !important;
+    }
+
+    .drop-zone,
+    .input-section {
+      border: 1px solid var(--theme-border);
+      border-radius: 28px;
+      min-height: 138px;
+      padding: 28px 24px;
+      background: linear-gradient(180deg, #ffffff, #f8fbff);
+      box-shadow: var(--theme-shadow-soft);
+    }
+
+    .drop-zone:hover,
+    .input-section:hover {
+      border-color: #b4c9eb;
+      background: linear-gradient(180deg, #ffffff, #f5f9ff);
+      box-shadow: 0 14px 30px rgba(38, 66, 101, 0.1);
+      transform: translateY(-1px);
+    }
+
+    .drop-zone.active,
+    .input-section.active {
+      border-color: var(--theme-accent);
+      background: linear-gradient(180deg, #ffffff, #eef4ff);
+    }
+
+    .input-section.selected {
+      border-color: var(--theme-success);
+      background: linear-gradient(180deg, #ffffff, var(--theme-success-soft));
+    }
+
+    .drop-zone.disabled,
+    .input-section.disabled {
+      opacity: 0.58;
+      background: #f4f7fb;
+    }
+
+    .drop-icon,
+    .input-icon {
+      width: 38px;
+      height: 38px;
+      margin-bottom: 16px;
+      opacity: 1;
+      color: var(--theme-accent);
+    }
+
+    .drop-text,
+    .input-label {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--theme-text);
+    }
+
+    .drop-text span {
+      color: var(--theme-accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .drop-hint,
+    .input-hint,
+    .result-summary,
+    .email-item-meta,
+    .ai-answer-confidence,
+    .stat-label,
+    .email-preview-field-label,
+    .toggle-label,
+    .agent-attach-hint,
+    .agent-thread-meta,
+    .agent-panel-header p,
+    .agent-status {
+      color: var(--theme-text-soft);
+    }
+
+    .input-selected,
+    .file-count {
+      color: var(--theme-accent);
+      font-weight: 600;
+    }
+
+    .btn {
+      border-radius: 14px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      padding: 13px 22px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--theme-accent), #4e8cff);
+      color: #ffffff;
+      box-shadow: 0 14px 28px rgba(47, 111, 237, 0.22);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: #ffffff;
+      color: var(--theme-text-soft);
+      border: 1px solid var(--theme-border-strong);
+    }
+
+    .btn-secondary:hover {
+      border-color: #a7bde0;
+      color: var(--theme-text);
+      background: #f8fbff;
+    }
+
+    .btn-flow {
+      background: linear-gradient(135deg, #2f8b62, #46a977);
+      color: #ffffff;
+    }
+
+    .btn-flow:hover {
+      background: linear-gradient(135deg, #25714f, #3d9467);
+    }
+
+    .processing,
+    .complete,
+    .error {
+      background: var(--theme-surface);
+      border: 1px solid var(--theme-border);
+      border-radius: 32px;
+      box-shadow: var(--theme-shadow-soft);
+      padding: 42px 28px;
+      min-height: 320px;
+    }
+
+    .error {
+      background: linear-gradient(180deg, #ffffff, #fff8f7);
+      border-color: #f0d6d6;
+    }
+
+    .check-icon {
+      color: var(--theme-success);
+    }
+
+    .error-icon {
+      color: var(--theme-danger);
+    }
+
+    .complete p,
+    .error p {
+      max-width: 540px;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .progress-text {
+      color: var(--theme-text-soft);
+      font-size: 15px;
+    }
+
+    .progress-bar {
+      width: 240px;
+      height: 8px;
+      background: #e2eaf3;
+      border-radius: 999px;
+      margin-top: 18px;
+    }
+
+    .progress-fill {
+      background: linear-gradient(90deg, var(--theme-accent), var(--theme-accent-alt));
+      border-radius: 999px;
+    }
+
+    .horse-container {
+      width: 88px;
+      height: 88px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 24px;
+      background: linear-gradient(180deg, #f8fbff, #eef4ff);
+      border: 1px solid #dce6f2;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    }
+
+    .horse,
+    .dust {
+      display: none;
+    }
+
+    .horse-container::before {
+      content: '';
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: 3px solid rgba(47, 111, 237, 0.16);
+      border-top-color: var(--theme-accent);
+      border-right-color: var(--theme-accent-alt);
+      animation: spin 0.9s linear infinite;
+    }
+
+    .agent-horse-runner {
+      padding: 10px 0;
+      opacity: 1;
+    }
+
+    .agent-panel-header h3,
+    .agent-thread-title,
+    .agent-msg-assistant,
+    .agent-msg-user,
+    .agent-msg-system,
+    .email-item-subject,
+    .ai-answer-text,
+    .task-card-summary,
+    .email-preview-field-value,
+    .email-preview-content,
+    .entity-name,
+    .stat-value {
+      color: var(--theme-text);
+    }
+
+    .agent-thread-sidebar,
+    .agent-chat,
+    .agent-live-log,
+    .agent-status,
+    .agent-thread-btn,
+    .agent-file-chip,
+    .agent-prompt-input {
+      background: var(--theme-surface) !important;
+      border-color: var(--theme-border) !important;
+      color: var(--theme-text);
+    }
+
+    .agent-thread-btn.active {
+      background: var(--theme-accent-soft) !important;
+      border-color: #b7caf1 !important;
+      color: var(--theme-accent-deep);
+    }
+
+    .agent-msg-user {
+      background: linear-gradient(135deg, var(--theme-accent), #4e8cff);
+      color: #ffffff;
+      border: none;
+    }
+
+    .agent-msg-assistant {
+      background: #ffffff;
+      border: 1px solid var(--theme-border);
+    }
+
+    .agent-msg-system {
+      border: 1px dashed var(--theme-border-strong);
+      color: var(--theme-text-soft);
+    }
+
+    .agent-clear-btn,
+    .feedback-btn,
+    .history-btn,
+    .settings-btn-header {
+      background: #ffffff;
+      border: 1px solid var(--theme-border);
+      color: var(--theme-text-soft);
+    }
+
+    .agent-clear-btn:hover,
+    .feedback-btn:hover,
+    .history-btn:hover,
+    .settings-btn-header:hover {
+      border-color: #a7bde0;
+      color: var(--theme-text);
+      background: #f8fbff;
+    }
+
+    .user-info,
+    .history-btn {
+      color: var(--theme-text-soft);
+    }
+
+    .user-info:hover {
+      color: var(--theme-text);
+    }
+
+    .user-avatar {
+      background: var(--theme-accent-soft);
+      color: var(--theme-accent-deep);
+    }
+
+    .output-format-row label,
+    #redlineEngineLabel,
+    .email-filter-group label,
+    .ai-answer-header,
+    .ai-relevant-emails h4,
+    .email-results h3,
+    .sigblock-step-header,
+    .email-preview-header h3,
+    .outlook-scope-row label {
+      color: var(--theme-text-soft);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .output-format-select,
+    #redlineEngineSelect,
+    .email-search-input,
+    .email-filter-input,
+    .email-date-input,
+    .ai-search-input,
+    .outlook-scope-input,
+    .entity-select,
+    .signer-select,
+    .login-name-input input,
+    .login-form input,
+    .login-select,
+    .api-key-input,
+    #telemetryIngestUrlInput,
+    #telemetryIngestTokenInput,
+    #accessPolicyUrlInput,
+    #accessPolicyTokenInput,
+    #firebaseConfigInput,
+    .agent-prompt-input {
+      background: var(--theme-surface-soft) !important;
+      color: var(--theme-text) !important;
+      border: 1px solid var(--theme-border-strong) !important;
+      border-radius: 14px !important;
+    }
+
+    .output-format-select:focus,
+    #redlineEngineSelect:focus,
+    .email-search-input:focus,
+    .email-filter-input:focus,
+    .email-date-input:focus,
+    .ai-search-input:focus,
+    .outlook-scope-input:focus,
+    .entity-select:focus,
+    .signer-select:focus,
+    .login-name-input input:focus,
+    .login-form input:focus,
+    .login-select:focus,
+    .api-key-input:focus,
+    #telemetryIngestUrlInput:focus,
+    #telemetryIngestTokenInput:focus,
+    #accessPolicyUrlInput:focus,
+    #accessPolicyTokenInput:focus,
+    #firebaseConfigInput:focus,
+    .agent-prompt-input:focus {
+      outline: none;
+      border-color: #8fb0e9 !important;
+      box-shadow: 0 0 0 4px rgba(47, 111, 237, 0.08);
+    }
+
+    .search-mode-toggle {
+      padding: 6px;
+      gap: 6px;
+    }
+
+    .search-mode-btn {
+      font-weight: 700;
+      color: var(--theme-text-soft);
+      border-radius: 14px;
+    }
+
+    .search-mode-btn:hover {
+      color: var(--theme-text);
+      background: #f5f9ff;
+    }
+
+    .search-mode-btn.active {
+      background: var(--theme-accent-soft);
+      color: var(--theme-accent-deep);
+      box-shadow: inset 0 0 0 1px rgba(132, 166, 228, 0.25);
+    }
+
+    .email-stats,
+    .collate-stats {
+      gap: 14px;
+    }
+
+    .stat-box {
+      background: linear-gradient(180deg, #ffffff, #f8fbff);
+      border: 1px solid var(--theme-border);
+      border-radius: 22px;
+      padding: 14px;
+      box-shadow: var(--theme-shadow-soft);
+    }
+
+    .stat-value.warning {
+      color: var(--theme-warning);
+    }
+
+    .stat-value.error {
+      color: var(--theme-danger);
+    }
+
+    .email-item,
+    .task-card {
+      background: #ffffff;
+      border: 1px solid var(--theme-border);
+      border-radius: 20px;
+      box-shadow: 0 8px 18px rgba(36, 63, 98, 0.06);
+    }
+
+    .email-item:hover,
+    .task-card:hover {
+      background: #fbfdff;
+      border-color: #b3c7e8;
+      box-shadow: 0 16px 28px rgba(36, 63, 98, 0.08);
+    }
+
+    .email-item:active {
+      background: #f4f8fd;
+    }
+
+    .email-item-subject {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .email-item-attachments,
+    .task-card-docs,
+    .email-preview-attachments-label {
+      color: #4e71b8;
+      font-weight: 600;
+    }
+
+    .email-item-match {
+      color: var(--theme-success);
+    }
+
+    .ai-answer-header .ai-icon,
+    #detectTasksBtnIcon,
+    .detected-tasks-header h3 span,
+    #redlineEngineResultIcon,
+    .twofa-icon,
+    .version-enforcement-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 28px;
+      padding: 0 9px;
+      border-radius: 10px;
+      background: var(--theme-accent-soft);
+      color: var(--theme-accent-deep);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .twofa-icon,
+    .version-enforcement-icon {
+      width: 74px;
+      height: 74px;
+      margin: 0 auto 20px;
+      border-radius: 22px;
+      font-size: 18px;
+    }
+
+    .version-enforcement-box.blocked .version-enforcement-icon {
+      background: var(--theme-danger-soft);
+      color: var(--theme-danger);
+    }
+
+    .version-enforcement-box.grace .version-enforcement-icon {
+      background: var(--theme-warning-soft);
+      color: var(--theme-warning);
+    }
+
+    .version-enforcement-box.blocked .version-enforcement-title {
+      color: var(--theme-danger);
+    }
+
+    .version-enforcement-box.grace .version-enforcement-title,
+    .version-enforcement-countdown {
+      color: var(--theme-warning);
+    }
+
+    .task-detect-btn {
+      background: linear-gradient(135deg, var(--theme-accent), #4e8cff);
+      box-shadow: 0 12px 24px rgba(47, 111, 237, 0.18);
+    }
+
+    .task-detect-btn:hover {
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      transform: translateY(-1px);
+    }
+
+    .detected-tasks-panel {
+      border: 1px solid var(--theme-border);
+      border-radius: 24px;
+      background: #ffffff;
+      box-shadow: var(--theme-shadow-soft);
+    }
+
+    .detected-tasks-header {
+      background: linear-gradient(180deg, #f8fbff, #eef4ff);
+      border-bottom: 1px solid var(--theme-border);
+    }
+
+    .detected-tasks-header h3 {
+      color: var(--theme-text);
+    }
+
+    .detected-tasks-header .task-count {
+      background: var(--theme-accent-soft);
+      color: var(--theme-accent-deep);
+    }
+
+    .task-card {
+      border-bottom: 1px solid #e6edf6;
+      box-shadow: none;
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+      border-top: none;
+    }
+
+    .task-card:last-child {
+      border-bottom-left-radius: 24px;
+      border-bottom-right-radius: 24px;
+      border-bottom: none;
+    }
+
+    .task-type-badge.collate {
+      background: #e5f4ec;
+      color: #237351;
+    }
+
+    .task-type-badge.redline {
+      background: #fff1ec;
+      color: #b85f39;
+    }
+
+    .task-type-badge.sig_packets {
+      background: #edf3ff;
+      color: #3157b3;
+    }
+
+    .task-type-badge.execution_version {
+      background: #fef3e2;
+      color: #a26a12;
+    }
+
+    .task-type-badge.review {
+      background: #eef0ff;
+      color: #4f58ad;
+    }
+
+    .task-execute-btn {
+      background: linear-gradient(135deg, var(--theme-accent), #4e8cff);
+    }
+
+    .task-execute-btn:hover {
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+    }
+
+    .email-preview-header,
+    .history-header,
+    .settings-header {
+      border-bottom-color: var(--theme-border);
+    }
+
+    .email-preview-field-value,
+    .email-preview-content {
+      color: var(--theme-text);
+    }
+
+    .email-preview-fields,
+    .ai-relevant-emails {
+      border-top-color: transparent;
+      border-bottom-color: var(--theme-border);
+    }
+
+    .email-preview-no-body {
+      color: var(--theme-text-faint);
+    }
+
+    .privacy-toggle,
+    .ai-search-loading {
+      color: var(--theme-text-soft);
+    }
+
+    .toggle-slider {
+      background-color: #c9d7e7;
+    }
+
+    .toggle-slider:before {
+      background-color: #ffffff;
+      box-shadow: 0 2px 6px rgba(28, 47, 76, 0.18);
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background-color: var(--theme-accent);
+    }
+
+    .update-progress-bar {
+      background: #dce6f1;
+    }
+
+    .update-progress-fill {
+      background: linear-gradient(90deg, var(--theme-accent), var(--theme-accent-alt));
+    }
+
+    @media (max-width: 1200px) {
+      .manual-panel {
+        padding: 16px;
+      }
+
+      .agent-panel {
+        width: 100%;
+      }
+    }
+
   </style>
 </head>
 <body>
@@ -3441,7 +4398,7 @@
 
       <!-- 2FA Verification Form -->
       <div class="login-form hidden" id="twoFactorForm">
-        <div class="twofa-icon">🔐</div>
+        <div class="twofa-icon">2FA</div>
         <h3 style="text-align: center; margin-bottom: 8px;">Two-Factor Authentication</h3>
         <p style="text-align: center; color: #888; margin-bottom: 16px;">A verification code has been sent to <span id="tfaEmailDisplay">your email</span></p>
         <input type="text" id="tfaCode" placeholder="Enter 6-digit code" maxlength="6" autocomplete="one-time-code" style="text-align: center; font-size: 24px; letter-spacing: 8px;">
@@ -3722,7 +4679,7 @@
       </div>
 
       <div class="settings-section" id="securitySection" style="display: none;">
-        <h3>🔐 Two-Factor Authentication</h3>
+        <h3>Two-Factor Authentication</h3>
         <div style="margin-bottom: 12px; padding: 8px 12px; background: #1a2a1a; border: 1px solid #2a4a2a; border-radius: 6px;">
           <p style="font-size: 12px; color: #4ade80; margin: 0;">2FA is mandatory. A 6-digit code is emailed to you on each login.</p>
         </div>
@@ -3748,7 +4705,7 @@
       </div>
 
       <div class="settings-section" id="userStatsSection">
-        <h3>📊 Usage Analytics (Failsafe Local + Telemetry)</h3>
+        <h3>Usage Analytics (Failsafe Local + Telemetry)</h3>
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px;">
           <div style="background: #1a1a1a; border-radius: 8px; padding: 12px; text-align: center;">
             <div id="statTotalUsers" style="font-size: 24px; font-weight: 600; color: #fff;">-</div>
@@ -3807,7 +4764,7 @@
   <!-- Version Enforcement Modal - Soft block with grace period -->
   <div class="version-enforcement-modal" id="versionEnforcementModal">
     <div class="version-enforcement-box" id="versionEnforcementBox">
-      <div class="version-enforcement-icon" id="versionEnforcementIcon">⚠️</div>
+      <div class="version-enforcement-icon" id="versionEnforcementIcon">!</div>
       <h2 class="version-enforcement-title" id="versionEnforcementTitle">Update Required</h2>
       <p class="version-enforcement-message" id="versionEnforcementMessage">
         A required update is available. Please update to continue using EmmaNeigh.
@@ -3893,7 +4850,7 @@
         <!-- Group 1: Signature Packets / Closing -->
         <div class="nav-category expanded">
           <button class="nav-category-header">
-            <span class="icon">📝</span>
+            <span class="icon">CL</span>
             <span>Closing</span>
             <span class="arrow">▼</span>
           </button>
@@ -3908,7 +4865,7 @@
         <!-- Group 2: Project Management -->
         <div class="nav-category">
           <button class="nav-category-header">
-            <span class="icon">📋</span>
+            <span class="icon">PM</span>
             <span>Project Management</span>
             <span class="arrow">▼</span>
           </button>
@@ -3922,7 +4879,7 @@
         <!-- Group 3: Document Processing -->
         <div class="nav-category">
           <button class="nav-category-header">
-            <span class="icon">📄</span>
+            <span class="icon">DP</span>
             <span>Document Processing</span>
             <span class="arrow">▼</span>
           </button>
@@ -4558,7 +5515,7 @@
 
         <!-- Engine badge shown in results -->
         <div id="redlineEngineResult" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 11px; margin-bottom: 12px; background: rgba(59,130,246,0.15); color: #93c5fd;">
-          <span id="redlineEngineResultIcon">⚡</span>
+          <span id="redlineEngineResultIcon">LC</span>
           <span id="redlineEngineResultLabel">Powered by Litera Compare</span>
         </div>
 
@@ -4643,7 +5600,7 @@
         <!-- Search Mode Toggle -->
         <div class="search-mode-toggle" id="searchModeToggle" style="display: none;">
           <button class="search-mode-btn active" id="keywordSearchMode">Keyword Search</button>
-          <button class="search-mode-btn" id="aiSearchMode">🤖 AI Search</button>
+          <button class="search-mode-btn" id="aiSearchMode">AI Search</button>
         </div>
 
         <!-- Keyword Search Box -->
@@ -4672,7 +5629,7 @@
         <!-- AI Answer Box -->
         <div class="ai-answer-box" id="aiAnswerBox" style="display: none;">
           <div class="ai-answer-header">
-            <span class="ai-icon">🤖</span>
+            <span class="ai-icon">AI</span>
             <span>AI Answer</span>
           </div>
           <div class="ai-answer-text" id="aiAnswerText"></div>
@@ -4724,14 +5681,14 @@
 
         <!-- Detect Tasks Button -->
         <button class="task-detect-btn" id="detectTasksBtn" style="display: none;">
-          <span id="detectTasksBtnIcon">&#129302;</span>
+          <span id="detectTasksBtnIcon">AI</span>
           <span id="detectTasksBtnText">Detect Tasks from Emails</span>
         </button>
 
         <!-- Detected Tasks Panel -->
         <div class="detected-tasks-panel" id="detectedTasksPanel" style="display: none;">
           <div class="detected-tasks-header">
-            <h3><span>&#129302;</span> Detected Tasks</h3>
+            <h3><span>AI</span> Detected Tasks</h3>
             <span class="task-count" id="taskCount">0</span>
           </div>
           <div class="detected-tasks-list" id="detectedTasksList"></div>
@@ -5102,7 +6059,7 @@
           // In grace period - show warning but allow continue
           versionEnforcementBox.classList.remove('blocked');
           versionEnforcementBox.classList.add('grace');
-          versionEnforcementIcon.textContent = '⚠️';
+          versionEnforcementIcon.textContent = '!';
           versionEnforcementTitle.textContent = 'Update Available';
           versionEnforcementMessage.textContent = versionEnforcementStatus.message;
           versionEnforcementCountdown.textContent = versionEnforcementStatus.daysRemaining;
@@ -10155,14 +11112,14 @@
           if (usedLitera) {
             redlineEngineResult.style.background = 'rgba(59,130,246,0.15)';
             redlineEngineResult.style.color = '#93c5fd';
-            redlineEngineResultIcon.textContent = '⚡';
+            redlineEngineResultIcon.textContent = 'LC';
             redlineEngineResultLabel.textContent = 'Powered by Litera Compare';
             redlineStatsLitera.style.display = '';
             redlineStatsEmmaNeigh.style.display = 'none';
           } else {
             redlineEngineResult.style.background = 'rgba(34,197,94,0.15)';
             redlineEngineResult.style.color = '#86efac';
-            redlineEngineResultIcon.textContent = '🐴';
+            redlineEngineResultIcon.textContent = 'EN';
             redlineEngineResultLabel.textContent = 'EmmaNeigh Table Comparison';
             redlineStatsLitera.style.display = 'none';
             redlineStatsEmmaNeigh.style.display = '';
@@ -10997,7 +11954,7 @@
         if (email.has_attachments && email.attachments) {
           const attachLine = document.createElement('div');
           attachLine.className = 'email-item-attachments' + (blur ? ' blurred' : '');
-          attachLine.textContent = `📎 ${email.attachments}`;
+          attachLine.textContent = `Attachments: ${email.attachments}`;
           item.appendChild(attachLine);
         }
 
@@ -11061,7 +12018,7 @@
       if (email.has_attachments && email.attachments) {
         emailPreviewAttachments.style.display = 'block';
         const attachNames = splitEmailAttachmentTitles(email.attachments);
-        emailPreviewAttachmentsList.innerHTML = attachNames.map(a => `📎 ${a}`).join('<br>');
+        emailPreviewAttachmentsList.innerHTML = attachNames.map(a => escapeHtml(a)).join('<br>');
       } else {
         emailPreviewAttachments.style.display = 'none';
       }
@@ -11306,7 +12263,7 @@
               const dateStr = date ? new Date(date).toLocaleDateString() : '';
               const attachmentTitles = splitEmailAttachmentTitles(email.attachments);
               const attachmentsHtml = attachmentTitles.length
-                ? `<div class="email-item-attachments${blur ? ' blurred' : ''}">📎 ${escapeHtml(attachmentTitles.join('; '))}</div>`
+                ? `<div class="email-item-attachments${blur ? ' blurred' : ''}">Attachments: ${escapeHtml(attachmentTitles.join('; '))}</div>`
                 : '';
 
               return `
@@ -11463,7 +12420,7 @@
         alert('Task detection error: ' + err.message);
       } finally {
         detectTasksBtn.disabled = false;
-        detectTasksBtnIcon.innerHTML = '&#129302;';
+        detectTasksBtnIcon.textContent = 'AI';
         detectTasksBtnText.textContent = 'Detect Tasks from Emails';
       }
     });
@@ -11531,7 +12488,7 @@
         <div style="display: flex; justify-content: space-between; align-items: flex-start;">
           <div>
             <div style="font-size: 12px; color: #c4b5fd; font-weight: 600; margin-bottom: 4px;">
-              &#129302; Task from Email ${priorityBadge}
+              AI Task from Email ${priorityBadge}
             </div>
             <div style="font-size: 13px; color: #e5e5e5; margin-bottom: 4px;">${taskContext.summary || ''}</div>
             <div style="font-size: 11px; color: #888;">From: ${taskContext.emailFrom} - "${taskContext.emailSubject}"</div>
