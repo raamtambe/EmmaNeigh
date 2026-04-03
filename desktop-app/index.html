@@ -10746,6 +10746,68 @@
       }
     });
 
+    function splitEmailAttachmentTitles(rawValue) {
+      if (Array.isArray(rawValue)) {
+        return rawValue.map(value => String(value || '').trim()).filter(Boolean);
+      }
+      const text = String(rawValue || '').trim();
+      if (!text) return [];
+      if (text.includes(';')) return text.split(';').map(value => value.trim()).filter(Boolean);
+      if (/\r?\n/.test(text)) return text.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      return text.split(',').map(value => value.trim()).filter(Boolean);
+    }
+
+    function normalizeEmailSearchText(value) {
+      return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function getAttachmentMatchScore(email, queryText) {
+      const rawQuery = String(queryText || '').trim().toLowerCase();
+      const normalizedQuery = normalizeEmailSearchText(queryText);
+      if (!rawQuery && !normalizedQuery) return 0;
+
+      const attachmentTitles = splitEmailAttachmentTitles(email.attachments);
+      let score = 0;
+
+      attachmentTitles.forEach((title) => {
+        const titleLower = title.toLowerCase();
+        const normalizedTitle = normalizeEmailSearchText(title);
+        if (rawQuery && titleLower.includes(rawQuery)) {
+          score = Math.max(score, 90);
+        }
+        if (normalizedQuery && normalizedTitle.includes(normalizedQuery)) {
+          score = Math.max(score, 110);
+        }
+      });
+
+      return score;
+    }
+
+    function getEmailSearchRelevance(email, queryText, attachmentFilterText) {
+      const normalizedQuery = normalizeEmailSearchText(queryText);
+      const normalizedAttachmentFilter = normalizeEmailSearchText(attachmentFilterText);
+      const subjectText = normalizeEmailSearchText(email.subject || '');
+      const bodyText = normalizeEmailSearchText(String(email.body || '').slice(0, 4000));
+      let score = 0;
+
+      if (normalizedQuery) {
+        score += getAttachmentMatchScore(email, normalizedQuery);
+        if (subjectText.includes(normalizedQuery)) score += 24;
+        if (bodyText.includes(normalizedQuery)) score += 10;
+      }
+
+      if (normalizedAttachmentFilter) {
+        score += getAttachmentMatchScore(email, normalizedAttachmentFilter) * 2;
+      }
+
+      if (email.has_attachments) score += 1;
+      return score;
+    }
+
     // Boolean search parser - supports AND, OR, NOT, "quoted phrases", attachment:filename
     function parseBooleanQuery(query) {
       const tokens = [];
@@ -10786,6 +10848,9 @@
     function evaluateBooleanQuery(email, tokens) {
       if (!tokens.length) return true;
 
+      const normalizedAttachmentText = splitEmailAttachmentTitles(email.attachments)
+        .map((value) => normalizeEmailSearchText(value))
+        .join(' ');
       const searchableText = [
         email.subject || '',
         email.body || '',
@@ -10806,11 +10871,16 @@
         if (token.type === 'not') { negateNext = true; continue; }
 
         let match = false;
-        if (token.type === 'term') match = searchableText.includes(token.value);
-        else if (token.type === 'phrase') match = searchableText.includes(token.value);
+        if (token.type === 'term') {
+          match = searchableText.includes(token.value) || normalizedAttachmentText.includes(normalizeEmailSearchText(token.value));
+        }
+        else if (token.type === 'phrase') {
+          match = searchableText.includes(token.value) || normalizedAttachmentText.includes(normalizeEmailSearchText(token.value));
+        }
         else if (token.type === 'attachment') {
-          // Search attachment field first, then fall back to subject/body
-          match = attachmentText.includes(token.value) || searchableText.includes(token.value);
+          match = attachmentText.includes(token.value)
+            || normalizedAttachmentText.includes(normalizeEmailSearchText(token.value))
+            || searchableText.includes(token.value);
         }
         else if (token.type === 'has_attachment') match = email.has_attachments || !!email.attachments;
 
@@ -10847,7 +10917,8 @@
       // Parse boolean query
       const tokens = query ? parseBooleanQuery(query) : [];
 
-      const results = emailData.filter(email => {
+      const results = emailData
+        .filter(email => {
         // Boolean keyword search (if provided)
         if (tokens.length > 0) {
           if (!evaluateBooleanQuery(email, tokens)) return false;
@@ -10868,9 +10939,10 @@
         // Attachment filename filter - search attachments field, and also subject/body as fallback
         if (attachmentFilter) {
           const inAttachments = email.attachments && email.attachments.toLowerCase().includes(attachmentFilter);
+          const inNormalizedAttachments = getAttachmentMatchScore(email, attachmentFilter) > 0;
           const inSubject = email.subject && email.subject.toLowerCase().includes(attachmentFilter);
           const inBody = email.body && email.body.toLowerCase().includes(attachmentFilter);
-          if (!inAttachments && !inSubject && !inBody) return false;
+          if (!inAttachments && !inNormalizedAttachments && !inSubject && !inBody) return false;
         }
 
         // Has attachment filter
@@ -10890,7 +10962,14 @@
         }
 
         return true;
-      });
+      })
+        .sort((a, b) => {
+          const scoreDelta = getEmailSearchRelevance(b, query, attachmentFilter) - getEmailSearchRelevance(a, query, attachmentFilter);
+          if (scoreDelta !== 0) return scoreDelta;
+          const aTs = Date.parse(a.date_received || a.date_sent || '') || 0;
+          const bTs = Date.parse(b.date_received || b.date_sent || '') || 0;
+          return bTs - aTs;
+        });
 
       emailResultsTitle.textContent = `Search Results (${results.length} found)`;
       emailList.innerHTML = '';
@@ -10981,8 +11060,7 @@
       // Attachments
       if (email.has_attachments && email.attachments) {
         emailPreviewAttachments.style.display = 'block';
-        // Split attachment names by semicolons or commas
-        const attachNames = email.attachments.split(/[;,]/).map(a => a.trim()).filter(a => a);
+        const attachNames = splitEmailAttachmentTitles(email.attachments);
         emailPreviewAttachmentsList.innerHTML = attachNames.map(a => `📎 ${a}`).join('<br>');
       } else {
         emailPreviewAttachments.style.display = 'none';
@@ -11149,6 +11227,15 @@
       return Array.isArray(emailData) && emailData.length > 0;
     }
 
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     // AI Search handler
     aiSearchBtn.addEventListener('click', async () => {
       const query = aiSearchInput.value.trim();
@@ -11217,11 +11304,16 @@
 
               const date = email.date_sent || email.date_received || '';
               const dateStr = date ? new Date(date).toLocaleDateString() : '';
+              const attachmentTitles = splitEmailAttachmentTitles(email.attachments);
+              const attachmentsHtml = attachmentTitles.length
+                ? `<div class="email-item-attachments${blur ? ' blurred' : ''}">📎 ${escapeHtml(attachmentTitles.join('; '))}</div>`
+                : '';
 
               return `
                 <div class="email-item">
-                  <div class="email-item-subject${blur ? ' blurred' : ''}">${email.subject || '(No Subject)'}</div>
-                  <div class="email-item-meta${blur ? ' blurred' : ''}">From: ${email.from || 'Unknown'} | ${dateStr}</div>
+                  <div class="email-item-subject${blur ? ' blurred' : ''}">${escapeHtml(email.subject || '(No Subject)')}</div>
+                  <div class="email-item-meta${blur ? ' blurred' : ''}">From: ${escapeHtml(email.from || 'Unknown')} | ${escapeHtml(dateStr)}</div>
+                  ${attachmentsHtml}
                 </div>
               `;
             }).join('');

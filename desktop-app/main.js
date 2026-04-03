@@ -6136,11 +6136,11 @@ const COMMAND_TOOLS = [
   // ===== Outlook COM tools =====
   {
     name: 'outlook_search',
-    description: 'Search Outlook emails by subject, sender, date range, or body text. Returns matching emails.',
+    description: 'Search Outlook emails by subject, sender, body text, or attachment filename. Returns matching emails and exact attachment titles.',
     input_schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query — matched against subject, sender, and body' },
+        query: { type: 'string', description: 'Search query — matched against subject, sender, body, and attachment filenames' },
         folder: { type: 'string', description: 'Outlook folder to search. Default: Inbox. Examples: Inbox, Sent Items, Drafts' },
         max_results: { type: 'integer', description: 'Maximum results to return. Default: 20.' },
         days_back: { type: 'integer', description: 'Only search emails from the last N days. Default: 30.' }
@@ -9540,6 +9540,7 @@ try {
   $items = $folderObj.Items
   try { $items.Sort("[ReceivedTime]", $true) } catch {}
   $query = '${escapedQuery}'.ToLower()
+  $normalizedQuery = [regex]::Replace($query, '[^a-z0-9]+', ' ').Trim()
   $results = @()
   foreach ($item in $items) {
     if ($results.Count -ge ${normalizedMaxResults}) { break }
@@ -9557,9 +9558,31 @@ try {
       try { $msgDate = $item.SentOn } catch {}
     }
     if ($msgDate -and $msgDate -lt $cutoffDate) { continue }
-    if ($subj.ToLower().Contains($query) -or $sender.ToLower().Contains($query) -or $body.ToLower().Contains($query)) {
-      $attachmentCount = 0
-      try { $attachmentCount = [int]$item.Attachments.Count } catch {}
+    $attachmentNames = @()
+    try {
+      foreach ($att in $item.Attachments) {
+        if ($att.FileName) { $attachmentNames += $att.FileName }
+      }
+    } catch {}
+    $attachmentCount = $attachmentNames.Count
+    $attachmentText = ($attachmentNames -join '; ')
+    $normalizedSubject = [regex]::Replace($subj.ToLower(), '[^a-z0-9]+', ' ').Trim()
+    $normalizedSender = [regex]::Replace($sender.ToLower(), '[^a-z0-9]+', ' ').Trim()
+    $normalizedBody = [regex]::Replace($body.ToLower(), '[^a-z0-9]+', ' ').Trim()
+    $normalizedAttachmentText = [regex]::Replace($attachmentText.ToLower(), '[^a-z0-9]+', ' ').Trim()
+    $matchesQuery =
+      $subj.ToLower().Contains($query) -or
+      $sender.ToLower().Contains($query) -or
+      $body.ToLower().Contains($query) -or
+      $attachmentText.ToLower().Contains($query)
+    if (-not $matchesQuery -and $normalizedQuery) {
+      $matchesQuery =
+        $normalizedSubject.Contains($normalizedQuery) -or
+        $normalizedSender.Contains($normalizedQuery) -or
+        $normalizedBody.Contains($normalizedQuery) -or
+        $normalizedAttachmentText.Contains($normalizedQuery)
+    }
+    if ($matchesQuery) {
       $results += @{
         entry_id = $item.EntryID
         subject = $subj
@@ -9567,6 +9590,8 @@ try {
         received = if ($msgDate) { $msgDate.ToString("yyyy-MM-dd HH:mm") } else { '' }
         has_attachments = $attachmentCount -gt 0
         attachment_count = $attachmentCount
+        attachments = $attachmentText
+        attachment_titles = $attachmentNames
       }
     }
   }
@@ -9824,10 +9849,165 @@ function splitEmailAttachmentNames(rawValue) {
       .map((value) => String(value || '').trim())
       .filter(Boolean);
   }
-  return String(rawValue || '')
-    .split(/[;,]/)
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const text = String(rawValue || '').trim();
+  if (!text) return [];
+  if (text.includes(';')) {
+    return text.split(';').map((value) => value.trim()).filter(Boolean);
+  }
+  if (/\r?\n/.test(text)) {
+    return text.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  }
+  return text.split(',').map((value) => value.trim()).filter(Boolean);
+}
+
+const EMAIL_SEARCH_STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'attachment', 'attachments', 'by', 'can', 'contains',
+  'did', 'do', 'does', 'email', 'emails', 'exact', 'find', 'for', 'from', 'has',
+  'have', 'i', 'if', 'in', 'is', 'it', 'latest', 'me', 'message', 'messages',
+  'name', 'named', 'of', 'on', 'or', 'our', 'pull', 'received', 'search', 'sent',
+  'show', 'that', 'the', 'their', 'there', 'these', 'this', 'title', 'titles',
+  'to', 'up', 'we', 'what', 'which', 'with'
+]);
+
+function normalizeEmailSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeEmailSearchQuery(query) {
+  return normalizeEmailSearchText(query)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !EMAIL_SEARCH_STOPWORDS.has(token));
+}
+
+function scoreAttachmentTitleMatch(attachmentNames = [], query = '') {
+  const rawQuery = String(query || '').trim().toLowerCase();
+  const normalizedQuery = normalizeEmailSearchText(query);
+  const queryTokens = tokenizeEmailSearchQuery(query);
+  let score = 0;
+  const matchedAttachmentTitles = [];
+
+  for (const attachmentName of Array.isArray(attachmentNames) ? attachmentNames : []) {
+    const title = String(attachmentName || '').trim();
+    if (!title) continue;
+
+    const titleLower = title.toLowerCase();
+    const normalizedTitle = normalizeEmailSearchText(title);
+    let localScore = 0;
+
+    if (rawQuery && titleLower.includes(rawQuery)) {
+      localScore = Math.max(localScore, 90);
+    }
+    if (normalizedQuery && normalizedTitle.includes(normalizedQuery)) {
+      localScore = Math.max(localScore, 110);
+    }
+
+    if (queryTokens.length > 0) {
+      const tokenHits = queryTokens.filter((token) => normalizedTitle.includes(token));
+      if (tokenHits.length > 0) {
+        localScore = Math.max(localScore, tokenHits.length * 14);
+        if (queryTokens.length >= 2 && tokenHits.length === queryTokens.length) {
+          localScore = Math.max(localScore, 75);
+        }
+      }
+    }
+
+    if (localScore > 0) {
+      score = Math.max(score, localScore);
+      matchedAttachmentTitles.push(title);
+    }
+  }
+
+  return {
+    score,
+    matchedAttachmentTitles: matchedAttachmentTitles.slice(0, 5)
+  };
+}
+
+function scoreEmailForNaturalLanguageSearch(email = {}, query = '') {
+  const attachmentNames = splitEmailAttachmentNames(email.attachments);
+  const attachmentMatch = scoreAttachmentTitleMatch(attachmentNames, query);
+  const normalizedQuery = normalizeEmailSearchText(query);
+  const queryTokens = tokenizeEmailSearchQuery(query);
+  const subjectText = normalizeEmailSearchText(email.subject);
+  const senderText = normalizeEmailSearchText(email.from);
+  const bodyText = normalizeEmailSearchText(String(email.body || '').slice(0, 4000));
+  const recipientText = normalizeEmailSearchText(`${email.to || ''} ${email.cc || ''}`);
+
+  let score = attachmentMatch.score;
+  if (normalizedQuery) {
+    if (subjectText.includes(normalizedQuery)) score += 24;
+    if (bodyText.includes(normalizedQuery)) score += 10;
+    if (senderText.includes(normalizedQuery)) score += 8;
+    if (recipientText.includes(normalizedQuery)) score += 5;
+  }
+
+  if (queryTokens.length > 0) {
+    const searchable = [subjectText, bodyText, senderText, recipientText].join(' ');
+    const tokenHits = queryTokens.filter((token) => searchable.includes(token)).length;
+    score += tokenHits * 3;
+  }
+
+  if (attachmentMatch.score > 0) {
+    score += 5;
+  }
+
+  return {
+    score,
+    matchedAttachmentTitles: attachmentMatch.matchedAttachmentTitles
+  };
+}
+
+function selectEmailsForNaturalLanguageSearch(emails = [], query = '', maxEmails = 120) {
+  const sourceEmails = Array.isArray(emails) ? emails : [];
+  const normalizedMaxEmails = Math.max(10, Math.min(Math.round(Number(maxEmails || 120)), 200));
+  const scored = sourceEmails.map((email, index) => {
+    const match = scoreEmailForNaturalLanguageSearch(email, query);
+    const timestamp = Date.parse(email.date_received || email.date_sent || '') || 0;
+    return {
+      index,
+      email,
+      score: match.score,
+      timestamp,
+      matchedAttachmentTitles: match.matchedAttachmentTitles
+    };
+  });
+
+  const selected = [];
+  const seen = new Set();
+
+  const positiveMatches = scored
+    .filter((item) => item.score > 0)
+    .sort((a, b) => (b.score - a.score) || (b.timestamp - a.timestamp) || (a.index - b.index));
+
+  for (const item of positiveMatches) {
+    selected.push(item);
+    seen.add(item.index);
+    if (selected.length >= normalizedMaxEmails) break;
+  }
+
+  const minimumContext = Math.min(normalizedMaxEmails, 40);
+  if (selected.length < minimumContext) {
+    const fallbackRecent = scored
+      .filter((item) => !seen.has(item.index))
+      .sort((a, b) => (b.timestamp - a.timestamp) || (a.index - b.index));
+    for (const item of fallbackRecent) {
+      selected.push(item);
+      seen.add(item.index);
+      if (selected.length >= minimumContext) break;
+    }
+  }
+
+  return selected.slice(0, normalizedMaxEmails).map((item) => ({
+    ...item.email,
+    _source_index: item.index,
+    _search_score: item.score,
+    _matched_attachment_titles: item.matchedAttachmentTitles
+  }));
 }
 
 function normalizeLoadedEmail(record = {}) {
@@ -12464,15 +12644,20 @@ ipcMain.handle('nl-search-emails', async (event, config) => {
       return { success: false, error: 'No query provided' };
     }
 
-    // Prepare email context (limit to 100 emails, truncate bodies)
-    const emailContext = emails.slice(0, 100).map((email, i) => ({
-      index: i,
+    const selectedEmails = selectEmailsForNaturalLanguageSearch(emails, query, 120);
+
+    // Prepare email context and preserve original indices so the UI can open the right messages.
+    const emailContext = selectedEmails.map((email) => ({
+      index: Number.isInteger(email._source_index) ? email._source_index : 0,
       from: email.from || 'Unknown',
       to: email.to || '',
       subject: email.subject || '(No Subject)',
       body_preview: (email.body || '').substring(0, 300),
       date: email.date_received || email.date_sent || '',
       attachments: email.attachments || '',
+      attachment_titles: splitEmailAttachmentNames(email.attachments),
+      matched_attachment_titles: Array.isArray(email._matched_attachment_titles) ? email._matched_attachment_titles : [],
+      attachment_match_score: Number(email._search_score || 0),
       has_attachments: email.has_attachments || false
     }));
 
@@ -12480,7 +12665,7 @@ ipcMain.handle('nl-search-emails', async (event, config) => {
 
 User Question: ${query}
 
-Email Database (${emailContext.length} emails):
+Email Database (${emailContext.length} emails, already pre-ranked for likely relevance including attachment title matches):
 ${JSON.stringify(emailContext, null, 2)}
 
 Please analyze these emails and answer the user's question. Be specific and cite relevant emails by their index number.
@@ -12492,6 +12677,10 @@ Respond with a JSON object containing:
     "confidence": 0.85,
     "summary": "One-sentence summary of your finding"
 }
+
+Important:
+- Exact attachment titles matter. If the query names a document, prioritize emails whose attachment_titles or matched_attachment_titles match that document name.
+- Use the provided index values exactly as written. They refer to the original loaded emails.
 
 Respond ONLY with the JSON object, no other text.`;
 
