@@ -3457,6 +3457,51 @@
       box-shadow: 0 0 0 6px rgba(47, 111, 237, 0.08);
     }
 
+    .header-row {
+      align-items: flex-start;
+      gap: 18px;
+    }
+
+    .header-brand {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 640px;
+    }
+
+    .header-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      align-self: flex-start;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(188, 204, 226, 0.9);
+      color: var(--theme-accent-deep);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      box-shadow: 0 10px 22px rgba(36, 63, 98, 0.08);
+    }
+
+    .header-kicker::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--theme-accent), var(--theme-accent-alt));
+    }
+
+    .header-summary {
+      margin: 0;
+      max-width: 560px;
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--theme-text-soft);
+    }
+
     h1,
     .complete h2,
     .error h2 {
@@ -3530,11 +3575,26 @@
     }
 
     .nav-category {
+      --category-accent: var(--theme-accent);
+      --category-accent-soft: var(--theme-accent-soft);
+      --category-accent-deep: var(--theme-accent-deep);
       background: rgba(255, 255, 255, 0.86);
       border: 1px solid var(--theme-border);
       border-radius: 24px;
       box-shadow: 0 8px 20px rgba(44, 65, 92, 0.06);
       margin-bottom: 10px;
+    }
+
+    .nav-category:nth-child(2) {
+      --category-accent: #6d8de6;
+      --category-accent-soft: #eef2ff;
+      --category-accent-deep: #4a66bc;
+    }
+
+    .nav-category:nth-child(3) {
+      --category-accent: #1f9478;
+      --category-accent-soft: #e8f7f1;
+      --category-accent-deep: #18735f;
     }
 
     .nav-category-header {
@@ -3580,27 +3640,39 @@
     }
 
     .nav-items {
-      padding: 0 10px 10px;
-      gap: 4px;
+      padding: 0 10px 12px;
+      gap: 10px;
     }
 
     .nav-item {
-      padding: 12px 14px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+      min-height: 102px;
+      padding: 14px 14px 18px;
       font-size: 14px;
       font-weight: 600;
       color: var(--theme-text-soft);
-      border-radius: 18px;
+      border-radius: 20px;
+      border: 1px solid transparent;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(246, 250, 255, 0.96));
+      box-shadow: inset 0 0 0 1px rgba(236, 242, 250, 0.55);
     }
 
     .nav-item:hover {
       color: var(--theme-text);
-      background: #f4f8fd;
+      border-color: rgba(176, 197, 227, 0.9);
+      background: #f8fbff;
+      box-shadow: 0 14px 26px rgba(36, 63, 98, 0.08);
+      transform: translateY(-1px);
     }
 
     .nav-item.active {
       background: #ffffff;
       color: var(--theme-text);
-      box-shadow: inset 0 0 0 1px var(--theme-border), 0 10px 20px rgba(36, 63, 98, 0.08);
+      border-color: rgba(177, 199, 230, 0.92);
+      box-shadow: inset 0 0 0 1px rgba(210, 223, 240, 0.72), 0 14px 30px rgba(36, 63, 98, 0.09);
       position: relative;
     }
 
@@ -3609,20 +3681,50 @@
       position: absolute;
       left: 14px;
       bottom: 8px;
-      width: 58px;
+      width: 84px;
       height: 4px;
       border-radius: 999px;
-      background: linear-gradient(90deg, var(--theme-accent), var(--theme-accent-alt));
+      background: linear-gradient(90deg, var(--category-accent), rgba(255, 255, 255, 0.45));
     }
 
     .nav-item.disabled:hover {
       color: var(--theme-text-soft);
-      background: transparent;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(246, 250, 255, 0.96));
+      box-shadow: inset 0 0 0 1px rgba(236, 242, 250, 0.55);
     }
 
     .nav-item.disabled::after {
       background: #e6edf6;
       color: var(--theme-text-faint);
+    }
+
+    .nav-item-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--category-accent-soft);
+      color: var(--category-accent-deep);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .nav-item-title {
+      font-size: 17px;
+      line-height: 1.15;
+      font-weight: 800;
+      color: var(--theme-text);
+      letter-spacing: -0.02em;
+    }
+
+    .nav-item-description {
+      font-size: 12px;
+      line-height: 1.5;
+      font-weight: 600;
+      color: var(--theme-text-soft);
+      max-width: 180px;
     }
 
     .content-area {
@@ -3940,6 +4042,12 @@
       color: var(--theme-text);
     }
 
+    .agent-panel-header {
+      padding-bottom: 14px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--theme-border);
+    }
+
     .agent-thread-sidebar,
     .agent-chat,
     .agent-live-log,
@@ -3990,6 +4098,63 @@
       border-color: #a7bde0;
       color: var(--theme-text);
       background: #f8fbff;
+    }
+
+    .feedback-popover-title {
+      font-size: 12px;
+      color: var(--theme-text);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #agentProviderLabel,
+    #agentConnectionLabel {
+      color: var(--theme-text-soft) !important;
+    }
+
+    #tfaVerifySection,
+    #securityAdminSummary,
+    #featureUsageList {
+      background: var(--theme-surface-soft) !important;
+      border: 1px solid var(--theme-border) !important;
+      color: var(--theme-text) !important;
+      box-shadow: none !important;
+    }
+
+    .settings-content [style*='background: #111'],
+    .settings-content [style*='background: #1a1a1a'],
+    .settings-content [style*='background: #1a2a1a'] {
+      background: var(--theme-surface-soft) !important;
+      border-color: var(--theme-border) !important;
+      color: var(--theme-text) !important;
+      box-shadow: none !important;
+    }
+
+    .settings-content [style*='border: 1px solid #333'],
+    .settings-content [style*='border: 1px solid #2a2a2a'],
+    .settings-content [style*='border: 1px solid #2a4a2a'] {
+      border-color: var(--theme-border) !important;
+    }
+
+    .settings-content [style*='color: #fff'],
+    .settings-content [style*='color: #facc15'],
+    .settings-content [style*='color: #4ade80'],
+    .settings-content [style*='color: #60a5fa'],
+    .settings-content [style*='color: #ccc'] {
+      color: var(--theme-text) !important;
+    }
+
+    .settings-content [style*='color: #888'],
+    .settings-content [style*='color: #777'],
+    .settings-content [style*='color: #555'] {
+      color: var(--theme-text-soft) !important;
+    }
+
+    #userStatsTable table th,
+    #userStatsTable table td {
+      color: var(--theme-text) !important;
+      border-bottom-color: var(--theme-border) !important;
     }
 
     .user-info,
@@ -4800,7 +4965,11 @@
   <div class="container">
     <header>
       <div class="header-row">
-        <div class="logo">EmmaNeigh</div>
+        <div class="header-brand">
+          <div class="header-kicker">Workflow Studio</div>
+          <div class="logo">EmmaNeigh</div>
+          <p class="header-summary">A lighter, more organized workspace for closings, checklists, redlines, document edits, and email-driven deal management.</p>
+        </div>
         <div class="header-actions">
           <button class="settings-btn-header" id="settingsBtn" title="Settings">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4811,7 +4980,7 @@
           <div class="feedback-widget" id="feedbackWidget">
             <button class="feedback-btn" id="feedbackBtn" title="Submit feedback">Feedback</button>
             <div class="feedback-popover" id="feedbackPopover">
-              <div style="font-size: 12px; color: #ccc; font-weight: 600;">Send Feedback</div>
+              <div class="feedback-popover-title">Send Feedback</div>
               <textarea id="feedbackInput" placeholder="Share your request, issue, or idea..."></textarea>
               <div class="feedback-actions">
                 <button class="btn btn-secondary" id="feedbackViewBtn" style="margin-top: 0; padding: 6px 10px; font-size: 12px;">View Log</button>
@@ -4855,10 +5024,26 @@
             <span class="arrow">▼</span>
           </button>
           <div class="nav-items">
-            <button class="nav-item active" data-tab="packets">Create Sig Packets</button>
-            <button class="nav-item" data-tab="packetshell">Create Packet Shell</button>
-            <button class="nav-item" data-tab="execution">Execution Versions</button>
-            <button class="nav-item" data-tab="sigblocks">Sig Blocks from Checklist</button>
+            <button class="nav-item active" data-tab="packets">
+              <span class="nav-item-chip">Packets</span>
+              <span class="nav-item-title">Create Sig Packets</span>
+              <span class="nav-item-description">Extract signature pages and organize them by signer.</span>
+            </button>
+            <button class="nav-item" data-tab="packetshell">
+              <span class="nav-item-chip">Shell</span>
+              <span class="nav-item-title">Create Packet Shell</span>
+              <span class="nav-item-description">Build one combined signature set across transaction documents.</span>
+            </button>
+            <button class="nav-item" data-tab="execution">
+              <span class="nav-item-chip">Execution</span>
+              <span class="nav-item-title">Execution Versions</span>
+              <span class="nav-item-description">Insert signed pages back into the correct agreements.</span>
+            </button>
+            <button class="nav-item" data-tab="sigblocks">
+              <span class="nav-item-chip">Signature</span>
+              <span class="nav-item-title">Sig Blocks from Checklist</span>
+              <span class="nav-item-description">Generate signature blocks from checklist and incumbency documents.</span>
+            </button>
           </div>
         </div>
 
@@ -4870,9 +5055,21 @@
             <span class="arrow">▼</span>
           </button>
           <div class="nav-items">
-            <button class="nav-item" data-tab="email">Email Search</button>
-            <button class="nav-item" data-tab="updatechecklist">Update Checklist</button>
-            <button class="nav-item" data-tab="punchlist">Generate Punchlist</button>
+            <button class="nav-item" data-tab="email">
+              <span class="nav-item-chip">Outlook</span>
+              <span class="nav-item-title">Email Search</span>
+              <span class="nav-item-description">Search Outlook by sender, message text, and attachment names.</span>
+            </button>
+            <button class="nav-item" data-tab="updatechecklist">
+              <span class="nav-item-chip">Checklist</span>
+              <span class="nav-item-title">Update Checklist</span>
+              <span class="nav-item-description">Scan deal emails and write status and comments back to the checklist.</span>
+            </button>
+            <button class="nav-item" data-tab="punchlist">
+              <span class="nav-item-chip">Punchlist</span>
+              <span class="nav-item-title">Generate Punchlist</span>
+              <span class="nav-item-description">Turn the checklist into a focused list of live open items.</span>
+            </button>
           </div>
         </div>
 
@@ -4884,8 +5081,16 @@
             <span class="arrow">▼</span>
           </button>
           <div class="nav-items">
-            <button class="nav-item" data-tab="collate">Collate Documents</button>
-            <button class="nav-item" data-tab="redline">Redline Documents</button>
+            <button class="nav-item" data-tab="collate">
+              <span class="nav-item-chip">Collate</span>
+              <span class="nav-item-title">Collate Documents</span>
+              <span class="nav-item-description">Merge comments and track changes from multiple drafts.</span>
+            </button>
+            <button class="nav-item" data-tab="redline">
+              <span class="nav-item-chip">Compare</span>
+              <span class="nav-item-title">Redline Documents</span>
+              <span class="nav-item-description">Compare versions and export a clean comparison package.</span>
+            </button>
           </div>
         </div>
       </div>
@@ -5577,8 +5782,8 @@
           <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
           </svg>
-          <p class="input-label">Import Outlook Emails</p>
-          <p class="input-hint">Click to scan Inbox, Sent Items, and their subfolders, or drop a CSV here if Outlook COM is unavailable</p>
+          <p class="input-label">Load Outlook Emails</p>
+          <p class="input-hint">Click to scan Outlook folders through COM and search emails directly in EmmaNeigh</p>
           <p class="input-selected" id="emailCsvSelected"></p>
         </div>
 
@@ -5749,7 +5954,7 @@
     <div id="updatechecklistTab" style="display: none;">
       <div class="checklist-setup" id="checklistSetup">
         <h3 style="font-size: 14px; color: #888; margin-bottom: 16px;">Update Transaction Checklist</h3>
-        <p class="subtitle" style="margin-bottom: 16px;">Upload your checklist. EmmaNeigh will scan Outlook Inbox, Sent Items, and their subfolders to infer document status updates.</p>
+        <p class="subtitle" style="margin-bottom: 16px;">Upload your checklist. EmmaNeigh will scan the Outlook folders you choose to infer document status updates.</p>
 
         <!-- Checklist Input -->
         <div class="input-section" id="checklistDocDrop">
@@ -5770,7 +5975,7 @@
             <path d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"/>
           </svg>
           <p class="input-label">Outlook Email Activity</p>
-          <p class="input-hint">Optional: click to choose how many days back to scan across Inbox, Sent Items, and their subfolders, or drop a CSV here if Outlook COM is unavailable</p>
+          <p class="input-hint">Optional: click to choose how many days back to scan and which Outlook folders to search</p>
           <div class="input-selected-wrapper">
             <p class="input-selected" id="checklistEmailSelected"></p>
             <button class="clear-file-btn" id="clearChecklistEmail">×</button>
@@ -9091,9 +9296,11 @@
         }
         const scope = await promptForOutlookScope({
           title: 'Choose Outlook Folders for Checklist Update',
-          description: 'Select the Outlook folders EmmaNeigh should search before updating the checklist.',
+          description: 'Select the Inbox, Sent Items, and any matter subfolders EmmaNeigh should search before updating the checklist.',
           defaultDays: checklistEmailLookbackDays,
-          selectedFolders: checklistSelectedOutlookFolders
+          selectedFolders: checklistSelectedOutlookFolders,
+          allEmailFolders: true,
+          defaultSelectionRoots: ['Inbox', 'Sent Items']
         });
         if (!scope) {
           return { message: 'Checklist update canceled.' };
@@ -9108,7 +9315,8 @@
           checklistPath: checklistDocPath,
           useOutlook: true,
           daysBack: scope.daysBack,
-          folderPaths: checklistSelectedOutlookFolders
+          folderPaths: checklistSelectedOutlookFolders,
+          allEmailFolders: true
         }, false);
         return { message: `Started Update Checklist using ${checklistFile.name} and Outlook email folders.` };
       }
@@ -11458,6 +11666,19 @@
         .filter(Boolean);
     }
 
+    function getDefaultOutlookScopeSelection(folders, preferredRoots = []) {
+      const normalizedRoots = new Set(
+        (Array.isArray(preferredRoots) ? preferredRoots : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      );
+      if (!normalizedRoots.size) return [];
+      return (Array.isArray(folders) ? folders : [])
+        .filter((folder) => normalizedRoots.has(String(folder.root || '').trim()))
+        .map((folder) => String(folder.path || '').trim())
+        .filter(Boolean);
+    }
+
     function updateOutlookScopeStatus(message = '') {
       if (message) {
         outlookScopeStatus.textContent = message;
@@ -11481,7 +11702,10 @@
       title = 'Choose Outlook Folders',
       description = 'Select the Outlook folders EmmaNeigh should search.',
       defaultDays = 30,
-      selectedFolders = []
+      selectedFolders = [],
+      roots = ['Inbox', 'Sent Items'],
+      allEmailFolders = false,
+      defaultSelectionRoots = roots
     } = {}) {
       if (pendingOutlookScopeResolver) {
         resolveOutlookScopePrompt(null);
@@ -11497,8 +11721,9 @@
         pendingOutlookScopeResolver = resolve;
 
         const folderResult = await ipcRenderer.invoke('list-outlook-folders', {
-          roots: ['Inbox', 'Sent Items'],
-          includeSubfolders: true
+          roots,
+          includeSubfolders: true,
+          allEmailFolders
         });
         if (!pendingOutlookScopeResolver) {
           return;
@@ -11512,7 +11737,7 @@
         availableOutlookFolders = Array.isArray(folderResult.folders) ? folderResult.folders : [];
         const defaultSelected = (Array.isArray(selectedFolders) && selectedFolders.length)
           ? selectedFolders
-          : availableOutlookFolders.map((folder) => folder.path);
+          : getDefaultOutlookScopeSelection(availableOutlookFolders, defaultSelectionRoots);
         renderOutlookScopeFolderList(availableOutlookFolders, defaultSelected);
         updateOutlookScopeStatus();
       });
@@ -11622,9 +11847,11 @@
     emailCsvDrop.addEventListener('click', async () => {
       const scope = await promptForOutlookScope({
         title: 'Choose Outlook Folders for Email Search',
-        description: 'Select the Inbox, Sent, and subfolders EmmaNeigh should search for email analysis.',
+        description: 'Select the Outlook folders EmmaNeigh should search for email analysis.',
         defaultDays: emailLookbackDays,
-        selectedFolders: emailSelectedOutlookFolders
+        selectedFolders: emailSelectedOutlookFolders,
+        allEmailFolders: true,
+        defaultSelectionRoots: ['Inbox', 'Sent Items']
       });
       if (!scope) return;
       emailLookbackDays = scope.daysBack;
@@ -11675,7 +11902,8 @@
           daysBack,
           folders: ['Inbox', 'Sent Items'],
           includeSubfolders: true,
-          folderPaths: emailSelectedOutlookFolders
+          folderPaths: emailSelectedOutlookFolders,
+          allEmailFolders: true
         });
 
         if (result.success) {
@@ -11748,7 +11976,7 @@
       const normalizedQuery = normalizeEmailSearchText(queryText);
       const normalizedAttachmentFilter = normalizeEmailSearchText(attachmentFilterText);
       const subjectText = normalizeEmailSearchText(email.subject || '');
-      const bodyText = normalizeEmailSearchText(String(email.body || '').slice(0, 4000));
+      const bodyText = normalizeEmailSearchText(String(email.body_current || email.body || '').slice(0, 4000));
       let score = 0;
 
       if (normalizedQuery) {
@@ -11810,7 +12038,7 @@
         .join(' ');
       const searchableText = [
         email.subject || '',
-        email.body || '',
+        email.body_current || email.body || '',
         email.from || '',
         email.to || '',
         email.attachments || ''
@@ -11898,7 +12126,7 @@
           const inAttachments = email.attachments && email.attachments.toLowerCase().includes(attachmentFilter);
           const inNormalizedAttachments = getAttachmentMatchScore(email, attachmentFilter) > 0;
           const inSubject = email.subject && email.subject.toLowerCase().includes(attachmentFilter);
-          const inBody = email.body && email.body.toLowerCase().includes(attachmentFilter);
+          const inBody = (email.body_current || email.body || '').toLowerCase().includes(attachmentFilter);
           if (!inAttachments && !inNormalizedAttachments && !inSubject && !inBody) return false;
         }
 
@@ -12172,7 +12400,9 @@
         title,
         description,
         defaultDays: emailLookbackDays || 30,
-        selectedFolders: emailSelectedOutlookFolders
+        selectedFolders: emailSelectedOutlookFolders,
+        allEmailFolders: true,
+        defaultSelectionRoots: ['Inbox', 'Sent Items']
       });
       if (!scope) {
         return false;
@@ -12615,9 +12845,11 @@
       if (e.target === clearChecklistEmail) return;
       const scope = await promptForOutlookScope({
         title: 'Choose Outlook Folders for Checklist Update',
-        description: 'Select the Outlook folders EmmaNeigh should search before updating the checklist.',
+        description: 'Select the Inbox, Sent Items, and any matter subfolders EmmaNeigh should search before updating the checklist.',
         defaultDays: checklistEmailLookbackDays,
-        selectedFolders: checklistSelectedOutlookFolders
+        selectedFolders: checklistSelectedOutlookFolders,
+        allEmailFolders: true,
+        defaultSelectionRoots: ['Inbox', 'Sent Items']
       });
       if (!scope) return;
       checklistEmailSourceMode = 'outlook';
@@ -12677,7 +12909,8 @@
                 checklistPath: checklistDocPath,
                 useOutlook: true,
                 daysBack: expandedDays,
-                folderPaths: checklistSelectedOutlookFolders
+                folderPaths: checklistSelectedOutlookFolders,
+                allEmailFolders: true
               }, false);
             }
           }
@@ -12714,9 +12947,11 @@
       if (!checklistEmailDrop.classList.contains('selected')) {
         const scope = await promptForOutlookScope({
           title: 'Choose Outlook Folders for Checklist Update',
-          description: 'Select the Outlook folders EmmaNeigh should search before updating the checklist.',
+          description: 'Select the Inbox, Sent Items, and any matter subfolders EmmaNeigh should search before updating the checklist.',
           defaultDays: checklistEmailLookbackDays,
-          selectedFolders: checklistSelectedOutlookFolders
+          selectedFolders: checklistSelectedOutlookFolders,
+          allEmailFolders: true,
+          defaultSelectionRoots: ['Inbox', 'Sent Items']
         });
         if (!scope) return;
         selectedDays = scope.daysBack;
@@ -12731,7 +12966,8 @@
         checklistPath: checklistDocPath,
         useOutlook: true,
         daysBack: selectedDays,
-        folderPaths: checklistSelectedOutlookFolders
+        folderPaths: checklistSelectedOutlookFolders,
+        allEmailFolders: true
       });
     });
 

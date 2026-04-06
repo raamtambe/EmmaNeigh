@@ -78,6 +78,33 @@ def truncate_email_body(body, max_chars=300):
     return body[:max_chars] + "..."
 
 
+def clean_email_body_for_search(body):
+    lines = []
+    header_lines_seen = 0
+    for raw_line in str(body or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower_line = line.lower()
+        if line.startswith(">"):
+            continue
+        if lower_line.startswith("-----original message-----"):
+            break
+        if re.match(r"^on .+ wrote:$", lower_line):
+            break
+        if re.match(r"^(from|sent|to|cc|subject):", lower_line):
+            header_lines_seen += 1
+            if header_lines_seen >= 2:
+                break
+            continue
+        if "privileged and confidential" in lower_line or "confidentiality notice" in lower_line:
+            break
+        lines.append(line)
+        if len(lines) >= 80:
+            break
+    return " ".join(lines)
+
+
 def split_attachment_names(raw_value):
     if isinstance(raw_value, list):
         return [str(value).strip() for value in raw_value if str(value).strip()]
@@ -168,7 +195,7 @@ def score_email_for_query(email, query):
     query_tokens = tokenize_query(query)
     subject_text = normalize_search_text(email.get("subject", ""))
     sender_text = normalize_search_text(email.get("from", ""))
-    body_text = normalize_search_text(str(email.get("body", ""))[:4000])
+    body_text = normalize_search_text(clean_email_body_for_search(email.get("body", ""))[:4000])
     recipient_text = normalize_search_text(f"{email.get('to', '')} {email.get('cc', '')}")
 
     score = attachment_match["score"]
@@ -251,7 +278,7 @@ def prepare_email_context(emails, query, max_emails=120):
             "from": email.get("from", "Unknown"),
             "to": email.get("to", ""),
             "subject": email.get("subject", "(No Subject)"),
-            "body_preview": truncate_email_body(email.get("body", "")),
+            "body_preview": truncate_email_body(clean_email_body_for_search(email.get("body", ""))),
             "date": email.get("date_received") or email.get("date_sent") or "",
             "attachments": email.get("attachments", ""),
             "attachment_titles": split_attachment_names(email.get("attachments", "")),

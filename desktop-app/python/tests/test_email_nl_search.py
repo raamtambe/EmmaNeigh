@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from email_nl_search import (
+    clean_email_body_for_search,
     prepare_email_context,
     score_attachment_title_match,
     split_attachment_names,
@@ -55,6 +56,14 @@ class EmailNaturalLanguageSearchTests(unittest.TestCase):
         self.assertEqual(context[0]["index"], 1)
         self.assertIn("Acme_Purchase_Agreement_v5.docx", context[0]["attachment_titles"])
         self.assertIn("Acme_Purchase_Agreement_v5.docx", context[0]["matched_attachment_titles"])
+
+    def test_clean_email_body_for_search_removes_quoted_thread_history(self):
+        cleaned = clean_email_body_for_search(
+            "Need comments on the purchase agreement.\n\nOn Fri, Seller Counsel wrote:\nOlder message mentioning purchase agreement and disclosure schedules."
+        )
+
+        self.assertIn("Need comments on the purchase agreement.", cleaned)
+        self.assertNotIn("Older message", cleaned)
 
 
 if __name__ == "__main__":

@@ -203,6 +203,35 @@ DOCUMENT_ACTIVITY_KEYWORDS = (
     'blackline', 'comments', 'execution version', 'executed', 'signed', 'for review',
     'for signature', 'circulated'
 )
+DOCUMENT_ROW_KEYWORDS = (
+    'agreement', 'amendment', 'assignment', 'bill of sale', 'bringdown', 'certificate',
+    'consent', 'contract', 'disclosure schedule', 'escrow', 'exhibit', 'funds flow',
+    'guaranty', 'guarantee', 'incumbency', 'instruction', 'joinder', 'lease', 'letter',
+    'management', 'minutes', 'note', 'notice', 'officer', 'opinion', 'pledge',
+    'power of attorney', 'proxy', 'questionnaire', 'release', 'resolution',
+    'schedule', 'security', 'services', 'settlement', 'side letter', 'statement',
+    'subscription', 'support', 'tax', 'termination', 'transition', 'voting'
+)
+SECTION_ROW_KEYWORDS = (
+    'article', 'section', 'recitals', 'definitions', 'representations', 'warranties',
+    'covenants', 'conditions', 'indemnification', 'miscellaneous', 'signatures',
+    'signature pages', 'closing deliverables', 'general', 'other provisions'
+)
+DOCUMENT_FILENAME_NOISE_RE = re.compile(
+    r'\b(?:draft|redline|blackline|markup|comments?|clean|execution|executed|signed|'
+    r'final|revised|version|copy|copies|dated|sig(?:nature)?(?:\s+pages?)?|'
+    r'v\d+|rev(?:ision)?\s*\d+)\b',
+    re.IGNORECASE,
+)
+ROW_NUMBER_PREFIX_RE = re.compile(
+    r'^\s*(?:\(?\d+(?:\.\d+)*\)?[.)-]?|\(?[a-z]\)?[.)-]?|\(?[ivxlcdm]+\)?[.)-]?)\s+',
+    re.IGNORECASE,
+)
+INLINE_DATE_PATTERNS = (
+    re.compile(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b'),
+    re.compile(r'\b\d{1,2}-\d{1,2}-\d{2,4}\b'),
+    re.compile(r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},\s+\d{4}\b', re.IGNORECASE),
+)
 
 
 def normalize_email_record(raw_email):
@@ -224,9 +253,19 @@ def normalize_email_record(raw_email):
     if not has_attachments and attachment_text:
         has_attachments = attachment_text.lower() not in ('none', 'false', 'no', 'n/a')
 
+    is_sent_folder = raw_email.get('is_sent_folder')
+    if isinstance(is_sent_folder, str):
+        is_sent_folder = is_sent_folder.strip().lower() not in ('', '0', 'false', 'no', 'none', 'nan')
+    else:
+        is_sent_folder = bool(is_sent_folder)
+
+    body_text = str(raw_email.get('body', '') or '').strip()
+    body_current = clean_email_body_for_analysis(body_text)
+
     email = {
         'subject': str(raw_email.get('subject', '') or '').strip(),
-        'body': str(raw_email.get('body', '') or '').strip(),
+        'body': body_text,
+        'body_current': body_current,
         'from': str(raw_email.get('from', raw_email.get('sender', raw_email.get('sender_email', ''))) or '').strip(),
         'to': str(raw_email.get('to', '') or '').strip(),
         'cc': str(raw_email.get('cc', '') or '').strip(),
@@ -235,6 +274,8 @@ def normalize_email_record(raw_email):
         'date': str(raw_email.get('date', '') or '').strip(),
         'folder': str(raw_email.get('folder', '') or '').strip(),
         'root_folder': str(raw_email.get('root_folder', '') or '').strip(),
+        'store': str(raw_email.get('store', '') or '').strip(),
+        'is_sent_folder': is_sent_folder,
         'entry_id': str(raw_email.get('entry_id', '') or '').strip(),
         'conversation_id': str(raw_email.get('conversation_id', '') or '').strip(),
         'conversation_topic': str(raw_email.get('conversation_topic', '') or '').strip(),
@@ -255,13 +296,14 @@ def normalize_email_record(raw_email):
 
     email['searchable'] = " ".join([
         email['subject'],
-        email['body'],
+        email['body_current'] or email['body'],
         email['from'],
         email['to'],
         email['cc'],
         email['attachments'],
         email['folder'],
         email['root_folder'],
+        email['store'],
         email['conversation_topic'],
     ]).lower()
     return email
@@ -982,6 +1024,18 @@ def normalize_cell_text(value):
     return re.sub(r'\s+', ' ', str(value or '')).strip()
 
 
+def normalize_searchable_lookup_text(value):
+    return re.sub(r'[^a-z0-9]+', ' ', normalize_cell_text(value).lower()).strip()
+
+
+def normalize_document_lookup_text(value):
+    text = os.path.splitext(os.path.basename(str(value or '')))[0]
+    text = text.replace('_', ' ').replace('-', ' ')
+    text = normalize_searchable_lookup_text(text)
+    text = DOCUMENT_FILENAME_NOISE_RE.sub(' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 def normalize_bool(value, default=False):
     if value is None:
         return default
@@ -1002,7 +1056,7 @@ def normalize_bool(value, default=False):
 def extract_search_tokens(text):
     tokens = []
     seen = set()
-    for token in re.findall(r'[a-z0-9]+', normalize_cell_text(text).lower()):
+    for token in re.findall(r'[a-z0-9]+', normalize_searchable_lookup_text(text)):
         if len(token) < 3 or token in SEARCH_TOKEN_STOPWORDS:
             continue
         if token not in seen:
@@ -1014,13 +1068,99 @@ def extract_search_tokens(text):
 def extract_deal_tokens(text):
     tokens = []
     seen = set()
-    for token in re.findall(r'[a-z0-9]+', normalize_cell_text(text).lower()):
+    for token in re.findall(r'[a-z0-9]+', normalize_searchable_lookup_text(text)):
         if len(token) < 4 or token in DEAL_TOKEN_STOPWORDS:
             continue
         if token not in seen:
             seen.add(token)
             tokens.append(token)
     return tokens
+
+
+def build_document_match_profile(text):
+    document_name = normalize_cell_text(text)
+    lookup = normalize_document_lookup_text(document_name)
+    tokens = extract_search_tokens(lookup or document_name)
+    return {
+        'document_name': document_name,
+        'lookup': lookup,
+        'tokens': tokens,
+    }
+
+
+def score_attachment_title_match(document_name, attachment_names):
+    profile = build_document_match_profile(document_name)
+    doc_lookup = profile['lookup']
+    doc_tokens = profile['tokens']
+    best_score = 0.0
+    matched_titles = []
+
+    for attachment_name in attachment_names or []:
+        title = normalize_cell_text(attachment_name)
+        if not title:
+            continue
+        title_lookup = normalize_document_lookup_text(title)
+        token_hits = [token for token in doc_tokens if token in title_lookup]
+        local_score = 0.0
+
+        if doc_lookup and (doc_lookup in title_lookup or title_lookup in doc_lookup):
+            local_score = max(local_score, 10.5)
+        if token_hits:
+            local_score = max(local_score, min(8.8, len(token_hits) * 2.2))
+            if len(token_hits) >= 2:
+                local_score += 0.9
+
+        if local_score > 0:
+            best_score = max(best_score, local_score)
+            matched_titles.append(title)
+
+    return round(best_score, 4), dedupe_preserve_order(matched_titles)[:4]
+
+
+def classify_checklist_row(doc_name, row_data, headers, doc_col_idx, status_col_idx, notes_col_idx, previous_document_name=''):
+    cleaned_doc_name = normalize_cell_text(doc_name)
+    if not cleaned_doc_name:
+        return {
+            'row_type': 'blank',
+            'should_update': False,
+            'match_document_name': '',
+        }
+
+    lookup = normalize_document_lookup_text(cleaned_doc_name)
+    doc_tokens = extract_search_tokens(lookup or cleaned_doc_name)
+    has_document_keyword = any(keyword in lookup for keyword in DOCUMENT_ROW_KEYWORDS)
+    has_section_keyword = any(keyword in lookup for keyword in SECTION_ROW_KEYWORDS)
+    starts_with_subrow_marker = bool(ROW_NUMBER_PREFIX_RE.match(cleaned_doc_name))
+
+    non_empty_cells = [normalize_cell_text(cell) for cell in row_data if normalize_cell_text(cell)]
+    non_doc_cells = [
+        normalize_cell_text(cell)
+        for idx, cell in enumerate(row_data)
+        if idx not in (doc_col_idx, status_col_idx, notes_col_idx) and normalize_cell_text(cell)
+    ]
+    short_generic_label = len(doc_tokens) <= 2 and not has_document_keyword
+    likely_section_header = (
+        len(non_empty_cells) <= 2 and len(non_doc_cells) <= 1 and (
+            cleaned_doc_name.endswith(':')
+            or has_section_keyword
+            or (cleaned_doc_name.isupper() and len(cleaned_doc_name) <= 80)
+        )
+    )
+
+    if likely_section_header:
+        row_type = 'section_header'
+    elif previous_document_name and (starts_with_subrow_marker or (short_generic_label and has_section_keyword)):
+        row_type = 'subrow'
+    elif previous_document_name and short_generic_label and len(non_doc_cells) <= 2:
+        row_type = 'subrow'
+    else:
+        row_type = 'document'
+
+    return {
+        'row_type': row_type,
+        'should_update': row_type == 'document',
+        'match_document_name': cleaned_doc_name if row_type == 'document' else normalize_cell_text(previous_document_name),
+    }
 
 
 def dedupe_preserve_order(values):
@@ -1100,6 +1240,10 @@ def clean_email_body_for_analysis(body):
         lower_line = line.lower()
         if line.startswith('>'):
             continue
+        if lower_line.startswith('-----original message-----'):
+            break
+        if re.match(r'^on .+ wrote:$', lower_line):
+            break
         if re.match(r'^(from|sent|to|cc|subject):', lower_line):
             header_lines_seen += 1
             if header_lines_seen >= 2:
@@ -1132,6 +1276,8 @@ def extract_issue_snippets(text, limit=MAX_THREAD_ISSUES_PER_SUMMARY):
 
 
 def infer_email_direction(email):
+    if email.get('is_sent_folder'):
+        return 'sent'
     root_folder = normalize_cell_text(email.get('root_folder') or email.get('folder')).lower()
     sender = normalize_cell_text(email.get('from')).lower()
     if 'sent items' in root_folder or root_folder.endswith('sent items'):
@@ -1325,6 +1471,7 @@ def build_email_threads(emails):
 
         first_email = thread_emails[0] if thread_emails else {}
         last_email = thread_emails[-1] if thread_emails else {}
+        latest_body_excerpt = clean_email_body_for_analysis(last_email.get('body_current') or last_email.get('body'))
         threads.append({
             'thread_id': f"thread-{thread_idx + 1}",
             'thread_key': thread_key,
@@ -1340,6 +1487,8 @@ def build_email_threads(emails):
             'attachments_text': " ".join(attachment_names).lower(),
             'first_date': format_date_value(first_email.get('date_received') or first_email.get('date_sent') or first_email.get('date')),
             'last_date': format_date_value(last_email.get('date_received') or last_email.get('date_sent') or last_email.get('date')),
+            'latest_attachment_names': split_attachment_names(last_email.get('attachments')),
+            'latest_body_excerpt': latest_body_excerpt[:260],
             'status_signal': status_signal,
             'status_priority': status_priority,
             'issue_snippets': dedupe_preserve_order(all_issue_snippets)[:MAX_THREAD_ISSUES_PER_SUMMARY],
@@ -1356,36 +1505,47 @@ def build_email_threads(emails):
 
 
 def score_email_candidate(checklist_item, email):
-    searchable = str(email.get('searchable', '') or '').lower()
-    subject = str(email.get('subject', '') or '').lower()
-    attachments = str(email.get('attachments', '') or '').lower()
+    searchable = normalize_searchable_lookup_text(email.get('searchable', ''))
+    subject = normalize_searchable_lookup_text(email.get('subject', ''))
+    body_text = normalize_searchable_lookup_text(email.get('body_current') or email.get('body'))
+    attachments = split_attachment_names(email.get('attachments'))
+    attachment_text = " ".join(normalize_document_lookup_text(title) for title in attachments)
     recipients = " ".join([
         str(email.get('from', '') or ''),
         str(email.get('to', '') or ''),
         str(email.get('cc', '') or ''),
-    ]).lower()
+    ])
+    recipient_text = normalize_searchable_lookup_text(recipients)
 
-    doc_name = normalize_cell_text(checklist_item.get('document_name', '')).lower()
-    row_context = normalize_cell_text(checklist_item.get('row_context', '')).lower()
+    doc_name = normalize_cell_text(
+        checklist_item.get('match_document_name') or checklist_item.get('document_name', '')
+    )
+    row_context = normalize_cell_text(checklist_item.get('row_context', ''))
+    doc_profile = build_document_match_profile(doc_name)
+    doc_lookup = doc_profile['lookup']
+    doc_tokens = doc_profile['tokens']
+    attachment_score, matched_attachments = score_attachment_title_match(doc_name, attachments)
     score = 0.0
 
-    if doc_name and doc_name in attachments:
-        score += 7.0
-    elif doc_name and doc_name in subject:
-        score += 5.5
-    elif doc_name and doc_name in searchable:
-        score += 4.0
+    if attachment_score > 0:
+        score += attachment_score
+    elif doc_lookup and doc_lookup in subject:
+        score += 6.5
+    elif doc_lookup and (doc_lookup in body_text or doc_lookup in searchable):
+        score += 3.2
 
-    doc_tokens = extract_search_tokens(doc_name)
     context_tokens = extract_search_tokens(row_context)
 
     doc_token_hits = 0
     for token in doc_tokens:
-        if token in attachments:
+        if token in attachment_text:
             score += 2.4
             doc_token_hits += 1
         elif token in subject:
             score += 1.8
+            doc_token_hits += 1
+        elif token in body_text:
+            score += 1.0
             doc_token_hits += 1
         elif token in searchable:
             score += 0.9
@@ -1396,13 +1556,13 @@ def score_email_candidate(checklist_item, email):
 
     context_hits = 0
     for token in context_tokens[:8]:
-        if token in subject or token in attachments:
+        if token in subject or token in attachment_text:
             score += 0.9
             context_hits += 1
-        elif token in recipients:
+        elif token in recipient_text:
             score += 0.6
             context_hits += 1
-        elif token in searchable:
+        elif token in body_text or token in searchable:
             score += 0.35
             context_hits += 1
 
@@ -1410,6 +1570,8 @@ def score_email_candidate(checklist_item, email):
         score += 0.7
     if email.get('has_attachments'):
         score += 0.2
+    if matched_attachments:
+        score += min(0.8, 0.25 * len(matched_attachments))
 
     return score
 
@@ -1426,21 +1588,29 @@ def select_candidate_email_indices(checklist_item, emails, limit=MAX_CANDIDATE_E
 
 
 def score_thread_candidate(checklist_item, thread, deal_profile=None):
-    doc_name = normalize_cell_text(checklist_item.get('document_name', '')).lower()
-    thread_subject = str(thread.get('subject', '') or '').lower()
-    thread_searchable = str(thread.get('searchable', '') or '').lower()
-    thread_attachments = str(thread.get('attachments_text', '') or '').lower()
+    doc_name = normalize_cell_text(
+        checklist_item.get('match_document_name') or checklist_item.get('document_name', '')
+    )
+    doc_profile = build_document_match_profile(doc_name)
+    doc_lookup = doc_profile['lookup']
+    doc_tokens = doc_profile['tokens']
+    thread_subject = normalize_searchable_lookup_text(thread.get('subject', ''))
+    thread_searchable = normalize_searchable_lookup_text(thread.get('searchable', ''))
+    thread_attachments = " ".join(
+        normalize_document_lookup_text(name) for name in thread.get('attachment_names', [])
+    )
     relevant_email_scores = []
+    attachment_score, matched_attachments = score_attachment_title_match(doc_name, thread.get('attachment_names', []))
 
     for email in thread.get('emails', []):
         base_score = score_email_candidate(checklist_item, email)
         if base_score >= 0.9:
             relevant_email_scores.append((email.get('index', -1), round(base_score, 4)))
 
-    exact_doc_hit = bool(doc_name and (
-        doc_name in thread_attachments or
-        doc_name in thread_subject or
-        doc_name in thread_searchable
+    exact_doc_hit = bool(doc_lookup and (
+        doc_lookup in thread_attachments or
+        doc_lookup in thread_subject or
+        doc_lookup in thread_searchable
     ))
 
     score = 0.0
@@ -1453,10 +1623,11 @@ def score_thread_candidate(checklist_item, thread, deal_profile=None):
     elif exact_doc_hit:
         score += 4.5
 
-    doc_tokens = extract_search_tokens(doc_name)
+    score += attachment_score
     attachment_hits = sum(1 for token in doc_tokens[:8] if token in thread_attachments)
     subject_hits = sum(1 for token in doc_tokens[:8] if token in thread_subject)
-    score += (attachment_hits * 0.9) + (subject_hits * 0.6)
+    body_hits = sum(1 for token in doc_tokens[:8] if token in thread_searchable)
+    score += (attachment_hits * 0.9) + (subject_hits * 0.6) + (body_hits * 0.25)
 
     deal_anchor_hits = []
     if deal_profile and deal_profile.get('anchor_tokens'):
@@ -1479,6 +1650,7 @@ def score_thread_candidate(checklist_item, thread, deal_profile=None):
         'email_scores': relevant_email_scores[:MAX_CANDIDATE_EMAILS_PER_ROW],
         'deal_anchor_hits': deal_anchor_hits,
         'exact_doc_hit': exact_doc_hit,
+        'matched_attachment_titles': matched_attachments,
     }
 
 
@@ -1538,17 +1710,25 @@ def summarize_thread_for_row(checklist_item, thread, score_info):
     events = []
     issues = []
     matching_subjects = []
+    relevant_attachment_titles = []
     for email in relevant_emails:
         event = email.get('activity_event', {})
         event_text = normalize_cell_text(event.get('text'))
         if event_text and event_text not in events:
             events.append(event_text)
         matching_subjects.append(normalize_cell_text(email.get('subject')) or 'No subject')
+        relevant_attachment_titles.extend(
+            score_attachment_title_match(
+                checklist_item.get('match_document_name') or checklist_item.get('document_name', ''),
+                split_attachment_names(email.get('attachments')),
+            )[1]
+        )
         issues.extend(event.get('issue_snippets', []))
 
     issues = dedupe_preserve_order(issues)[:MAX_THREAD_ISSUES_PER_SUMMARY]
     status_signal = derive_candidate_status(relevant_emails, thread)
     suggested_comment = compose_candidate_comment(events, issues)
+    latest_relevant_email = relevant_emails[-1] if relevant_emails else {}
 
     return {
         'thread_id': thread.get('thread_id'),
@@ -1560,6 +1740,14 @@ def summarize_thread_for_row(checklist_item, thread, score_info):
         'first_date': thread.get('first_date', ''),
         'last_date': thread.get('last_date', ''),
         'deal_anchor_hits': score_info.get('deal_anchor_hits', []),
+        'matching_attachment_titles': dedupe_preserve_order(
+            score_info.get('matched_attachment_titles', []) + relevant_attachment_titles
+        )[:4],
+        'latest_attachment_titles': dedupe_preserve_order(thread.get('latest_attachment_names', []))[:4],
+        'latest_body_excerpt': normalize_cell_text(
+            clean_email_body_for_analysis(latest_relevant_email.get('body_current') or latest_relevant_email.get('body'))
+            or thread.get('latest_body_excerpt', '')
+        )[:260],
         'relevant_email_indices': score_info.get('relevant_email_indices', []),
         'matching_subjects': dedupe_preserve_order(matching_subjects)[:3],
         'events': events[:MAX_THREAD_EVENTS_PER_SUMMARY],
@@ -1783,16 +1971,83 @@ def score_header_candidate(all_rows, header_idx):
     }
 
 
+def iter_container_paragraphs(container):
+    for paragraph in getattr(container, 'paragraphs', []):
+        yield paragraph
+    for table in getattr(container, 'tables', []):
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in iter_container_paragraphs(cell):
+                    yield paragraph
+
+
+def format_draft_stamp_date(existing_text, stamp_date):
+    now = stamp_date or datetime.now()
+    text = normalize_cell_text(existing_text)
+    if re.search(r'\b\d{1,2}-\d{1,2}-\d{2,4}\b', text):
+        return now.strftime('%m-%d-%Y')
+    if re.search(r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},\s+\d{4}\b', text, re.IGNORECASE):
+        return now.strftime('%B %d, %Y').replace(' 0', ' ')
+    return now.strftime('%m/%d/%Y')
+
+
+def replace_inline_date(text, replacement):
+    updated = str(text or '')
+    for pattern in INLINE_DATE_PATTERNS:
+        if pattern.search(updated):
+            return pattern.sub(replacement, updated, count=1)
+    return updated
+
+
+def refresh_document_draft_stamp(doc, stamp_date=None):
+    if WD_ALIGN_PARAGRAPH is None:
+        return False
+
+    stamp_updated = False
+    for section in getattr(doc, 'sections', []):
+        header = getattr(section, 'header', None)
+        if header is None:
+            continue
+
+        matched_paragraph = None
+        for paragraph in iter_container_paragraphs(header):
+            text = normalize_cell_text(paragraph.text)
+            if 'draft' not in text.lower():
+                continue
+            replacement_date = format_draft_stamp_date(text, stamp_date)
+            new_text = replace_inline_date(text, replacement_date)
+            if new_text == text and replacement_date not in text:
+                new_text = f"DRAFT {replacement_date}"
+            paragraph.text = new_text
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            matched_paragraph = paragraph
+            stamp_updated = True
+            break
+
+        if matched_paragraph is not None:
+            continue
+
+        if getattr(header, 'paragraphs', None):
+            paragraph = header.paragraphs[0]
+        else:
+            paragraph = header.add_paragraph()
+        paragraph.text = f"DRAFT {format_draft_stamp_date('', stamp_date)}"
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        stamp_updated = True
+
+    return stamp_updated
+
+
 def parse_checklist_table(doc):
     """
     Parse a checklist-like table from the document, allowing flexible header position
     and non-standard column names.
 
     Returns:
-        headers, rows, table, doc_col_idx, status_col_idx, notes_col_idx, data_row_start_idx
+        headers, rows, row_indices, table, doc_col_idx, status_col_idx, notes_col_idx, data_row_start_idx
     """
     if not doc.tables:
-        return None, None, None, -1, -1, -1, -1
+        return None, None, None, None, -1, -1, -1, -1
 
     best_candidate = None
 
@@ -1815,13 +2070,19 @@ def parse_checklist_table(doc):
                 best_candidate = candidate
 
     if not best_candidate:
-        return None, None, None, -1, -1, -1, -1
+        return None, None, None, None, -1, -1, -1, -1
 
     table = best_candidate['table']
     all_rows = best_candidate['all_rows']
     header_idx = best_candidate['header_idx']
     headers = all_rows[header_idx]
-    rows = [row for row in all_rows[header_idx + 1:] if any(normalize_cell_text(c) for c in row)]
+    row_entries = [
+        (absolute_idx, row)
+        for absolute_idx, row in enumerate(all_rows[header_idx + 1:], start=header_idx + 1)
+        if any(normalize_cell_text(cell) for cell in row)
+    ]
+    rows = [row for _, row in row_entries]
+    row_indices = [absolute_idx for absolute_idx, _ in row_entries]
 
     doc_col_idx = best_candidate['doc_col']
     if doc_col_idx == -1:
@@ -1833,7 +2094,7 @@ def parse_checklist_table(doc):
 
     notes_col_idx = best_candidate.get('notes_col', -1)
 
-    return headers, rows, table, doc_col_idx, status_col_idx, notes_col_idx, header_idx + 1
+    return headers, rows, row_indices, table, doc_col_idx, status_col_idx, notes_col_idx, header_idx + 1
 
 
 def detect_document_status(doc_name, emails):
@@ -2015,6 +2276,9 @@ def match_documents_with_llm(
                     "deal_anchor_hits": candidate.get("deal_anchor_hits", []),
                     "status_signal": candidate.get("status_signal", ""),
                     "matching_subjects": candidate.get("matching_subjects", []),
+                    "matching_attachment_titles": candidate.get("matching_attachment_titles", []),
+                    "latest_attachment_titles": candidate.get("latest_attachment_titles", []),
+                    "latest_body_excerpt": candidate.get("latest_body_excerpt", ""),
                     "relevant_events": candidate.get("events", []),
                     "issues": candidate.get("issues", []),
                     "suggested_comment": candidate.get("suggested_comment", ""),
@@ -2022,6 +2286,8 @@ def match_documents_with_llm(
             checklist_context.append({
                 "row_id": row_id,
                 "document_name": item.get("document_name", ""),
+                "match_document_name": item.get("match_document_name", item.get("document_name", "")),
+                "row_type": item.get("row_type", "document"),
                 "current_status": item.get("current_status", ""),
                 "row_context": item.get("row_context", ""),
                 "candidate_threads": candidates,
@@ -2070,7 +2336,8 @@ Interpretation guidance:
 Instructions:
 - Use ONLY the listed candidate_threads for each row.
 - A thread is relevant only if it is clearly about the same deal and the same checklist document, not just the same workstream.
-- Prefer threads with direct document cues, matching deal_anchor_hits, and concrete draft/execution events.
+- Start with the thread subject, then matching_attachment_titles/latest_attachment_titles, then the latest_body_excerpt, then deal_anchor_hits and the concrete draft/execution events.
+- Prefer threads with direct attachment filename matches over body-only references.
 - Ignore unrelated admin traffic, scheduling, or threads about different deal documents.
 - When there is activity, the checklist_comment should say who sent or received the draft/version, on what date, and note material issues or comments raised in the thread.
 - Return EVERY row_id exactly once.
@@ -2192,7 +2459,7 @@ def update_checklist(
         doc = Document(checklist_path)
 
         # Parse the checklist table
-        headers, rows, table, doc_col_idx, status_col_idx, notes_col_idx, data_row_start_idx = parse_checklist_table(doc)
+        headers, rows, row_indices, table, doc_col_idx, status_col_idx, notes_col_idx, data_row_start_idx = parse_checklist_table(doc)
 
         if table is None:
             result['error'] = 'No table found in checklist document'
@@ -2224,11 +2491,27 @@ def update_checklist(
 
         # Build checklist row payloads for semantic LLM matching.
         checklist_items = []
+        previous_document_name = ''
         for row_idx, row_data in enumerate(rows):
             if doc_col_idx < 0 or doc_col_idx >= len(row_data):
                 continue
             doc_name = normalize_cell_text(row_data[doc_col_idx])
             if not doc_name:
+                continue
+            row_index = row_indices[row_idx] if row_indices and row_idx < len(row_indices) else data_row_start_idx + row_idx
+
+            row_classification = classify_checklist_row(
+                doc_name,
+                row_data,
+                headers,
+                doc_col_idx,
+                status_col_idx,
+                notes_col_idx,
+                previous_document_name=previous_document_name,
+            )
+            if row_classification.get('row_type') == 'document':
+                previous_document_name = doc_name
+            if not row_classification.get('should_update'):
                 continue
 
             current_status = ''
@@ -2253,8 +2536,10 @@ def update_checklist(
                     context_parts.append(cleaned)
 
             checklist_items.append({
-                'row_id': data_row_start_idx + row_idx,
+                'row_id': row_index,
                 'document_name': doc_name,
+                'match_document_name': row_classification.get('match_document_name') or doc_name,
+                'row_type': row_classification.get('row_type', 'document'),
                 'current_status': current_status,
                 'existing_notes': existing_notes,
                 'row_context': ' | '.join(context_parts[:8]),
@@ -2392,6 +2677,8 @@ def update_checklist(
                     'confidence': llm_result.get('confidence') if isinstance(llm_result, dict) else None,
                     'emails': matching_emails[:3]
                 })
+
+        refresh_document_draft_stamp(doc)
 
         # Save updated document
         os.makedirs(output_folder, exist_ok=True)

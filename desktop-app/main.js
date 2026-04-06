@@ -310,6 +310,85 @@ function getAvailableUsername(baseUsername) {
   return `${base}_${Date.now()}`;
 }
 
+function mapUserLookupRow(row = []) {
+  if (!Array.isArray(row) || row.length === 0) return null;
+  const [id, username, displayName, apiKeyEnc, email] = row;
+  return {
+    id: String(id || '').trim(),
+    username: normalizeUsername(username),
+    displayName: String(displayName || '').trim(),
+    apiKeyEnc: apiKeyEnc || '',
+    email: normalizeEmail(email || '')
+  };
+}
+
+function resolveEmailLoginCandidate(normalizedEmail) {
+  if (!db) return { user: null, matchedBy: null };
+
+  const email = normalizeEmail(normalizedEmail);
+  if (!email) return { user: null, matchedBy: null };
+
+  const safeEmail = email.replace(/'/g, "''");
+  const directMatch = db.exec(`
+    SELECT id, username, display_name, api_key_encrypted, email
+    FROM users
+    WHERE lower(trim(COALESCE(email, ''))) = '${safeEmail}'
+    ORDER BY datetime(COALESCE(last_login, created_at)) DESC, created_at ASC
+    LIMIT 1
+  `);
+
+  if (directMatch.length > 0 && directMatch[0].values.length > 0) {
+    return {
+      user: mapUserLookupRow(directMatch[0].values[0]),
+      matchedBy: 'email'
+    };
+  }
+
+  const localPart = String(email.split('@')[0] || '').trim();
+  const candidateUsernames = Array.from(new Set(
+    [email, localPart, buildUsernameFromEmail(email)]
+      .map((value) => normalizeUsername(value))
+      .filter(Boolean)
+  ));
+
+  if (!candidateUsernames.length) {
+    return { user: null, matchedBy: null };
+  }
+
+  const usernameList = candidateUsernames
+    .map((value) => `'${value.replace(/'/g, "''")}'`)
+    .join(', ');
+  const fullEmailUsername = normalizeUsername(email).replace(/'/g, "''");
+  const seededUsername = normalizeUsername(buildUsernameFromEmail(email)).replace(/'/g, "''");
+  const localPartUsername = normalizeUsername(localPart).replace(/'/g, "''");
+
+  const legacyMatch = db.exec(`
+    SELECT id, username, display_name, api_key_encrypted, email
+    FROM users
+    WHERE lower(trim(username)) IN (${usernameList})
+      AND (email IS NULL OR trim(email) = '' OR lower(trim(email)) = '${safeEmail}')
+    ORDER BY
+      CASE
+        WHEN lower(trim(username)) = '${fullEmailUsername}' THEN 0
+        WHEN lower(trim(username)) = '${seededUsername}' THEN 1
+        WHEN lower(trim(username)) = '${localPartUsername}' THEN 2
+        ELSE 3
+      END,
+      datetime(COALESCE(last_login, created_at)) DESC,
+      created_at ASC
+    LIMIT 1
+  `);
+
+  if (legacyMatch.length > 0 && legacyMatch[0].values.length > 0) {
+    return {
+      user: mapUserLookupRow(legacyMatch[0].values[0]),
+      matchedBy: 'legacy_username'
+    };
+  }
+
+  return { user: null, matchedBy: null };
+}
+
 function parseSqliteDate(value) {
   if (!value) return null;
   const text = String(value).trim();
@@ -2127,6 +2206,20 @@ async function initDatabase() {
     try {
       db.run(`ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0`);
     } catch (e) { /* Column may already exist */ }
+
+    // Normalize legacy user rows so email-only login can recognize older accounts.
+    try {
+      db.run(`UPDATE users SET email = lower(trim(email)) WHERE email IS NOT NULL AND trim(email) != ''`);
+    } catch (e) { /* Best-effort normalization */ }
+    try {
+      db.run(`
+        UPDATE users
+        SET email = lower(trim(username))
+        WHERE (email IS NULL OR trim(email) = '')
+          AND instr(username, '@') > 1
+          AND instr(substr(username, instr(username, '@') + 1), '.') > 0
+      `);
+    } catch (e) { /* Best-effort normalization */ }
 
     // Create verification codes table for 2FA
     db.run(`
@@ -6136,7 +6229,7 @@ const COMMAND_TOOLS = [
   // ===== Outlook COM tools =====
   {
     name: 'outlook_search',
-    description: 'Search Outlook emails by subject, sender, body text, or attachment filename. Returns matching emails and exact attachment titles.',
+    description: 'Search Outlook emails through COM using per-message boolean matching against subject, sender, current-message body text, and attachment filenames. Returns matching emails and exact attachment titles.',
     input_schema: {
       type: 'object',
       properties: {
@@ -9516,100 +9609,40 @@ async function outlookSearch(query, folder = 'Inbox', maxResults = 20, daysBack 
   const normalizedFolder = String(folder || 'Inbox').trim() || 'Inbox';
   const normalizedMaxResults = Math.max(1, Math.min(Math.round(Number(maxResults || 20)), 200));
   const normalizedDaysBack = Math.max(1, Math.min(Math.round(Number(daysBack || 30)), 3650));
-  const escapedQuery = normalizedQuery.replace(/'/g, "''");
-  const escapedFolder = normalizedFolder.replace(/'/g, "''");
-  const script = `
-$ErrorActionPreference = 'Stop'
-$outlook = $null
-$ns = $null
-try {
-  $outlook = New-Object -ComObject "Outlook.Application"
-  $ns = $outlook.GetNamespace("MAPI")
-  try { $null = $ns.Logon("", "", $false, $false) } catch {}
-  $folderObj = $null
-  $folderName = '${escapedFolder}'
-  switch ($folderName) {
-    'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
-    'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
-    'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
-    'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
-    default { $folderObj = $ns.GetDefaultFolder(6) }
+  const folderLooksLikePath = /\\/.test(normalizedFolder);
+  const collectResult = await collectOutlookEmails({
+    daysBack: normalizedDaysBack,
+    folders: folderLooksLikePath ? [] : [normalizedFolder],
+    folderPaths: folderLooksLikePath ? [normalizedFolder] : [],
+    includeSubfolders: true,
+    allEmailFolders: folderLooksLikePath,
+    maxResultsPerFolder: Math.max(150, normalizedMaxResults * 8),
+    maxTotalResults: Math.max(300, normalizedMaxResults * 15),
+    bodyCharLimit: 6000
+  });
+  if (!collectResult.success) {
+    return collectResult;
   }
-  if ($null -eq $folderObj) { throw "Unable to resolve Outlook folder: $folderName" }
-  $cutoffDate = (Get-Date).AddDays(-${normalizedDaysBack})
-  $items = $folderObj.Items
-  try { $items.Sort("[ReceivedTime]", $true) } catch {}
-  $query = '${escapedQuery}'.ToLower()
-  $normalizedQuery = [regex]::Replace($query, '[^a-z0-9]+', ' ').Trim()
-  $results = @()
-  foreach ($item in $items) {
-    if ($results.Count -ge ${normalizedMaxResults}) { break }
-    if ($null -eq $item) { continue }
-    if ($item.Class -ne 43) { continue } # olMail
-    $subj = if ($item.Subject) { $item.Subject } else { '' }
-    $sender = if ($item.SenderName) { $item.SenderName } else { '' }
-    $body = ''
-    try {
-      if ($item.Body) { $body = $item.Body.Substring(0, [Math]::Min(500, $item.Body.Length)) }
-    } catch {}
-    $msgDate = $null
-    try { $msgDate = $item.ReceivedTime } catch {}
-    if ($null -eq $msgDate) {
-      try { $msgDate = $item.SentOn } catch {}
-    }
-    if ($msgDate -and $msgDate -lt $cutoffDate) { continue }
-    $attachmentNames = @()
-    try {
-      foreach ($att in $item.Attachments) {
-        if ($att.FileName) { $attachmentNames += $att.FileName }
-      }
-    } catch {}
-    $attachmentCount = $attachmentNames.Count
-    $attachmentText = ($attachmentNames -join '; ')
-    $normalizedSubject = [regex]::Replace($subj.ToLower(), '[^a-z0-9]+', ' ').Trim()
-    $normalizedSender = [regex]::Replace($sender.ToLower(), '[^a-z0-9]+', ' ').Trim()
-    $normalizedBody = [regex]::Replace($body.ToLower(), '[^a-z0-9]+', ' ').Trim()
-    $normalizedAttachmentText = [regex]::Replace($attachmentText.ToLower(), '[^a-z0-9]+', ' ').Trim()
-    $matchesQuery =
-      $subj.ToLower().Contains($query) -or
-      $sender.ToLower().Contains($query) -or
-      $body.ToLower().Contains($query) -or
-      $attachmentText.ToLower().Contains($query)
-    if (-not $matchesQuery -and $normalizedQuery) {
-      $matchesQuery =
-        $normalizedSubject.Contains($normalizedQuery) -or
-        $normalizedSender.Contains($normalizedQuery) -or
-        $normalizedBody.Contains($normalizedQuery) -or
-        $normalizedAttachmentText.Contains($normalizedQuery)
-    }
-    if ($matchesQuery) {
-      $results += @{
-        entry_id = $item.EntryID
-        subject = $subj
-        sender = $sender
-        received = if ($msgDate) { $msgDate.ToString("yyyy-MM-dd HH:mm") } else { '' }
-        has_attachments = $attachmentCount -gt 0
-        attachment_count = $attachmentCount
-        attachments = $attachmentText
-        attachment_titles = $attachmentNames
-      }
-    }
-  }
-  $json = $results | ConvertTo-Json -Compress -Depth 3
-  if (-not $json) { $json = '[]' }
-  Write-Output "###JSON_START###$json###JSON_END###"
-} catch {
-  $errMsg = $_.Exception.Message -replace '"', '\\"'
-  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
-} finally {
-  try { if ($ns -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ns) | Out-Null } } catch {}
-  try { if ($outlook -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($outlook) | Out-Null } } catch {}
-}`;
-  const result = await imanageRunPowerShell(script);
-  const failure = normalizeOfficeComFailure(result, 'Outlook');
-  if (failure) return failure;
-  const emails = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
-  return { success: true, emails, message: `Found ${emails.length} email(s) matching "${normalizedQuery}".` };
+
+  const matchedEmails = searchEmailsLocally(collectResult.emails || [], normalizedQuery, '', normalizedMaxResults)
+    .map((email) => ({
+      entry_id: email.entry_id || '',
+      subject: email.subject || '',
+      sender: email.from || '',
+      received: email.date_received || email.date_sent || '',
+      folder: email.folder || '',
+      has_attachments: !!email.has_attachments,
+      attachment_count: splitEmailAttachmentNames(email.attachments).length,
+      attachments: email.attachments || '',
+      attachment_titles: splitEmailAttachmentNames(email.attachments),
+      body_preview: String(email.body_current || '').slice(0, 300)
+    }));
+
+  return {
+    success: true,
+    emails: matchedEmails,
+    message: `Found ${matchedEmails.length} email(s) matching "${normalizedQuery}".`
+  };
 }
 
 async function outlookReadEmail(entryId) {
@@ -9860,6 +9893,28 @@ function splitEmailAttachmentNames(rawValue) {
   return text.split(',').map((value) => value.trim()).filter(Boolean);
 }
 
+function extractCurrentEmailBody(body = '') {
+  const lines = [];
+  let headerLinesSeen = 0;
+  for (const rawLine of String(body || '').split(/\r?\n/)) {
+    const line = String(rawLine || '').trim();
+    if (!line) continue;
+    const lowerLine = line.toLowerCase();
+    if (line.startsWith('>')) continue;
+    if (lowerLine.startsWith('-----original message-----')) break;
+    if (/^on .+ wrote:$/.test(lowerLine)) break;
+    if (/^(from|sent|to|cc|subject):/.test(lowerLine)) {
+      headerLinesSeen += 1;
+      if (headerLinesSeen >= 2) break;
+      continue;
+    }
+    if (lowerLine.includes('privileged and confidential') || lowerLine.includes('confidentiality notice')) break;
+    lines.push(line);
+    if (lines.length >= 80) break;
+  }
+  return lines.join(' ');
+}
+
 const EMAIL_SEARCH_STOPWORDS = new Set([
   'a', 'an', 'and', 'are', 'attachment', 'attachments', 'by', 'can', 'contains',
   'did', 'do', 'does', 'email', 'emails', 'exact', 'find', 'for', 'from', 'has',
@@ -9935,7 +9990,7 @@ function scoreEmailForNaturalLanguageSearch(email = {}, query = '') {
   const queryTokens = tokenizeEmailSearchQuery(query);
   const subjectText = normalizeEmailSearchText(email.subject);
   const senderText = normalizeEmailSearchText(email.from);
-  const bodyText = normalizeEmailSearchText(String(email.body || '').slice(0, 4000));
+  const bodyText = normalizeEmailSearchText(String(email.body_current || email.body || '').slice(0, 4000));
   const recipientText = normalizeEmailSearchText(`${email.to || ''} ${email.cc || ''}`);
 
   let score = attachmentMatch.score;
@@ -10010,8 +10065,150 @@ function selectEmailsForNaturalLanguageSearch(emails = [], query = '', maxEmails
   }));
 }
 
+function parseEmailBooleanQuery(query = '') {
+  const tokens = [];
+  let index = 0;
+  const source = String(query || '');
+  while (index < source.length) {
+    while (index < source.length && /\s/.test(source[index])) index += 1;
+    if (index >= source.length) break;
+
+    if (source[index] === '"') {
+      const end = source.indexOf('"', index + 1);
+      const phrase = source.slice(index + 1, end === -1 ? source.length : end).trim();
+      if (phrase) tokens.push({ type: 'phrase', value: phrase.toLowerCase() });
+      index = end === -1 ? source.length : end + 1;
+      continue;
+    }
+
+    const start = index;
+    while (index < source.length && !/\s/.test(source[index]) && source[index] !== '"') index += 1;
+    const word = source.slice(start, index);
+    if (!word) continue;
+
+    const upper = word.toUpperCase();
+    const lower = word.toLowerCase();
+    if (upper === 'AND') tokens.push({ type: 'and' });
+    else if (upper === 'OR') tokens.push({ type: 'or' });
+    else if (upper === 'NOT') tokens.push({ type: 'not' });
+    else if (lower.startsWith('attachment:')) tokens.push({ type: 'attachment', value: lower.slice(11) });
+    else if (lower === 'has:attachment' || lower === 'has:attachments') tokens.push({ type: 'has_attachment' });
+    else tokens.push({ type: 'term', value: lower });
+  }
+  return tokens;
+}
+
+function evaluateEmailBooleanQuery(email = {}, tokens = []) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return true;
+
+  const normalizedAttachmentText = splitEmailAttachmentNames(email.attachments)
+    .map((value) => normalizeEmailSearchText(value))
+    .join(' ');
+  const searchableText = [
+    email.subject || '',
+    email.body_current || email.body || '',
+    email.from || '',
+    email.to || '',
+    email.cc || '',
+    email.attachments || ''
+  ].join(' ').toLowerCase();
+  const attachmentText = String(email.attachments || '').toLowerCase();
+
+  const results = [];
+  let currentOp = 'and';
+  let negateNext = false;
+
+  for (const token of tokens) {
+    if (token.type === 'and') {
+      currentOp = 'and';
+      continue;
+    }
+    if (token.type === 'or') {
+      currentOp = 'or';
+      continue;
+    }
+    if (token.type === 'not') {
+      negateNext = true;
+      continue;
+    }
+
+    let match = false;
+    if (token.type === 'term' || token.type === 'phrase') {
+      match = searchableText.includes(token.value) || normalizedAttachmentText.includes(normalizeEmailSearchText(token.value));
+    } else if (token.type === 'attachment') {
+      match = attachmentText.includes(token.value) || normalizedAttachmentText.includes(normalizeEmailSearchText(token.value));
+    } else if (token.type === 'has_attachment') {
+      match = !!(email.has_attachments || email.attachments);
+    }
+
+    if (negateNext) {
+      match = !match;
+      negateNext = false;
+    }
+
+    if (results.length === 0) results.push(match);
+    else if (currentOp === 'and') results[results.length - 1] = results[results.length - 1] && match;
+    else results.push(match);
+
+    currentOp = 'and';
+  }
+
+  return results.some(Boolean);
+}
+
+function getLocalEmailSearchRelevance(email = {}, queryText = '', attachmentFilterText = '') {
+  const normalizedQuery = normalizeEmailSearchText(queryText);
+  const normalizedAttachmentFilter = normalizeEmailSearchText(attachmentFilterText);
+  const subjectText = normalizeEmailSearchText(email.subject || '');
+  const bodyText = normalizeEmailSearchText(String(email.body_current || email.body || '').slice(0, 4000));
+  let score = 0;
+
+  if (normalizedQuery) {
+    score += scoreAttachmentTitleMatch(splitEmailAttachmentNames(email.attachments), normalizedQuery).score;
+    if (subjectText.includes(normalizedQuery)) score += 24;
+    if (bodyText.includes(normalizedQuery)) score += 10;
+  }
+  if (normalizedAttachmentFilter) {
+    score += scoreAttachmentTitleMatch(splitEmailAttachmentNames(email.attachments), normalizedAttachmentFilter).score * 2;
+  }
+  if (email.has_attachments) score += 1;
+  return score;
+}
+
+function searchEmailsLocally(emails = [], query = '', attachmentFilter = '', maxResults = 20) {
+  const sourceEmails = Array.isArray(emails) ? emails : [];
+  const tokens = parseEmailBooleanQuery(query);
+  const normalizedAttachmentFilter = String(attachmentFilter || '').trim().toLowerCase();
+  return sourceEmails
+    .filter((email) => {
+      if (tokens.length > 0 && !evaluateEmailBooleanQuery(email, tokens)) {
+        return false;
+      }
+      if (normalizedAttachmentFilter) {
+        const titles = splitEmailAttachmentNames(email.attachments);
+        const attachmentHit = titles.some((title) => String(title || '').toLowerCase().includes(normalizedAttachmentFilter));
+        if (!attachmentHit) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const scoreDelta = getLocalEmailSearchRelevance(b, query, normalizedAttachmentFilter) - getLocalEmailSearchRelevance(a, query, normalizedAttachmentFilter);
+      if (scoreDelta !== 0) return scoreDelta;
+      const aTs = Date.parse(a.date_received || a.date_sent || '') || 0;
+      const bTs = Date.parse(b.date_received || b.date_sent || '') || 0;
+      return bTs - aTs;
+    })
+    .slice(0, Math.max(1, Math.min(Math.round(Number(maxResults || 20)), 200)));
+}
+
 function normalizeLoadedEmail(record = {}) {
   const attachments = splitEmailAttachmentNames(record.attachments);
+  const rawIsSentFolder = record.is_sent_folder;
+  const isSentFolder = typeof rawIsSentFolder === 'string'
+    ? !['', '0', 'false', 'no', 'none', 'nan'].includes(rawIsSentFolder.trim().toLowerCase())
+    : Boolean(rawIsSentFolder);
+  const fullBody = String(record.body || '').trim();
+  const currentBody = extractCurrentEmailBody(fullBody);
   return {
     subject: String(record.subject || '').trim(),
     from: String(record.from || record.sender || record.sender_name || record.sender_email || '').trim(),
@@ -10019,11 +10216,14 @@ function normalizeLoadedEmail(record = {}) {
     cc: String(record.cc || '').trim(),
     date_sent: String(record.date_sent || record.sent || '').trim(),
     date_received: String(record.date_received || record.received || '').trim(),
-    body: String(record.body || '').trim(),
+    body: fullBody,
+    body_current: currentBody,
     attachments: attachments.join('; '),
     has_attachments: Boolean(record.has_attachments) || attachments.length > 0,
     folder: String(record.folder || '').trim(),
     root_folder: String(record.root_folder || '').trim(),
+    store: String(record.store || '').trim(),
+    is_sent_folder: isSentFolder,
     entry_id: String(record.entry_id || '').trim(),
     conversation_id: String(record.conversation_id || '').trim(),
     conversation_topic: String(record.conversation_topic || '').trim()
@@ -10072,7 +10272,8 @@ async function listOutlookFolders(options = {}) {
     return { success: false, error: 'Outlook COM is only available on Windows.' };
   }
 
-  const roots = Array.isArray(options.roots) && options.roots.length
+  const allEmailFolders = options.allEmailFolders === true;
+  const roots = !allEmailFolders && Array.isArray(options.roots) && options.roots.length
     ? options.roots.map((value) => String(value || '').trim()).filter(Boolean)
     : ['Inbox', 'Sent Items'];
   const includeSubfolders = options.includeSubfolders !== false;
@@ -10087,45 +10288,102 @@ try {
   $ns = $outlook.GetNamespace("MAPI")
   try { $null = $ns.Logon("", "", $false, $false) } catch {}
 
+  $allEmailFolders = ${allEmailFolders ? '$true' : '$false'}
   $rootNames = @(${escapedRoots})
   $folders = New-Object System.Collections.Generic.List[Object]
 
-  function Add-FolderTargets($folderObj, $rootName, $targetList, [bool]$includeChildren) {
+  function Get-NormalizedFolderRoot($folderPath, $folderName, $storeName) {
+    $pathText = [string]$folderPath
+    $nameText = [string]$folderName
+    if ($pathText -match '\\\\Sent Items(\\\\|$)' -or $nameText -eq 'Sent Items') { return 'Sent Items' }
+    if ($pathText -match '\\\\Inbox(\\\\|$)' -or $nameText -eq 'Inbox') { return 'Inbox' }
+    if ($pathText -match '\\\\Drafts(\\\\|$)' -or $nameText -eq 'Drafts') { return 'Drafts' }
+    if ($pathText -match '\\\\Deleted Items(\\\\|$)' -or $nameText -eq 'Deleted Items') { return 'Deleted Items' }
+    if ($pathText) {
+      $segments = $pathText -split '\\\\' | Where-Object { $_ -and $_.Trim() }
+      if ($segments.Count -ge 2) { return $segments[1] }
+      if ($segments.Count -ge 1) { return $segments[0] }
+    }
+    if ($nameText) { return $nameText }
+    if ($storeName) { return $storeName }
+    return 'Outlook'
+  }
+
+  function Test-IsSentFolder($folderPath, $folderName) {
+    $pathText = [string]$folderPath
+    $nameText = [string]$folderName
+    return [bool]($pathText -match '\\\\Sent Items(\\\\|$)' -or $nameText -eq 'Sent Items')
+  }
+
+  function Add-FolderRecord($folderObj, $rootName, $storeName, $targetList) {
     if ($null -eq $folderObj) { return }
     $folderPath = ''
     try { $folderPath = $folderObj.FolderPath } catch {}
-    if (-not $folderPath) { $folderPath = $rootName }
-    $folderDisplayName = $folderPath
-    try {
-      if ($folderObj.Name) { $folderDisplayName = $folderObj.Name }
-    } catch {}
+    $folderDisplayName = ''
+    try { if ($folderObj.Name) { $folderDisplayName = $folderObj.Name } } catch {}
+    if (-not $folderPath) { $folderPath = if ($folderDisplayName) { $folderDisplayName } else { $rootName } }
+    $folderLabel = if ($folderDisplayName) { $folderDisplayName } else { $folderPath }
+    $computedRoot = if ($rootName) { $rootName } else { Get-NormalizedFolderRoot $folderPath $folderDisplayName $storeName }
     $targetList.Add(@{
       path = $folderPath
-      root = $rootName
-      name = $folderDisplayName
+      root = $computedRoot
+      name = $folderLabel
+      store = $storeName
+      is_sent_folder = (Test-IsSentFolder $folderPath $folderDisplayName)
     }) | Out-Null
+  }
+
+  function Add-FolderTargets($folderObj, $rootName, $storeName, $targetList, [bool]$includeChildren) {
+    if ($null -eq $folderObj) { return }
+    Add-FolderRecord $folderObj $rootName $storeName $targetList
     if (-not $includeChildren) { return }
     try {
       foreach ($childFolder in $folderObj.Folders) {
-        Add-FolderTargets $childFolder $rootName $targetList $includeChildren
+        Add-FolderTargets $childFolder $rootName $storeName $targetList $includeChildren
       }
     } catch {}
   }
 
-  foreach ($rootName in $rootNames) {
-    $folderObj = $null
-    switch ($rootName) {
-      'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
-      'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
-      'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
-      'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
-      default { $folderObj = $ns.GetDefaultFolder(6) }
+  function Add-MailFolderTargets($folderObj, $storeName, $targetList) {
+    if ($null -eq $folderObj) { return }
+    $defaultItemType = $null
+    try { $defaultItemType = $folderObj.DefaultItemType } catch {}
+    if ($defaultItemType -eq 0) {
+      Add-FolderRecord $folderObj '' $storeName $targetList
     }
-    if ($null -eq $folderObj) { continue }
-    Add-FolderTargets $folderObj $rootName $folders ${includeSubfolders ? '$true' : '$false'}
+    try {
+      foreach ($childFolder in $folderObj.Folders) {
+        Add-MailFolderTargets $childFolder $storeName $targetList
+      }
+    } catch {}
   }
 
-  $json = $folders | Sort-Object root, path | ConvertTo-Json -Compress -Depth 4
+  if ($allEmailFolders) {
+    foreach ($storeRoot in $ns.Folders) {
+      $storeName = ''
+      try { if ($storeRoot.Name) { $storeName = $storeRoot.Name } } catch {}
+      try {
+        foreach ($childFolder in $storeRoot.Folders) {
+          Add-MailFolderTargets $childFolder $storeName $folders
+        }
+      } catch {}
+    }
+  } else {
+    foreach ($rootName in $rootNames) {
+      $folderObj = $null
+      switch ($rootName) {
+        'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
+        'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
+        'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
+        'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
+        default { $folderObj = $ns.GetDefaultFolder(6) }
+      }
+      if ($null -eq $folderObj) { continue }
+      Add-FolderTargets $folderObj $rootName '' $folders ${includeSubfolders ? '$true' : '$false'}
+    }
+  }
+
+  $json = $folders | Sort-Object store, root, path | ConvertTo-Json -Compress -Depth 4
   if (-not $json) { $json = '[]' }
   Write-Output "###JSON_START###$json###JSON_END###"
 } catch {
@@ -10139,7 +10397,14 @@ try {
   const result = await imanageRunPowerShell(script, { timeoutMs: 60000 });
   const failure = normalizeOfficeComFailure(result, 'Outlook');
   if (failure) return failure;
-  const folders = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
+  const rawFolders = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : []);
+  const seenPaths = new Set();
+  const folders = rawFolders.filter((folder) => {
+    const folderPath = String(folder && folder.path ? folder.path : '').trim();
+    if (!folderPath || seenPaths.has(folderPath.toLowerCase())) return false;
+    seenPaths.add(folderPath.toLowerCase());
+    return true;
+  });
   return { success: true, folders };
 }
 
@@ -10148,12 +10413,14 @@ async function collectOutlookEmails(options = {}) {
     return { success: false, error: 'Outlook COM is only available on Windows.' };
   }
 
-  const folders = Array.isArray(options.folders) && options.folders.length
+  const requestedFolders = Array.isArray(options.folders)
     ? options.folders.map((value) => String(value || '').trim()).filter(Boolean)
-    : ['Inbox', 'Sent Items'];
+    : [];
   const folderPaths = Array.isArray(options.folderPaths)
     ? options.folderPaths.map((value) => String(value || '').trim()).filter(Boolean)
     : [];
+  const allEmailFolders = options.allEmailFolders === true || (folderPaths.length > 0 && !requestedFolders.length);
+  const folders = requestedFolders.length ? requestedFolders : ['Inbox', 'Sent Items'];
   const includeSubfolders = options.includeSubfolders !== false;
   const daysBack = Math.max(1, Math.min(Math.round(Number(options.daysBack || 30)), 3650));
   const maxResultsPerFolder = Math.max(25, Math.min(Math.round(Number(options.maxResultsPerFolder || 250)), 1000));
@@ -10171,41 +10438,102 @@ try {
   $ns = $outlook.GetNamespace("MAPI")
   try { $null = $ns.Logon("", "", $false, $false) } catch {}
 
+  $allEmailFolders = ${allEmailFolders ? '$true' : '$false'}
   $targetFolders = @(${escapedFolders})
   $selectedFolderPaths = @(${escapedFolderPaths})
   $cutoffDate = (Get-Date).AddDays(-${daysBack})
   $emails = New-Object System.Collections.Generic.List[Object]
   $folderTargets = New-Object System.Collections.Generic.List[Object]
 
-  function Add-FolderTargets($folderObj, $rootName, $targetList, [bool]$includeChildren) {
+  function Get-NormalizedFolderRoot($folderPath, $folderName, $storeName) {
+    $pathText = [string]$folderPath
+    $nameText = [string]$folderName
+    if ($pathText -match '\\\\Sent Items(\\\\|$)' -or $nameText -eq 'Sent Items') { return 'Sent Items' }
+    if ($pathText -match '\\\\Inbox(\\\\|$)' -or $nameText -eq 'Inbox') { return 'Inbox' }
+    if ($pathText -match '\\\\Drafts(\\\\|$)' -or $nameText -eq 'Drafts') { return 'Drafts' }
+    if ($pathText -match '\\\\Deleted Items(\\\\|$)' -or $nameText -eq 'Deleted Items') { return 'Deleted Items' }
+    if ($pathText) {
+      $segments = $pathText -split '\\\\' | Where-Object { $_ -and $_.Trim() }
+      if ($segments.Count -ge 2) { return $segments[1] }
+      if ($segments.Count -ge 1) { return $segments[0] }
+    }
+    if ($nameText) { return $nameText }
+    if ($storeName) { return $storeName }
+    return 'Outlook'
+  }
+
+  function Test-IsSentFolder($folderPath, $folderName) {
+    $pathText = [string]$folderPath
+    $nameText = [string]$folderName
+    return [bool]($pathText -match '\\\\Sent Items(\\\\|$)' -or $nameText -eq 'Sent Items')
+  }
+
+  function Add-FolderTargetRecord($folderObj, $rootName, $storeName, $targetList) {
     if ($null -eq $folderObj) { return }
     $folderPath = ''
     try { $folderPath = $folderObj.FolderPath } catch {}
-    if (-not $folderPath) { $folderPath = $rootName }
+    $folderDisplayName = ''
+    try { if ($folderObj.Name) { $folderDisplayName = $folderObj.Name } } catch {}
+    if (-not $folderPath) { $folderPath = if ($folderDisplayName) { $folderDisplayName } else { $rootName } }
+    $computedRoot = if ($rootName) { $rootName } else { Get-NormalizedFolderRoot $folderPath $folderDisplayName $storeName }
+    $isSentFolder = Test-IsSentFolder $folderPath $folderDisplayName
     $targetList.Add(@{
       Name = $folderPath
-      Root = $rootName
+      Root = $computedRoot
+      Store = $storeName
+      IsSentFolder = $isSentFolder
       Folder = $folderObj
     }) | Out-Null
+  }
+
+  function Add-FolderTargets($folderObj, $rootName, $storeName, $targetList, [bool]$includeChildren) {
+    if ($null -eq $folderObj) { return }
+    Add-FolderTargetRecord $folderObj $rootName $storeName $targetList
     if (-not $includeChildren) { return }
     try {
       foreach ($childFolder in $folderObj.Folders) {
-        Add-FolderTargets $childFolder $rootName $targetList $includeChildren
+        Add-FolderTargets $childFolder $rootName $storeName $targetList $includeChildren
       }
     } catch {}
   }
 
-  foreach ($folderName in $targetFolders) {
-    $folderObj = $null
-    switch ($folderName) {
-      'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
-      'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
-      'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
-      'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
-      default { $folderObj = $ns.GetDefaultFolder(6) }
+  function Add-MailFolderTargets($folderObj, $storeName, $targetList) {
+    if ($null -eq $folderObj) { return }
+    $defaultItemType = $null
+    try { $defaultItemType = $folderObj.DefaultItemType } catch {}
+    if ($defaultItemType -eq 0) {
+      Add-FolderTargetRecord $folderObj '' $storeName $targetList
     }
-    if ($null -eq $folderObj) { continue }
-    Add-FolderTargets $folderObj $folderName $folderTargets ${includeSubfolders ? '$true' : '$false'}
+    try {
+      foreach ($childFolder in $folderObj.Folders) {
+        Add-MailFolderTargets $childFolder $storeName $targetList
+      }
+    } catch {}
+  }
+
+  if ($allEmailFolders) {
+    foreach ($storeRoot in $ns.Folders) {
+      $storeName = ''
+      try { if ($storeRoot.Name) { $storeName = $storeRoot.Name } } catch {}
+      try {
+        foreach ($childFolder in $storeRoot.Folders) {
+          Add-MailFolderTargets $childFolder $storeName $folderTargets
+        }
+      } catch {}
+    }
+  } else {
+    foreach ($folderName in $targetFolders) {
+      $folderObj = $null
+      switch ($folderName) {
+        'Inbox' { $folderObj = $ns.GetDefaultFolder(6) }
+        'Sent Items' { $folderObj = $ns.GetDefaultFolder(5) }
+        'Drafts' { $folderObj = $ns.GetDefaultFolder(16) }
+        'Deleted Items' { $folderObj = $ns.GetDefaultFolder(3) }
+        default { $folderObj = $ns.GetDefaultFolder(6) }
+      }
+      if ($null -eq $folderObj) { continue }
+      Add-FolderTargets $folderObj $folderName '' $folderTargets ${includeSubfolders ? '$true' : '$false'}
+    }
   }
 
   $totalCount = 0
@@ -10215,9 +10543,12 @@ try {
     $folderObj = $folderInfo.Folder
     $folderName = if ($folderInfo.Name) { $folderInfo.Name } else { $folderInfo.Root }
     $rootFolderName = $folderInfo.Root
+    $storeName = $folderInfo.Store
+    $isSentFolder = $false
+    try { $isSentFolder = [bool]$folderInfo.IsSentFolder } catch {}
     $items = $folderObj.Items
     try {
-      if ($rootFolderName -eq 'Sent Items') {
+      if ($isSentFolder) {
         $items.Sort("[SentOn]", $true)
       } else {
         $items.Sort("[ReceivedTime]", $true)
@@ -10234,7 +10565,7 @@ try {
       $receivedTime = $null
       try { $sentOn = $item.SentOn } catch {}
       try { $receivedTime = $item.ReceivedTime } catch {}
-      $msgDate = if ($rootFolderName -eq 'Sent Items') { $sentOn } else { $receivedTime }
+      $msgDate = if ($isSentFolder) { $sentOn } else { $receivedTime }
       if ($null -eq $msgDate) { $msgDate = $sentOn }
       if ($null -eq $msgDate) { $msgDate = $receivedTime }
       if ($null -ne $msgDate -and $msgDate -lt $cutoffDate) { continue }
@@ -10262,12 +10593,14 @@ try {
       try { if ($item.ConversationID) { $conversationId = $item.ConversationID } } catch {}
       $conversationTopic = ''
       try { if ($item.ConversationTopic) { $conversationTopic = $item.ConversationTopic } } catch {}
-      if (-not $senderName -and $rootFolderName -eq 'Sent Items') { $senderName = 'Me' }
+      if (-not $senderName -and $isSentFolder) { $senderName = 'Me' }
 
       $emails.Add(@{
         entry_id = $item.EntryID
         folder = $folderName
         root_folder = $folderInfo.Root
+        store = $storeName
+        is_sent_folder = $isSentFolder
         conversation_id = $conversationId
         conversation_topic = $conversationTopic
         subject = if ($item.Subject) { $item.Subject } else { '' }
@@ -10334,7 +10667,8 @@ try {
     summary: buildLoadedEmailSummary(emails),
     daysBack,
     folders,
-    folderPaths
+    folderPaths,
+    allEmailFolders
   };
 }
 
@@ -12585,8 +12919,11 @@ ipcMain.handle('load-outlook-emails', async (event, config = {}) => {
       return result;
     }
     if (mainWindow && mainWindow.webContents) {
+      const scopeLabel = result.allEmailFolders
+        ? 'selected Outlook folders.'
+        : 'Inbox, Sent Items, and subfolders.';
       mainWindow.webContents.send('email-progress', {
-      message: `Loaded ${result.emails.length} Outlook email(s) from Inbox, Sent Items, and subfolders.`,
+        message: `Loaded ${result.emails.length} Outlook email(s) from ${scopeLabel}`,
         percent: 100
       });
     }
@@ -12597,6 +12934,7 @@ ipcMain.handle('load-outlook-emails', async (event, config = {}) => {
       daysBack: result.daysBack,
       folders: result.folders,
       folderPaths: result.folderPaths,
+      allEmailFolders: result.allEmailFolders === true,
       source: 'outlook'
     };
   } catch (e) {
@@ -12652,7 +12990,7 @@ ipcMain.handle('nl-search-emails', async (event, config) => {
       from: email.from || 'Unknown',
       to: email.to || '',
       subject: email.subject || '(No Subject)',
-      body_preview: (email.body || '').substring(0, 300),
+      body_preview: (email.body_current || email.body || '').substring(0, 300),
       date: email.date_received || email.date_sent || '',
       attachments: email.attachments || '',
       attachment_titles: splitEmailAttachmentNames(email.attachments),
@@ -12867,7 +13205,7 @@ Allowed actions:
 - run_packet_shell (requires PDF/DOC/DOCX attachments)
 - run_redline (requires two compatible document attachments)
 - run_collate (requires at least two DOCX attachments)
-- run_update_checklist (requires checklist DOCX; Outlook Inbox, Sent Items, and subfolders are scanned automatically)
+- run_update_checklist (requires checklist DOCX; scans the Outlook folders the user selected for that checklist)
 - run_generate_punchlist (requires checklist DOCX)
 - run_email_ai_search (answers question using loaded emails or by scanning Outlook folders)
 - run_general_llm_chat (general Q&A / drafting with the selected provider)
@@ -14190,38 +14528,43 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
     return { success: false, error: 'Please enter a valid email address' };
   }
 
-  const loginAccess = await evaluateAccessPolicy(
-    { email: normalizedEmail, username: buildUsernameFromEmail(normalizedEmail) },
-    { eventType: 'login' }
-  );
-  if (!loginAccess.allowed) {
-    return {
-      success: false,
-      blocked: true,
-      error: loginAccess.message || 'Access has been disabled by your administrator.'
-    };
-  }
-
-  const safeEmail = normalizedEmail.replace(/'/g, "''");
-  let isNewUser = false;
-
   try {
-    const existing = db.exec(`
-      SELECT id, username, display_name, api_key_encrypted
-      FROM users
-      WHERE lower(trim(email)) = '${safeEmail}'
-      ORDER BY created_at ASC
-      LIMIT 1
-    `);
+    const existingLookup = resolveEmailLoginCandidate(normalizedEmail);
+    const existingUser = existingLookup.user;
+    const loginAccess = await evaluateAccessPolicy(
+      existingUser
+        ? {
+            email: normalizedEmail,
+            username: existingUser.username,
+            userId: existingUser.id
+          }
+        : {
+            email: normalizedEmail,
+            username: buildUsernameFromEmail(normalizedEmail)
+          },
+      { eventType: 'login' }
+    );
+    if (!loginAccess.allowed) {
+      return {
+        success: false,
+        blocked: true,
+        error: loginAccess.message || 'Access has been disabled by your administrator.'
+      };
+    }
 
+    const safeEmail = normalizedEmail.replace(/'/g, "''");
+    let isNewUser = false;
     let id;
     let username;
     let storedDisplayName;
     let apiKeyEnc;
     const resolvedDisplayName = String(displayName || '').trim();
 
-    if (existing.length > 0 && existing[0].values.length > 0) {
-      [id, username, storedDisplayName, apiKeyEnc] = existing[0].values[0];
+    if (existingUser) {
+      id = existingUser.id;
+      username = existingUser.username;
+      storedDisplayName = existingUser.displayName;
+      apiKeyEnc = existingUser.apiKeyEnc;
     } else {
       isNewUser = true;
       id = crypto.randomUUID();
@@ -16034,10 +16377,15 @@ ipcMain.handle('update-checklist', async (event, config) => {
         percent: 12
       });
     }
+    const selectedFolderPaths = Array.isArray(config.folderPaths)
+      ? config.folderPaths.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const allEmailFolders = config.allEmailFolders === true || selectedFolderPaths.length > 0;
     const outlookResult = await collectOutlookEmails({
       daysBack: collectedEmailDaysBack,
       folders: Array.isArray(config.folders) && config.folders.length ? config.folders : ['Inbox', 'Sent Items'],
-      folderPaths: Array.isArray(config.folderPaths) ? config.folderPaths : [],
+      folderPaths: selectedFolderPaths,
+      allEmailFolders,
       maxResultsPerFolder: config.maxResultsPerFolder || 250,
       bodyCharLimit: config.bodyCharLimit || 4000
     });
@@ -16048,9 +16396,14 @@ ipcMain.handle('update-checklist', async (event, config) => {
       };
     }
     if (!Array.isArray(outlookResult.emails) || !outlookResult.emails.length) {
+      const folderScopeLabel = selectedFolderPaths.length
+        ? 'the selected Outlook folders'
+        : allEmailFolders
+          ? 'the selected Outlook mail folders'
+          : 'Inbox or Sent Items';
       return {
         success: false,
-        error: `No Outlook emails were found in Inbox or Sent Items for the last ${outlookResult.daysBack || collectedEmailDaysBack} days.`
+        error: `No Outlook emails were found in ${folderScopeLabel} for the last ${outlookResult.daysBack || collectedEmailDaysBack} days.`
       };
     }
     cleanupEmailInputPath = writeTempEmailDataset(outlookResult.emails);

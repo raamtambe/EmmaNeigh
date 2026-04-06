@@ -5,11 +5,26 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 try:
-    from checklist_updater import build_email_threads, build_row_thread_candidates, normalize_email_record
+    from docx import Document
+except Exception:  # pragma: no cover - environment dependent
+    Document = None
+
+try:
+    from checklist_updater import (
+        build_email_threads,
+        build_row_thread_candidates,
+        classify_checklist_row,
+        infer_email_direction,
+        normalize_email_record,
+        refresh_document_draft_stamp,
+    )
 except Exception as exc:  # pragma: no cover - environment dependent
     build_email_threads = None
     build_row_thread_candidates = None
+    classify_checklist_row = None
+    infer_email_direction = None
     normalize_email_record = None
+    refresh_document_draft_stamp = None
     IMPORT_ERROR = exc
 else:  # pragma: no cover - environment dependent
     IMPORT_ERROR = None
@@ -17,6 +32,30 @@ else:  # pragma: no cover - environment dependent
 
 @unittest.skipUnless(build_email_threads is not None, f"checklist updater import failed: {IMPORT_ERROR}")
 class ChecklistUpdaterHeuristicsTests(unittest.TestCase):
+    def test_normalize_email_record_uses_current_message_body(self):
+        email = normalize_email_record({
+            "subject": "Purchase Agreement comments",
+            "body": "Please see attached markup.\n\n-----Original Message-----\nOlder email about disclosure schedules only.",
+        })
+
+        self.assertIn("Please see attached markup.", email["body_current"])
+        self.assertNotIn("Older email", email["body_current"])
+        self.assertNotIn("Older email", email["searchable"])
+
+    def test_infer_email_direction_uses_sent_folder_flag(self):
+        email = normalize_email_record({
+            "subject": "Purchase Agreement markup",
+            "from": "",
+            "to": "Buyer Counsel",
+            "date_sent": "2026-03-12T11:00:00",
+            "folder": r"\\Mailbox - Team\\Deal Files\\Acme Nova",
+            "root_folder": "Deal Files",
+            "store": "Mailbox - Team",
+            "is_sent_folder": True,
+        })
+
+        self.assertEqual(infer_email_direction(email), "sent")
+
     def test_build_email_threads_groups_replies_together(self):
         emails = [
             normalize_email_record({
@@ -153,6 +192,53 @@ class ChecklistUpdaterHeuristicsTests(unittest.TestCase):
         self.assertGreaterEqual(len(candidate_map[7]), 2)
         self.assertGreater(candidate_map[7][0]["score"], candidate_map[7][1]["score"])
         self.assertIn("acme", candidate_map[7][0]["deal_anchor_hits"])
+
+    def test_classify_checklist_row_skips_subrows_and_section_headers(self):
+        header_row = classify_checklist_row(
+            "PURCHASE AGREEMENT COMMENTS:",
+            ["PURCHASE AGREEMENT COMMENTS:", "", ""],
+            ["Document", "Status", "Comments"],
+            0,
+            1,
+            2,
+            previous_document_name="Purchase Agreement",
+        )
+        subrow = classify_checklist_row(
+            "1. Representations and Warranties",
+            ["1. Representations and Warranties", "", ""],
+            ["Document", "Status", "Comments"],
+            0,
+            1,
+            2,
+            previous_document_name="Purchase Agreement",
+        )
+        document_row = classify_checklist_row(
+            "Purchase Agreement",
+            ["Purchase Agreement", "", ""],
+            ["Document", "Status", "Comments"],
+            0,
+            1,
+            2,
+            previous_document_name="",
+        )
+
+        self.assertEqual(header_row["row_type"], "section_header")
+        self.assertFalse(header_row["should_update"])
+        self.assertEqual(subrow["row_type"], "subrow")
+        self.assertFalse(subrow["should_update"])
+        self.assertEqual(document_row["row_type"], "document")
+        self.assertTrue(document_row["should_update"])
+
+    @unittest.skipUnless(Document is not None and refresh_document_draft_stamp is not None, "python-docx is required")
+    def test_refresh_document_draft_stamp_updates_header_date(self):
+        doc = Document()
+        section = doc.sections[0]
+        section.header.paragraphs[0].text = "DRAFT 03/10/2026"
+
+        refresh_document_draft_stamp(doc)
+
+        self.assertIn("DRAFT", section.header.paragraphs[0].text.upper())
+        self.assertNotIn("03/10/2026", section.header.paragraphs[0].text)
 
 
 if __name__ == "__main__":
