@@ -310,6 +310,10 @@ function getAvailableUsername(baseUsername) {
   return `${base}_${Date.now()}`;
 }
 
+function escapeSqlString(value) {
+  return String(value ?? '').replace(/'/g, "''");
+}
+
 function mapUserLookupRow(row = []) {
   if (!Array.isArray(row) || row.length === 0) return null;
   const [id, username, displayName, apiKeyEnc, email] = row;
@@ -322,24 +326,56 @@ function mapUserLookupRow(row = []) {
   };
 }
 
+function queryUserByNormalizedEmail(normalizedEmail, options = {}) {
+  if (!db) return null;
+
+  const email = normalizeEmail(normalizedEmail);
+  if (!email) return null;
+
+  const safeEmail = escapeSqlString(email);
+  const localPart = String(email.split('@')[0] || '').trim();
+  const fullEmailUsername = escapeSqlString(normalizeUsername(email));
+  const seededUsername = escapeSqlString(normalizeUsername(buildUsernameFromEmail(email)));
+  const localPartUsername = escapeSqlString(normalizeUsername(localPart));
+  const excludeUserId = String(options.excludeUserId || '').trim();
+  const excludeClause = excludeUserId
+    ? `AND id != '${escapeSqlString(excludeUserId)}'`
+    : '';
+  const result = db.exec(`
+    SELECT id, username, display_name, api_key_encrypted, email
+    FROM users
+    WHERE lower(trim(COALESCE(email, ''))) = '${safeEmail}'
+      ${excludeClause}
+    ORDER BY
+      CASE
+        WHEN lower(trim(username)) = '${fullEmailUsername}' THEN 0
+        WHEN lower(trim(username)) = '${seededUsername}' THEN 1
+        WHEN lower(trim(username)) = '${localPartUsername}' THEN 2
+        ELSE 3
+      END,
+      CASE
+        WHEN last_login IS NOT NULL AND trim(last_login) != '' THEN 0
+        ELSE 1
+      END,
+      datetime(COALESCE(last_login, created_at)) DESC,
+      datetime(created_at) DESC
+    LIMIT 1
+  `);
+
+  if (result.length === 0 || result[0].values.length === 0) return null;
+  return mapUserLookupRow(result[0].values[0]);
+}
+
 function resolveEmailLoginCandidate(normalizedEmail) {
   if (!db) return { user: null, matchedBy: null };
 
   const email = normalizeEmail(normalizedEmail);
   if (!email) return { user: null, matchedBy: null };
 
-  const safeEmail = email.replace(/'/g, "''");
-  const directMatch = db.exec(`
-    SELECT id, username, display_name, api_key_encrypted, email
-    FROM users
-    WHERE lower(trim(COALESCE(email, ''))) = '${safeEmail}'
-    ORDER BY datetime(COALESCE(last_login, created_at)) DESC, created_at ASC
-    LIMIT 1
-  `);
-
-  if (directMatch.length > 0 && directMatch[0].values.length > 0) {
+  const directMatch = queryUserByNormalizedEmail(email);
+  if (directMatch) {
     return {
-      user: mapUserLookupRow(directMatch[0].values[0]),
+      user: directMatch,
       matchedBy: 'email'
     };
   }
@@ -387,6 +423,66 @@ function resolveEmailLoginCandidate(normalizedEmail) {
   }
 
   return { user: null, matchedBy: null };
+}
+
+function findUserByEmailIdentity(normalizedEmail, options = {}) {
+  const directMatch = queryUserByNormalizedEmail(normalizedEmail, options);
+  if (directMatch) {
+    return {
+      user: directMatch,
+      matchedBy: 'email'
+    };
+  }
+
+  const legacyMatch = resolveEmailLoginCandidate(normalizedEmail);
+  if (legacyMatch.user) {
+    const excludeUserId = String(options.excludeUserId || '').trim();
+    if (!excludeUserId || legacyMatch.user.id !== excludeUserId) {
+      return legacyMatch;
+    }
+  }
+
+  return { user: null, matchedBy: null };
+}
+
+function ensureEmailIdentityUser(normalizedEmail, displayName = '') {
+  if (!db) return null;
+
+  const email = normalizeEmail(normalizedEmail);
+  if (!isValidEmail(email)) return null;
+
+  const existingLookup = findUserByEmailIdentity(email);
+  if (existingLookup.user) {
+    return {
+      user: existingLookup.user,
+      created: false
+    };
+  }
+
+  const id = crypto.randomUUID();
+  const usernameSeed = buildUsernameFromEmail(email);
+  const username = getAvailableUsername(usernameSeed);
+  const storedDisplayName = String(displayName || '').trim() || usernameSeed;
+  const placeholderPassword = hashPassword(crypto.randomUUID());
+
+  db.run(`
+    INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+  `, [
+    id,
+    username,
+    email,
+    placeholderPassword,
+    null,
+    null,
+    storedDisplayName
+  ]);
+
+  const user = mapUserLookupRow([id, username, storedDisplayName, '', email]);
+  return {
+    user,
+    created: true
+  };
 }
 
 function parseSqliteDate(value) {
@@ -14529,7 +14625,7 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
   }
 
   try {
-    const existingLookup = resolveEmailLoginCandidate(normalizedEmail);
+    const existingLookup = findUserByEmailIdentity(normalizedEmail);
     const existingUser = existingLookup.user;
     const loginAccess = await evaluateAccessPolicy(
       existingUser
@@ -14566,32 +14662,22 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
       storedDisplayName = existingUser.displayName;
       apiKeyEnc = existingUser.apiKeyEnc;
     } else {
-      isNewUser = true;
-      id = crypto.randomUUID();
-      const usernameSeed = buildUsernameFromEmail(normalizedEmail);
-      username = getAvailableUsername(usernameSeed);
-      storedDisplayName = resolvedDisplayName || usernameSeed;
-      const placeholderPassword = hashPassword(crypto.randomUUID());
-
-      db.run(`
-        INSERT INTO users (id, username, email, password_hash, security_question, security_answer_hash, display_name, two_factor_enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-      `, [
-        id,
-        username,
-        normalizedEmail,
-        placeholderPassword,
-        null,
-        null,
-        storedDisplayName
-      ]);
+      const createdIdentity = ensureEmailIdentityUser(normalizedEmail, resolvedDisplayName);
+      if (!createdIdentity || !createdIdentity.user) {
+        return { success: false, error: 'Unable to create a user identity for this email.' };
+      }
+      isNewUser = !!createdIdentity.created;
+      id = createdIdentity.user.id;
+      username = createdIdentity.user.username;
+      storedDisplayName = createdIdentity.user.displayName;
+      apiKeyEnc = createdIdentity.user.apiKeyEnc;
     }
 
     const finalDisplayName = resolvedDisplayName || storedDisplayName || buildUsernameFromEmail(normalizedEmail);
     db.run(`
       UPDATE users
-      SET email = '${safeEmail}', display_name = '${finalDisplayName.replace(/'/g, "''")}', last_login = datetime('now')
-      WHERE id = '${id}'
+      SET email = '${safeEmail}', display_name = '${escapeSqlString(finalDisplayName)}', last_login = datetime('now')
+      WHERE id = '${escapeSqlString(id)}'
     `);
 
     // Log activity (best-effort — never blocks login)
@@ -14659,8 +14745,8 @@ ipcMain.handle('create-user', async (event, { username, password, displayName, e
   }
 
   try {
-    const existingEmail = db.exec(`SELECT id FROM users WHERE email = '${normalizedEmail}'`);
-    if (existingEmail.length > 0 && existingEmail[0].values.length > 0) {
+    const existingEmail = findUserByEmailIdentity(normalizedEmail);
+    if (existingEmail.user) {
       return { success: false, error: 'Email address is already in use' };
     }
 
@@ -15308,7 +15394,7 @@ ipcMain.handle('request-verification-code', async (event, { userId, email, type 
 
     // If we have userId, get the user's email
     if (userId && !email) {
-      const result = db.exec(`SELECT email FROM users WHERE id = '${userId}'`);
+      const result = db.exec(`SELECT email FROM users WHERE id = '${escapeSqlString(userId)}'`);
       if (result.length === 0 || result[0].values.length === 0) {
         return { success: false, error: 'User not found' };
       }
@@ -15317,9 +15403,30 @@ ipcMain.handle('request-verification-code', async (event, { userId, email, type 
 
     // If we have email but no userId, find the user
     if (email && !userId) {
-      const result = db.exec(`SELECT id FROM users WHERE email = '${email}'`);
-      if (result.length > 0 && result[0].values.length > 0) {
-        resolvedUserId = result[0].values[0][0];
+      const normalizedEmail = normalizeEmail(email);
+      if (!isValidEmail(normalizedEmail)) {
+        return { success: false, error: 'Please enter a valid email address' };
+      }
+
+      const existingLookup = findUserByEmailIdentity(normalizedEmail);
+      if (existingLookup.user) {
+        resolvedUserId = existingLookup.user.id;
+        userEmail = existingLookup.user.email || normalizedEmail;
+      } else if (String(type || '').trim().toLowerCase() === 'login') {
+        const createdIdentity = ensureEmailIdentityUser(normalizedEmail);
+        if (!createdIdentity || !createdIdentity.user) {
+          return { success: false, error: 'Unable to create a user identity for this email.' };
+        }
+        resolvedUserId = createdIdentity.user.id;
+        userEmail = createdIdentity.user.email || normalizedEmail;
+        if (createdIdentity.created) {
+          logUserActivity(createdIdentity.user.username, 'account_created', {
+            email: normalizedEmail,
+            displayName: createdIdentity.user.displayName || createdIdentity.user.username
+          }).catch(() => {});
+        }
+      } else {
+        userEmail = normalizedEmail;
       }
     }
 
@@ -15352,6 +15459,7 @@ ipcMain.handle('request-verification-code', async (event, { userId, email, type 
 
     const response = {
       success: true,
+      userId: resolvedUserId || null,
       message: `Verification code sent to ${maskedEmail}`,
       email: maskedEmail,
       emailSent: emailResult.sent
@@ -15488,14 +15596,18 @@ ipcMain.handle('update-user-email', async (event, { userId, email }) => {
 
   try {
     // Check if email is already used by another user
-    const existing = db.exec(`SELECT id FROM users WHERE email = '${normalizedEmail}' AND id != '${userId}'`);
-    if (existing.length > 0 && existing[0].values.length > 0) {
+    const existing = findUserByEmailIdentity(normalizedEmail, { excludeUserId: userId });
+    if (existing.user) {
       return { success: false, error: 'Email address is already in use' };
     }
 
-    db.run(`UPDATE users SET email = '${normalizedEmail}', email_verified = 0, two_factor_enabled = 0 WHERE id = '${userId}'`);
+    db.run(`
+      UPDATE users
+      SET email = '${escapeSqlString(normalizedEmail)}', email_verified = 0, two_factor_enabled = 0
+      WHERE id = '${escapeSqlString(userId)}'
+    `);
 
-    const userResult = db.exec(`SELECT username, display_name FROM users WHERE id = '${userId}'`);
+    const userResult = db.exec(`SELECT username, display_name FROM users WHERE id = '${escapeSqlString(userId)}'`);
     if (userResult.length > 0 && userResult[0].values.length > 0) {
       const [username, displayName] = userResult[0].values[0];
       await logUserActivity(username, 'email_updated', {
