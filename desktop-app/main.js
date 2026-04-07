@@ -2255,117 +2255,171 @@ async function syncPendingLogs() {
   }
 }
 
+function isDatabaseCorruptionError(error) {
+  const message = String(error?.message || error || '').trim().toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes('not a database') ||
+    message.includes('file is not a database') ||
+    message.includes('database disk image is malformed') ||
+    message.includes('malformed database') ||
+    message.includes('file is encrypted or is not a database')
+  );
+}
+
+function createCorruptDatabaseBackupPath() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(app.getPath('userData'), `emmaneigh_history.corrupt-${timestamp}.db`);
+}
+
+function backupCorruptDatabaseFile() {
+  if (!fs.existsSync(historyDbPath)) return '';
+  const backupPath = createCorruptDatabaseBackupPath();
+  try {
+    fs.renameSync(historyDbPath, backupPath);
+    return backupPath;
+  } catch (_) {
+    try {
+      fs.copyFileSync(historyDbPath, backupPath);
+      fs.unlinkSync(historyDbPath);
+      return backupPath;
+    } catch (copyErr) {
+      console.error('Failed to back up corrupt database file:', copyErr);
+      return '';
+    }
+  }
+}
+
+function initializeDatabaseSchema() {
+  if (!db) throw new Error('Database not initialized');
+
+  // Create tables if they don't exist
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      email TEXT,
+      password_hash TEXT NOT NULL,
+      security_question TEXT,
+      security_answer_hash TEXT,
+      display_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_login DATETIME,
+      api_key_encrypted TEXT,
+      telemetry_enabled INTEGER DEFAULT 0
+    )
+  `);
+
+  // Migrate existing users table if it doesn't have new columns
+  try {
+    db.run(`ALTER TABLE users ADD COLUMN email TEXT`);
+  } catch (e) { /* Column may already exist */ }
+  try {
+    db.run(`ALTER TABLE users ADD COLUMN security_question TEXT`);
+  } catch (e) { /* Column may already exist */ }
+  try {
+    db.run(`ALTER TABLE users ADD COLUMN security_answer_hash TEXT`);
+  } catch (e) { /* Column may already exist */ }
+  // 2FA columns
+  try {
+    db.run(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`);
+  } catch (e) { /* Column may already exist */ }
+  try {
+    db.run(`ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0`);
+  } catch (e) { /* Column may already exist */ }
+
+  // Normalize legacy user rows so email-only login can recognize older accounts.
+  try {
+    db.run(`UPDATE users SET email = lower(trim(email)) WHERE email IS NOT NULL AND trim(email) != ''`);
+  } catch (e) { /* Best-effort normalization */ }
+  try {
+    db.run(`
+      UPDATE users
+      SET email = lower(trim(username))
+      WHERE (email IS NULL OR trim(email) = '')
+        AND instr(username, '@') > 1
+        AND instr(substr(username, instr(username, '@') + 1), '.') > 0
+    `);
+  } catch (e) { /* Best-effort normalization */ }
+
+  // Create verification codes table for 2FA
+  db.run(`
+    CREATE TABLE IF NOT EXISTS verification_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      code TEXT NOT NULL,
+      type TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      used INTEGER DEFAULT 0,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  // SMTP settings for 2FA email
+  db.run(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS usage_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      user_name TEXT,
+      user_email TEXT,
+      feature TEXT,
+      action TEXT,
+      input_count INTEGER DEFAULT 0,
+      output_count INTEGER DEFAULT 0,
+      duration_ms INTEGER DEFAULT 0
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_activity_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      username TEXT,
+      email TEXT,
+      action TEXT,
+      app_version TEXT,
+      machine_id TEXT
+    )
+  `);
+
+  ensureUsageHistorySchema();
+}
+
 async function initDatabase() {
   try {
     const initSqlJs = require('sql.js');
     SQL = await initSqlJs();
 
-    // Try to load existing database
-    if (fs.existsSync(historyDbPath)) {
-      const buffer = fs.readFileSync(historyDbPath);
-      db = new SQL.Database(buffer);
-    } else {
+    try {
+      if (fs.existsSync(historyDbPath)) {
+        const buffer = fs.readFileSync(historyDbPath);
+        db = new SQL.Database(buffer);
+        db.exec(`PRAGMA schema_version;`);
+      } else {
+        db = new SQL.Database();
+      }
+      initializeDatabaseSchema();
+    } catch (dbError) {
+      if (!isDatabaseCorruptionError(dbError)) {
+        throw dbError;
+      }
+      const backupPath = backupCorruptDatabaseFile();
+      console.warn('Recovered from corrupt EmmaNeigh database.', {
+        source: historyDbPath,
+        backupPath: backupPath || '(backup failed)',
+        error: String(dbError?.message || dbError || '')
+      });
       db = new SQL.Database();
+      initializeDatabaseSchema();
     }
-
-    // Create tables if they don't exist
-    db.run(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT,
-        password_hash TEXT NOT NULL,
-        security_question TEXT,
-        security_answer_hash TEXT,
-        display_name TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_login DATETIME,
-        api_key_encrypted TEXT,
-        telemetry_enabled INTEGER DEFAULT 0
-      )
-    `);
-
-    // Migrate existing users table if it doesn't have new columns
-    try {
-      db.run(`ALTER TABLE users ADD COLUMN email TEXT`);
-    } catch (e) { /* Column may already exist */ }
-    try {
-      db.run(`ALTER TABLE users ADD COLUMN security_question TEXT`);
-    } catch (e) { /* Column may already exist */ }
-    try {
-      db.run(`ALTER TABLE users ADD COLUMN security_answer_hash TEXT`);
-    } catch (e) { /* Column may already exist */ }
-    // 2FA columns
-    try {
-      db.run(`ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0`);
-    } catch (e) { /* Column may already exist */ }
-    try {
-      db.run(`ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0`);
-    } catch (e) { /* Column may already exist */ }
-
-    // Normalize legacy user rows so email-only login can recognize older accounts.
-    try {
-      db.run(`UPDATE users SET email = lower(trim(email)) WHERE email IS NOT NULL AND trim(email) != ''`);
-    } catch (e) { /* Best-effort normalization */ }
-    try {
-      db.run(`
-        UPDATE users
-        SET email = lower(trim(username))
-        WHERE (email IS NULL OR trim(email) = '')
-          AND instr(username, '@') > 1
-          AND instr(substr(username, instr(username, '@') + 1), '.') > 0
-      `);
-    } catch (e) { /* Best-effort normalization */ }
-
-    // Create verification codes table for 2FA
-    db.run(`
-      CREATE TABLE IF NOT EXISTS verification_codes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        code TEXT NOT NULL,
-        type TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        expires_at DATETIME NOT NULL,
-        used INTEGER DEFAULT 0,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      )
-    `);
-
-    // SMTP settings for 2FA email
-    db.run(`
-      CREATE TABLE IF NOT EXISTS app_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      )
-    `);
-
-    db.run(`
-      CREATE TABLE IF NOT EXISTS usage_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        user_name TEXT,
-        user_email TEXT,
-        feature TEXT,
-        action TEXT,
-        input_count INTEGER DEFAULT 0,
-        output_count INTEGER DEFAULT 0,
-        duration_ms INTEGER DEFAULT 0
-      )
-    `);
-
-    db.run(`
-      CREATE TABLE IF NOT EXISTS user_activity_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        username TEXT,
-        email TEXT,
-        action TEXT,
-        app_version TEXT,
-        machine_id TEXT
-      )
-    `);
-
-    ensureUsageHistorySchema();
 
     saveDatabase();
     console.log('Database initialized at:', historyDbPath);
@@ -2388,6 +2442,12 @@ function saveDatabase() {
       console.error('Failed to save database:', e);
     }
   }
+}
+
+async function ensureDatabaseReady() {
+  if (db) return true;
+  await initDatabase();
+  return !!db;
 }
 
 // API Key storage (encrypted with safeStorage)
@@ -14617,7 +14677,12 @@ ipcMain.handle('get-managed-ai-status', async (event) => {
 
 // Email-only login (mandatory email identity)
 ipcMain.handle('email-login', async (event, { email, displayName }) => {
-  if (!db) return { success: false, error: 'Database not initialized' };
+  if (!(await ensureDatabaseReady())) {
+    return {
+      success: false,
+      error: 'EmmaNeigh could not initialize its local app data. Please restart the app.'
+    };
+  }
 
   const normalizedEmail = normalizeEmail(email);
   if (!isValidEmail(normalizedEmail)) {
@@ -14707,6 +14772,14 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
       user: sessionUser
     };
   } catch (e) {
+    if (isDatabaseCorruptionError(e)) {
+      db = null;
+      await initDatabase();
+      return {
+        success: false,
+        error: 'EmmaNeigh repaired its local sign-in data. Please enter your email again.'
+      };
+    }
     return { success: false, error: e.message };
   }
 });
@@ -15382,7 +15455,12 @@ async function sendVerificationEmail(email, code, type) {
 
 // Request a verification code (for login 2FA or email verification)
 ipcMain.handle('request-verification-code', async (event, { userId, email, type }) => {
-  if (!db) return { success: false, error: 'Database not initialized' };
+  if (!(await ensureDatabaseReady())) {
+    return {
+      success: false,
+      error: 'EmmaNeigh could not initialize its local app data. Please restart the app.'
+    };
+  }
 
   if (!userId && !email) {
     return { success: false, error: 'User ID or email required' };
