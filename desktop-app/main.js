@@ -371,6 +371,7 @@ function resolveEmailLoginCandidate(normalizedEmail) {
 
   const email = normalizeEmail(normalizedEmail);
   if (!email) return { user: null, matchedBy: null };
+  const safeEmail = escapeSqlString(email);
 
   const directMatch = queryUserByNormalizedEmail(email);
   if (directMatch) {
