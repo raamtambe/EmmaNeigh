@@ -4844,9 +4844,9 @@
       </div>
 
       <div class="settings-section" id="securitySection" style="display: none;">
-        <h3>Two-Factor Authentication</h3>
+        <h3>Login Email</h3>
         <div style="margin-bottom: 12px; padding: 8px 12px; background: #1a2a1a; border: 1px solid #2a4a2a; border-radius: 6px;">
-          <p style="font-size: 12px; color: #4ade80; margin: 0;">2FA is mandatory. A 6-digit code is emailed to you on each login.</p>
+          <p style="font-size: 12px; color: #4ade80; margin: 0;">EmmaNeigh uses your email as a lightweight local identity so the app can remember who is signed in and track usage history.</p>
         </div>
 
         <div class="tfa-email-section">
@@ -7737,45 +7737,13 @@
       }
     }
 
-    async function enforceSessionPolicyCheck(eventType = 'session_heartbeat', force = false) {
-      if (!currentUser || currentUser.isGuest || !currentUser.email) return true;
-      try {
-        const result = await ipcRenderer.invoke('check-access-policy', {
-          email: currentUser.email || '',
-          username: currentUser.username || '',
-          userId: currentUser.id || '',
-          eventType,
-          force
-        });
-        if (result && result.success && result.allowed === false) {
-          const loginError = document.getElementById('loginError');
-          if (loginError) {
-            loginError.textContent = result.message || 'Access has been disabled by your administrator.';
-          }
-          await stopSessionMonitoring('policy_blocked');
-          await ipcRenderer.invoke('clear-session-context');
-          localStorage.removeItem('emmaneigh_session');
-          localStorage.removeItem('emmaneigh_user');
-          currentUser = null;
-          userName.textContent = 'Sign In Required';
-          applyUserStatsVisibility();
-          refreshFeedbackAccess();
-          loginModal.classList.remove('hidden');
-          resetLoginForms();
-          return false;
-        }
-        if (result && result.success && currentUser) {
-          currentUser.isAdmin = !!result.isAdmin;
-          applyUserStatsVisibility();
-        }
-      } catch (_) {}
+    async function enforceSessionPolicyCheck() {
       return true;
     }
 
     async function startSessionMonitoring(source = 'login') {
       clearSessionHeartbeatTimers();
       sessionStartTimestamp = Date.now();
-      await enforceSessionPolicyCheck('session_start', true);
       if (!currentUser || currentUser.isGuest) return;
 
       logUsage('session', 'start', 0, 0, 0, { engine: source }).catch(() => {});
@@ -7784,10 +7752,6 @@
         if (!currentUser || currentUser.isGuest) return;
         logUsage('session', 'heartbeat', 0, 0, 0, { engine: 'app' }).catch(() => {});
       }, SESSION_USAGE_HEARTBEAT_MS);
-
-      sessionPolicyHeartbeatId = setInterval(() => {
-        enforceSessionPolicyCheck('session_heartbeat', false).catch(() => {});
-      }, SESSION_POLICY_CHECK_MS);
     }
 
     async function stopSessionMonitoring(reason = 'logout') {

@@ -14692,28 +14692,6 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
   try {
     const existingLookup = findUserByEmailIdentity(normalizedEmail);
     const existingUser = existingLookup.user;
-    const loginAccess = await evaluateAccessPolicy(
-      existingUser
-        ? {
-            email: normalizedEmail,
-            username: existingUser.username,
-            userId: existingUser.id
-          }
-        : {
-            email: normalizedEmail,
-            username: buildUsernameFromEmail(normalizedEmail)
-          },
-      { eventType: 'login' }
-    );
-    if (!loginAccess.allowed) {
-      return {
-        success: false,
-        blocked: true,
-        error: loginAccess.message || 'Access has been disabled by your administrator.'
-      };
-    }
-
-    const safeEmail = normalizedEmail.replace(/'/g, "''");
     let isNewUser = false;
     let id;
     let username;
@@ -14741,7 +14719,7 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
     const finalDisplayName = resolvedDisplayName || storedDisplayName || buildUsernameFromEmail(normalizedEmail);
     db.run(`
       UPDATE users
-      SET email = '${safeEmail}', display_name = '${escapeSqlString(finalDisplayName)}', last_login = datetime('now')
+      SET email = '${escapeSqlString(normalizedEmail)}', display_name = '${escapeSqlString(finalDisplayName)}', last_login = datetime('now')
       WHERE id = '${escapeSqlString(id)}'
     `);
 
@@ -14759,10 +14737,8 @@ ipcMain.handle('email-login', async (event, { email, displayName }) => {
       displayName: finalDisplayName,
       email: normalizedEmail,
       apiKeyEnc,
-      isAdmin: typeof loginAccess.isAdmin === 'boolean'
-        ? loginAccess.isAdmin
-        : canAccessAnalyticsDashboard({ username, email: normalizedEmail }),
-      adminSource: loginAccess.source || 'local'
+      isAdmin: canAccessAnalyticsDashboard({ username, email: normalizedEmail }),
+      adminSource: 'local'
     });
     setSessionIdentityForEvent(event, sessionUser);
 
@@ -15241,7 +15217,12 @@ ipcMain.handle('get-user-api-key', async (event, { userId }) => {
 
 // Get user by ID (for session restore)
 ipcMain.handle('get-user-by-id', async (event, { userId }) => {
-  if (!db) return { success: false, error: 'Database not initialized' };
+  if (!(await ensureDatabaseReady())) {
+    return {
+      success: false,
+      error: 'EmmaNeigh could not initialize its local app data. Please restart the app.'
+    };
+  }
 
   try {
     const result = db.exec(`SELECT id, username, display_name, api_key_encrypted, email FROM users WHERE id = '${userId}'`);
@@ -15254,29 +15235,14 @@ ipcMain.handle('get-user-by-id', async (event, { userId }) => {
     const [id, uname, displayName, apiKeyEnc, email] = row;
     const normalizedEmail = normalizeEmail(email || '');
 
-    const sessionAccess = await evaluateAccessPolicy(
-      { email: normalizedEmail, username: uname, userId: id },
-      { eventType: 'session_restore' }
-    );
-    if (!sessionAccess.allowed) {
-      clearSessionIdentityForEvent(event);
-      return {
-        success: false,
-        blocked: true,
-        error: sessionAccess.message || 'Access has been disabled by your administrator.'
-      };
-    }
-
     const sessionUser = buildSessionUserPayload({
       id,
       username: uname,
       displayName: displayName || uname,
       email: normalizedEmail || null,
       apiKeyEnc,
-      isAdmin: typeof sessionAccess.isAdmin === 'boolean'
-        ? sessionAccess.isAdmin
-        : canAccessAnalyticsDashboard({ username: uname, email: normalizedEmail }),
-      adminSource: sessionAccess.source || 'local'
+      isAdmin: canAccessAnalyticsDashboard({ username: uname, email: normalizedEmail }),
+      adminSource: 'local'
     });
     setSessionIdentityForEvent(event, sessionUser);
 
