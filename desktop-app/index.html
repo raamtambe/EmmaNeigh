@@ -5116,8 +5116,8 @@
       <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
       </svg>
-      <p class="drop-text">Drop folder or PDFs here, or <span>browse</span></p>
-      <p class="drop-hint">Accepts a folder or individual PDF files with signature pages</p>
+      <p class="drop-text">Drop folder or PDF/Word files here, or <span>browse</span></p>
+      <p class="drop-hint">Accepts a folder or individual PDF and Word (.docx) files with signature pages</p>
       <p class="file-count" id="packetsFileCount"></p>
     </div>
 
@@ -9308,9 +9308,11 @@
         if ((!emailData || emailData.length === 0) && !csvAttachment) {
           const scope = await promptForOutlookScope({
             title: 'Choose Outlook Folders for Agent Email Search',
-            description: 'Select the Outlook folders EmmaNeigh should search to answer this email question.',
+            description: 'Select any Outlook mail folders EmmaNeigh should search to answer this email question.',
             defaultDays: emailLookbackDays || 30,
-            selectedFolders: emailSelectedOutlookFolders
+            selectedFolders: emailSelectedOutlookFolders,
+            allEmailFolders: true,
+            defaultSelectionRoots: ['Inbox', 'Sent Items']
           });
           if (!scope) {
             return { message: 'Email search canceled.' };
@@ -9394,9 +9396,11 @@
           if ((!emailData || emailData.length === 0) && typeof processOutlookEmails === 'function') {
             const scope = await promptForOutlookScope({
               title: 'Choose Outlook Folders for Email Search',
-              description: 'Select the Outlook folders EmmaNeigh should search to answer this question.',
+              description: 'Select any Outlook mail folders EmmaNeigh should search to answer this question.',
               defaultDays: emailLookbackDays || 30,
-              selectedFolders: emailSelectedOutlookFolders
+              selectedFolders: emailSelectedOutlookFolders,
+              allEmailFolders: true,
+              defaultSelectionRoots: ['Inbox', 'Sent Items']
             });
             if (!scope) return;
             emailLookbackDays = scope.daysBack;
@@ -9803,10 +9807,10 @@
       if (files.length > 0) {
         // Check if it's a folder or files
         const firstFile = files[0];
-        // If multiple files or single PDF, treat as file list
-        if (files.length > 1 || firstFile.name.toLowerCase().endsWith('.pdf')) {
+        // Treat dropped PDFs/DOCX files as a file list; otherwise assume a folder.
+        if (files.length > 1 || firstFile.name.toLowerCase().endsWith('.pdf') || firstFile.name.toLowerCase().endsWith('.docx')) {
           packetsPaths = Array.from(files)
-            .filter(f => f.name.toLowerCase().endsWith('.pdf'))
+            .filter(f => f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.docx'))
             .map(f => f.path);
           if (packetsPaths.length > 0) {
             updatePacketsFileCount();
@@ -9832,7 +9836,7 @@
           await processPackets({ folder: folderPath });
         }
       } else if (choice === 'files') {
-        const filePaths = await ipcRenderer.invoke('select-pdfs-multiple');
+        const filePaths = await ipcRenderer.invoke('select-documents-multiple');
         if (filePaths && filePaths.length > 0) {
           packetsPaths = filePaths;
           updatePacketsFileCount();
@@ -9844,7 +9848,7 @@
     function showPacketsChoiceDialog() {
       return new Promise((resolve) => {
         // Simple approach: use confirm dialog
-        const useFolder = confirm('Click OK to select a folder, or Cancel to select individual PDF files.');
+        const useFolder = confirm('Click OK to select a folder, or Cancel to select individual PDF or Word files.');
         resolve(useFolder ? 'folder' : 'files');
       });
     }
@@ -9888,7 +9892,23 @@
         updatePacketsProgress('Creating ZIP file...', 98);
         currentZipPath = await ipcRenderer.invoke('create-zip', result.outputPath);
         updatePacketsProgress('Complete!', 100, true);
-        resultText.textContent = `Created ${result.packetsCreated} signature packet${result.packetsCreated !== 1 ? 's' : ''}`;
+        const verification = result && result.verification ? result.verification : null;
+        const reviewRequiredCount = verification && Number.isFinite(Number(verification.review_required_count))
+          ? Number(verification.review_required_count)
+          : 0;
+        const unassignedCount = verification && Number.isFinite(Number(verification.unassigned_signature_count))
+          ? Number(verification.unassigned_signature_count)
+          : 0;
+        const verificationStatus = verification && verification.status ? String(verification.status) : 'passed';
+
+        let summaryText = `Created ${result.packetsCreated} signature packet${result.packetsCreated !== 1 ? 's' : ''}`;
+        if (verificationStatus !== 'passed') {
+          const reviewBits = [];
+          if (reviewRequiredCount > 0) reviewBits.push(`${reviewRequiredCount} item${reviewRequiredCount === 1 ? '' : 's'} need review`);
+          if (unassignedCount > 0) reviewBits.push(`${unassignedCount} page${unassignedCount === 1 ? '' : 's'} routed to the unassigned review packet`);
+          summaryText += `. Review required${reviewBits.length ? `: ${reviewBits.join('; ')}` : ''}.`;
+        }
+        resultText.textContent = summaryText;
 
         // Log usage
         await logUsage('signature_packets', 'process', packetsPaths.length || 1, result.packetsCreated || 0, Date.now() - startTime);
@@ -11664,11 +11684,11 @@
 
     async function promptForOutlookScope({
       title = 'Choose Outlook Folders',
-      description = 'Select the Outlook folders EmmaNeigh should search.',
+      description = 'Select any Outlook mail folders EmmaNeigh should search.',
       defaultDays = 30,
       selectedFolders = [],
       roots = ['Inbox', 'Sent Items'],
-      allEmailFolders = false,
+      allEmailFolders = true,
       defaultSelectionRoots = roots
     } = {}) {
       if (pendingOutlookScopeResolver) {

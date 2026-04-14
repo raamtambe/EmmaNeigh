@@ -4819,23 +4819,24 @@ function buildAgentFallbackPlan(commandText, attachments) {
   }
 
   if (/(signature|sig)\s*(packet|packets|page|pages)|signing set|execution pages?/.test(prompt)) {
-    if (hasPdf) {
+    const hasSupportedPacketDoc = files.some(file => file.ext === 'pdf' || file.ext === 'docx');
+    if (hasSupportedPacketDoc) {
       return {
         action: 'run_signature_packets',
         target_tab: 'packets',
         run_now: true,
-        required_extensions: ['pdf'],
+        required_extensions: ['pdf', 'docx'],
         missing_requirements: [],
-        user_message: `Running signature packets with ${files.filter(f => f.ext === 'pdf').length} PDF file(s).`
+        user_message: `Running signature packets with ${files.filter(f => f.ext === 'pdf' || f.ext === 'docx').length} document file(s).`
       };
     }
     return {
       action: 'open_tab',
       target_tab: 'packets',
       run_now: false,
-      required_extensions: ['pdf'],
-      missing_requirements: ['Attach one or more PDF files to run signature packets.'],
-      user_message: 'Opened Create Sig Packets. Attach PDFs, then run again.'
+      required_extensions: ['pdf', 'docx'],
+      missing_requirements: ['Attach one or more PDF or Word (.docx) files to run signature packets.'],
+      user_message: 'Opened Create Sig Packets. Attach PDFs or Word documents, then run again.'
     };
   }
 
@@ -5058,10 +5059,10 @@ function sanitizeAgentPlan(rawPlan, fallbackPlan, attachments) {
 
   if (action === 'run_signature_packets') {
     targetTab = 'packets';
-    const hasPdf = files.some(file => file.ext === 'pdf');
-    if (!hasPdf) {
+    const hasSupportedPacketDoc = files.some(file => file.ext === 'pdf' || file.ext === 'docx');
+    if (!hasSupportedPacketDoc) {
       runNow = false;
-      missingRequirements = ['Attach one or more PDF files to run signature packets.'];
+      missingRequirements = ['Attach one or more PDF or Word (.docx) files to run signature packets.'];
     }
   } else if (action === 'run_document_edit_and_redline') {
     targetTab = null;
@@ -6391,7 +6392,7 @@ const COMMAND_TOOLS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query — matched against subject, sender, body, and attachment filenames' },
-        folder: { type: 'string', description: 'Outlook folder to search. Default: Inbox. Examples: Inbox, Sent Items, Drafts' },
+        folder: { type: 'string', description: 'Outlook folder to search. Default: Inbox. You can pass a default folder name or a full Outlook folder path, for example \\\\Mailbox - Team\\\\Deal Files\\\\Acme.' },
         max_results: { type: 'integer', description: 'Maximum results to return. Default: 20.' },
         days_back: { type: 'integer', description: 'Only search emails from the last N days. Default: 30.' }
       },
@@ -7717,6 +7718,10 @@ async function getAvailableIManageDriveRoots(options = {}) {
   return selected ? [selected] : [];
 }
 
+function buildIManageWebOnlyUnsupportedMessage(actionLabel = 'This iManage action') {
+  return `${actionLabel} requires iManage Work Desktop COM or an existing synced iManage Drive folder. EmmaNeigh cannot browse or save directly into folders that only exist on the iManage website yet.`;
+}
+
 function isWithinIManageDriveRoot(filePath, rootPath) {
   const resolvedFile = resolveExistingLocalPath(filePath);
   const resolvedRoot = resolveExistingLocalPath(rootPath);
@@ -7766,12 +7771,15 @@ function pickUniqueIManageDriveTargetPath(targetPath) {
   return targetPath;
 }
 
-async function imanageDriveBrowseFiles(multiple = false) {
-  const roots = await getAvailableIManageDriveRoots({ allowPrompt: true });
+async function imanageDriveBrowseFiles(multiple = false, options = {}) {
+  const allowRootPrompt = options.allowRootPrompt === true;
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: allowRootPrompt });
   if (!roots.length) {
     return {
       success: false,
-      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+      error: allowRootPrompt
+        ? 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+        : buildIManageWebOnlyUnsupportedMessage('Browsing iManage documents')
     };
   }
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -7801,7 +7809,9 @@ async function imanageDriveSearch(query, options = {}) {
   if (!roots.length) {
     return {
       success: false,
-      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+      error: options.allowPrompt
+        ? 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+        : buildIManageWebOnlyUnsupportedMessage('Searching iManage')
     };
   }
 
@@ -7829,17 +7839,20 @@ async function imanageDriveSearch(query, options = {}) {
   };
 }
 
-async function imanageDriveSaveDocument(filePath, action = 'new_document', showDialog = true) {
+async function imanageDriveSaveDocument(filePath, action = 'new_document', showDialog = true, options = {}) {
   const resolvedPath = resolveExistingLocalPath(filePath);
   if (!resolvedPath || !fs.existsSync(resolvedPath)) {
     return { success: false, error: 'Local file not found for iManage Drive save.' };
   }
 
-  const roots = await getAvailableIManageDriveRoots({ allowPrompt: !!showDialog });
+  const allowRootPrompt = options.allowRootPrompt === true;
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: allowRootPrompt });
   if (!roots.length) {
     return {
       success: false,
-      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+      error: allowRootPrompt
+        ? 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+        : buildIManageWebOnlyUnsupportedMessage('Saving to iManage')
     };
   }
 
@@ -7895,17 +7908,20 @@ async function imanageDriveSaveDocument(filePath, action = 'new_document', showD
   };
 }
 
-async function imanageDriveCreateFolder(folderName, parentPath = '') {
+async function imanageDriveCreateFolder(folderName, parentPath = '', options = {}) {
   const safeName = String(folderName || '').trim().replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!safeName) {
     return { success: false, error: 'folder_name is required.' };
   }
 
-  const roots = await getAvailableIManageDriveRoots({ allowPrompt: true });
+  const allowRootPrompt = options.allowRootPrompt === true;
+  const roots = await getAvailableIManageDriveRoots({ allowPrompt: allowRootPrompt });
   if (!roots.length) {
     return {
       success: false,
-      error: 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+      error: allowRootPrompt
+        ? 'No iManage Drive sync folder was found. Select your synced iManage folder and retry.'
+        : buildIManageWebOnlyUnsupportedMessage('Creating an iManage folder')
     };
   }
 
@@ -8228,7 +8244,7 @@ try {
   const failure = normalizeIManageFailure(result);
   if (failure) {
     if (shouldTryIManageDriveFallback(failure)) {
-      return imanageDriveBrowseFiles(multiple);
+      return imanageDriveBrowseFiles(multiple, { allowRootPrompt: false });
     }
     return failure;
   }
@@ -8388,7 +8404,7 @@ try {
   const failure = normalizeIManageFailure(result);
   if (failure) {
     if (shouldTryIManageDriveFallback(failure)) {
-      return imanageDriveSaveDocument(resolvedPath, normalizedAction, showDialogBool);
+      return imanageDriveSaveDocument(resolvedPath, normalizedAction, showDialogBool, { allowRootPrompt: false });
     }
     return failure;
   }
@@ -8789,7 +8805,7 @@ try {
   const failure = normalizeIManageFailure(result);
   if (failure) {
     if (shouldTryIManageDriveFallback(failure)) {
-      return imanageDriveSearch(normalizedQuery, { allowPrompt: true, maxResults: 25 });
+      return imanageDriveSearch(normalizedQuery, { allowPrompt: false, maxResults: 25 });
     }
     return failure;
   }
@@ -9097,7 +9113,7 @@ try {
   const failure = normalizeIManageFailure(result);
   if (failure) {
     if (shouldTryIManageDriveFallback(failure)) {
-      return imanageDriveCreateFolder(normalizedName, parentPath);
+      return imanageDriveCreateFolder(normalizedName, parentPath, { allowRootPrompt: false });
     }
     return failure;
   }

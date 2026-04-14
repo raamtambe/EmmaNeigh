@@ -14,9 +14,16 @@ import re
 import sys
 import json
 import shutil
-from docx import Document
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+try:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+except ImportError:
+    Document = None
+    Pt = None
+    Inches = None
+    WD_ALIGN_PARAGRAPH = None
 
 
 # Column header patterns for signature table detection
@@ -30,8 +37,21 @@ SIGNATURE_TRIGGER_PHRASES = [
     "THE PARTIES HERETO", "DULY AUTHORIZED"
 ]
 
+ENTITY_TERMS = ["LLC", "INC", "CORP", "CORPORATION", "LP", "LLP", "TRUST", "COMPANY", "LTD", "LIMITED", "HOLDINGS", "GROUP", "CO."]
+SIGNATURE_LABEL_PREFIXES = ["NAME", "PRINTED NAME", "PRINT NAME", "SIGNATORY", "SIGNER"]
+IGNORE_SIGNER_VALUES = {
+    "BY", "NAME", "PRINTED NAME", "PRINT NAME", "SIGNATORY", "SIGNER",
+    "TITLE", "DATE", "SIGNATURE", "ITS", "WITNESS", "ATTEST", "EXECUTED"
+}
+UNASSIGNED_SIGNER_BUCKET = "UNASSIGNED SIGNATURE PAGES - REVIEW REQUIRED"
+
 ANNEX_KEYWORDS = ["SCHEDULE", "EXHIBIT", "ANNEX", "APPENDIX"]
 LONG_ANNEX_PAGE_THRESHOLD = 100
+
+
+def ensure_docx_support():
+    if Document is None:
+        raise ImportError("python-docx is required for Word signature packet support")
 
 
 def emit(msg_type, **kwargs):
@@ -53,9 +73,8 @@ def is_probable_person(name):
     """Check if name is likely a person (not an entity)."""
     if not name:
         return False
-    entity_terms = ["LLC", "INC", "CORP", "CORPORATION", "LP", "LLP", "TRUST", "COMPANY", "LTD", "LIMITED"]
     name_upper = name.upper()
-    if any(term in name_upper for term in entity_terms):
+    if any(term in name_upper for term in ENTITY_TERMS):
         return False
     # Check for reasonable word count (2-4 words typical for person names)
     word_count = len(name.split())
@@ -65,6 +84,45 @@ def is_probable_person(name):
     if not re.search(r'[A-Za-z]{2,}', name):
         return False
     return True
+
+
+def is_probable_entity_signer(name):
+    """Check if text looks like an entity-style signatory fallback."""
+    if not name:
+        return False
+    cleaned = re.sub(r"\s+", " ", str(name).strip())
+    upper = cleaned.upper()
+    if upper in IGNORE_SIGNER_VALUES:
+        return False
+    if len(cleaned.split()) > 10:
+        return False
+    if any(term in upper for term in ENTITY_TERMS):
+        return True
+    words = [word for word in cleaned.split() if re.search(r"[A-Z]", word)]
+    if len(words) >= 2 and cleaned == cleaned.upper():
+        return True
+    return False
+
+
+def clean_signer_candidate(raw_text):
+    """Normalize signer text extracted from signature blocks."""
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r'(?i)^/s/\s*', '', text)
+    text = re.sub(r'(?i)^(?:by|name|printed\s+name|print\s+name|signatory|signer|title)\s*:?', '', text)
+    text = re.sub(r'\[[^\]]*\]', ' ', text)
+    text = re.sub(r'_{2,}', ' ', text)
+    text = re.sub(r'\.{2,}', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip(" :;/,-")
+    if text.upper() in IGNORE_SIGNER_VALUES:
+        return ""
+    return text
+
+
+def normalize_signer_candidate(raw_text):
+    cleaned = clean_signer_candidate(raw_text)
+    return normalize_name(cleaned) if cleaned else ""
 
 
 # ========== FOOTER EXTRACTION ==========
@@ -225,6 +283,7 @@ def extract_footer_from_docx(docx_path):
     Returns "N/A" if no footer found.
     """
     try:
+        ensure_docx_support()
         doc = Document(docx_path)
 
         # Try to get explicit footer from sections
@@ -255,6 +314,7 @@ def extract_document_id_from_docx(docx_path):
     Returns "N/A" if no document ID found.
     """
     try:
+        ensure_docx_support()
         doc = Document(docx_path)
 
         # Check footer sections for document IDs
@@ -374,9 +434,9 @@ def extract_signers_trigger_phrase(text):
                 words = line.split()
                 if 1 <= len(words) <= 5:
                     # Remove trailing underscores or colons
-                    candidate = re.sub(r'[_:]+$', '', ' '.join(words)).strip()
+                    candidate = normalize_signer_candidate(re.sub(r'[_:]+$', '', ' '.join(words)).strip())
                     if is_probable_person(candidate):
-                        signers.add(normalize_name(candidate))
+                        signers.add(candidate)
 
     return signers
 
@@ -453,62 +513,161 @@ def extract_signers_name_title_pattern(text):
                         break
 
             if has_title_nearby:
-                name = name_match.group(1).strip()
-                # Clean up the name (remove trailing underscores, etc.)
-                name = re.sub(r'_{2,}.*$', '', name).strip()
-                name = re.sub(r'\s*\[.*\]$', '', name).strip()  # Remove [brackets]
+                name = normalize_signer_candidate(name_match.group(1))
                 if name and is_probable_person(name):
-                    signers.add(normalize_name(name))
+                    signers.add(name)
 
     return signers
 
 
-def detect_signature_page_extended(text, tables=None):
-    """
-    Signature page detection - simplified in v5.1.4.
+def extract_signers_from_labeled_lines(text):
+    """Extract signer labels from explicit Name/Printed Name/Signatory lines."""
+    signers = set()
+    entity_fallbacks = set()
+    lines = text.splitlines()
 
-    Only uses two reliable detection methods:
-    1. BY: blocks - The most reliable indicator of a signature page
-    2. NAME: followed by TITLE: - Another reliable signature block pattern
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.search(r'\b(?:NAME|PRINTED NAME|PRINT NAME|SIGNATORY|SIGNER)\s*:\s*(.+)', stripped, re.IGNORECASE)
+        if not match:
+            continue
+        candidate = normalize_signer_candidate(match.group(1))
+        if not candidate:
+            continue
+        if is_probable_person(candidate):
+            signers.add(candidate)
+        elif is_probable_entity_signer(candidate):
+            entity_fallbacks.add(candidate)
 
-    NO fallback heuristics - if we can't find a name, it's not a signature page.
-    This eliminates false positives from blank pages.
+    return signers, entity_fallbacks
 
-    Returns:
-        tuple: (is_signature_page: bool, signers: set, detection_method: str)
-    """
-    all_signers = set()
-    methods_used = []
 
-    # Method 1: Traditional BY: blocks (most reliable)
-    by_signers = extract_signers_from_by_blocks(text)
-    if by_signers:
-        all_signers.update(by_signers)
-        methods_used.append("BY_BLOCK")
+def extract_entities_near_by_blocks(lines, by_index):
+    """Look above a BY block for an entity signer fallback."""
+    entities = set()
+    for offset in range(1, 4):
+        prior_index = by_index - offset
+        if prior_index < 0:
+            break
+        candidate = normalize_signer_candidate(lines[prior_index])
+        if not candidate:
+            continue
+        if candidate in {"AND", "ITS", "BY"}:
+            continue
+        if is_probable_entity_signer(candidate):
+            entities.add(candidate)
+            break
+        # Stop once we hit unrelated prose instead of climbing too far.
+        if len(candidate.split()) > 6:
+            break
+    return entities
 
-    # Method 2: NAME: followed by TITLE: pattern (v5.1.4)
-    name_title_signers = extract_signers_name_title_pattern(text)
-    if name_title_signers:
-        all_signers.update(name_title_signers)
-        methods_used.append("NAME_TITLE")
 
-    # Method 3: Signature tables (if they have explicit NAME and SIGNATURE headers)
+def collect_signature_cues(text, tables=None):
+    """Score how much a page looks like a signature page even if no signer was extracted."""
+    hits = []
+    upper = str(text or "").upper()
+    if re.search(r'\bBY\s*:', upper):
+        hits.append("BY")
+    if re.search(r'\b(?:NAME|PRINTED NAME|PRINT NAME|SIGNATORY|SIGNER)\s*:', upper):
+        hits.append("NAME_LABEL")
+    if re.search(r'\bTITLE\s*:', upper):
+        hits.append("TITLE_LABEL")
+    if re.search(r'\bDATE\s*:', upper):
+        hits.append("DATE_LABEL")
+    if re.search(r'_{6,}', text or ""):
+        hits.append("UNDERSCORE")
+    if any(phrase in upper for phrase in SIGNATURE_TRIGGER_PHRASES):
+        hits.append("TRIGGER_PHRASE")
     if tables:
         for table_data in tables:
-            if table_data and len(table_data) > 0:
-                if is_signature_table(table_data[0]):
-                    table_signers = extract_signers_from_table(table_data)
-                    if table_signers:
-                        all_signers.update(table_signers)
-                        methods_used.append("TABLE")
+            if table_data and len(table_data) > 0 and is_signature_table(table_data[0]):
+                hits.append("SIGNATURE_TABLE")
+                break
+    score = 0
+    for hit in hits:
+        if hit in {"BY", "NAME_LABEL", "SIGNATURE_TABLE"}:
+            score += 3
+        elif hit in {"TITLE_LABEL", "DATE_LABEL", "TRIGGER_PHRASE"}:
+            score += 2
+        else:
+            score += 1
+    return score, hits
 
-    # If we found signers, it's a signature page
-    if all_signers:
-        return (True, all_signers, ",".join(methods_used))
 
-    # v5.1.4: NO FALLBACK - If we couldn't extract a name, it's not a signature page
-    # This prevents false positives from blank pages, pages with just underscores, etc.
-    return (False, set(), None)
+def analyze_signature_page_text(text, tables=None):
+    """Second-pass signature-page analysis with named-signer extraction and review flags."""
+    all_person_signers = set()
+    entity_fallbacks = set()
+    methods_used = []
+
+    by_signers = extract_signers_from_by_blocks(text)
+    if by_signers:
+        all_person_signers.update(by_signers)
+        methods_used.append("BY_BLOCK")
+
+    labeled_signers, labeled_entities = extract_signers_from_labeled_lines(text)
+    if labeled_signers:
+        all_person_signers.update(labeled_signers)
+        methods_used.append("LABEL")
+    if labeled_entities:
+        entity_fallbacks.update(labeled_entities)
+        methods_used.append("LABEL_ENTITY")
+
+    name_title_signers = extract_signers_name_title_pattern(text)
+    if name_title_signers:
+        all_person_signers.update(name_title_signers)
+        methods_used.append("NAME_TITLE")
+
+    trigger_signers = extract_signers_trigger_phrase(text)
+    if trigger_signers:
+        all_person_signers.update(trigger_signers)
+        methods_used.append("TRIGGER")
+
+    if tables:
+        for table_data in tables:
+            if table_data and len(table_data) > 0 and is_signature_table(table_data[0]):
+                table_signers = extract_signers_from_table(table_data)
+                if table_signers:
+                    all_person_signers.update(table_signers)
+                    methods_used.append("TABLE")
+
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not all_person_signers:
+        for i, line in enumerate(lines):
+            if re.search(r'\bBY\s*:', line, re.IGNORECASE):
+                entity_fallbacks.update(extract_entities_near_by_blocks(lines, i))
+        if entity_fallbacks:
+            methods_used.append("ENTITY_FALLBACK")
+
+    cue_score, cue_hits = collect_signature_cues(text, tables)
+    detected_signers = set(all_person_signers) if all_person_signers else set(entity_fallbacks)
+    needs_review = False
+
+    if detected_signers and not all_person_signers:
+        needs_review = True
+
+    is_signature_page = bool(detected_signers)
+    if not is_signature_page and cue_score >= 5:
+        is_signature_page = True
+        needs_review = True
+        methods_used.append("SIGNATURE_CUE_REVIEW")
+
+    return {
+        "is_signature_page": is_signature_page,
+        "signers": detected_signers,
+        "method": ",".join(dict.fromkeys(methods_used)),
+        "cue_score": cue_score,
+        "cue_hits": cue_hits,
+        "needs_review": needs_review
+    }
+
+
+def detect_signature_page_extended(text, tables=None):
+    analysis = analyze_signature_page_text(text, tables)
+    return (analysis["is_signature_page"], analysis["signers"], analysis["method"] or None)
 
 
 def extract_signers_from_by_blocks(text):
@@ -517,21 +676,31 @@ def extract_signers_from_by_blocks(text):
     signers = set()
 
     for i, line in enumerate(lines):
-        if "BY:" in line.upper():
+        if re.search(r'\bBY\s*:', line, re.IGNORECASE):
+            inline_match = re.search(r'\bBY\s*:\s*(.+)$', line, re.IGNORECASE)
+            if inline_match:
+                inline_candidate = normalize_signer_candidate(inline_match.group(1))
+                if inline_candidate and is_probable_person(inline_candidate):
+                    signers.add(inline_candidate)
+                    continue
+
             # Tier 1: Prefer explicit Name: field
             for j in range(1, 7):
                 if i + j >= len(lines):
                     break
                 cand = lines[i + j]
-                if cand.upper().startswith("NAME:"):
-                    signers.add(normalize_name(cand.split(":", 1)[1]))
+                name_match = re.search(r'\b(?:NAME|PRINTED NAME|PRINT NAME|SIGNATORY|SIGNER)\s*:\s*(.+)', cand, re.IGNORECASE)
+                if name_match:
+                    candidate = normalize_signer_candidate(name_match.group(1))
+                    if candidate and is_probable_person(candidate):
+                        signers.add(candidate)
                     break
             else:
                 # Tier 2: Look for probable person name nearby
                 for j in range(1, 7):
                     if i + j >= len(lines):
                         break
-                    cand = normalize_name(lines[i + j])
+                    cand = normalize_signer_candidate(lines[i + j])
                     if is_probable_person(cand):
                         signers.add(cand)
                         break
@@ -595,8 +764,8 @@ def extract_signers_from_table(table_data):
             cell_text = row[name_col_idx]
             if isinstance(cell_text, str):
                 cell_text = " ".join(cell_text.split())  # Normalize whitespace
-            name = normalize_name(cell_text)
-            if name and is_probable_person(name):
+            name = normalize_signer_candidate(cell_text)
+            if name and (is_probable_person(name) or is_probable_entity_signer(name)):
                 signers.add(name)
 
     return signers
@@ -607,9 +776,13 @@ def extract_person_signers(page):
     Extract signer names from PDF page using extended detection.
     Returns a tuple: (signers: set, detection_method: str)
     """
+    analysis = analyze_pdf_signature_page(page)
+    return analysis["signers"], analysis["method"] if analysis["method"] else ""
+
+
+def analyze_pdf_signature_page(page):
     text = page.get_text()
 
-    # Get tables from page
     tables_data = []
     try:
         tables = page.find_tables()
@@ -620,16 +793,14 @@ def extract_person_signers(page):
     except Exception:
         pass
 
-    # Use extended detection
-    is_sig_page, signers, method = detect_signature_page_extended(text, tables_data)
-
-    return signers, method if method else ""
+    return analyze_signature_page_text(text, tables_data)
 
 
 # ========== DOCX SUPPORT ==========
 
 def extract_text_from_docx(docx_path):
     """Extract all text from DOCX document (headers, body)."""
+    ensure_docx_support()
     doc = Document(docx_path)
     text_parts = []
 
@@ -652,6 +823,7 @@ def extract_text_from_docx(docx_path):
 
 def extract_tables_from_docx(docx_path):
     """Extract all tables from DOCX as list of rows."""
+    ensure_docx_support()
     doc = Document(docx_path)
     tables_list = []
 
@@ -671,13 +843,14 @@ def extract_signers_from_docx(docx_path):
     Extract signers from DOCX file using extended detection.
     Returns a tuple: (signers: set, detection_method: str)
     """
+    analysis = analyze_docx_signature_page(docx_path)
+    return analysis["signers"], analysis["method"] if analysis["method"] else ""
+
+
+def analyze_docx_signature_page(docx_path):
     text = extract_text_from_docx(docx_path)
     tables_data = extract_tables_from_docx(docx_path)
-
-    # Use extended detection
-    is_sig_page, signers, method = detect_signature_page_extended(text, tables_data)
-
-    return signers, method if method else ""
+    return analyze_signature_page_text(text, tables_data)
 
 
 def find_first_signature_page(page_iterable):
@@ -751,6 +924,40 @@ def detect_long_annex_documents(document_files, page_threshold=LONG_ANNEX_PAGE_T
     return warnings
 
 
+def apply_matching_paragraph_style(target_doc, target_para, source_para):
+    """Apply the source paragraph style only if the target document exposes it."""
+    try:
+        style_name = source_para.style.name if source_para.style else ""
+    except Exception:
+        style_name = ""
+
+    if not style_name:
+        return
+
+    try:
+        target_para.style = target_doc.styles[style_name]
+    except Exception:
+        try:
+            target_para.style = style_name
+        except Exception:
+            pass
+
+
+def copy_run_formatting(source_run, target_run):
+    """Copy a small, safe subset of run formatting across documents."""
+    for attr in ("bold", "italic", "underline"):
+        try:
+            setattr(target_run, attr, getattr(source_run, attr))
+        except Exception:
+            pass
+
+    try:
+        if source_run.font.size:
+            target_run.font.size = source_run.font.size
+    except Exception:
+        pass
+
+
 def create_docx_packet(signer_name, docs_for_signer, output_folder):
     """
     Create a DOCX signature packet for a signer from DOCX source documents.
@@ -764,6 +971,7 @@ def create_docx_packet(signer_name, docs_for_signer, output_folder):
         Path to created packet, or None if failed
     """
     try:
+        ensure_docx_support()
         # Create new document for the packet
         packet_doc = Document()
 
@@ -778,7 +986,16 @@ def create_docx_packet(signer_name, docs_for_signer, output_folder):
         docs_added = 0
 
         for filename, filepath in docs_for_signer:
+            if not filepath:
+                emit("progress", percent=0, message=f"Warning: Missing file path for Word document {filename}")
+                continue
+
             if not filepath.lower().endswith('.docx'):
+                emit("progress", percent=0, message=f"Warning: Unsupported Word format for {filename}. Only .docx is supported in signature packets.")
+                continue
+
+            if not os.path.isfile(filepath):
+                emit("progress", percent=0, message=f"Warning: Word document not found: {filepath}")
                 continue
 
             try:
@@ -799,14 +1016,16 @@ def create_docx_packet(signer_name, docs_for_signer, output_folder):
                 # Copy content from source document
                 for para in source_doc.paragraphs:
                     new_para = packet_doc.add_paragraph()
-                    new_para.style = para.style
+                    apply_matching_paragraph_style(packet_doc, new_para, para)
+
+                    try:
+                        new_para.alignment = para.alignment
+                    except Exception:
+                        pass
 
                     for run in para.runs:
                         new_run = new_para.add_run(run.text)
-                        new_run.bold = run.bold
-                        new_run.italic = run.italic
-                        if run.font.size:
-                            new_run.font.size = run.font.size
+                        copy_run_formatting(run, new_run)
 
                 # Copy tables
                 for table in source_doc.tables:
@@ -824,7 +1043,7 @@ def create_docx_packet(signer_name, docs_for_signer, output_folder):
                 packet_doc.add_page_break()
 
             except Exception as e:
-                # Skip problematic documents
+                emit("progress", percent=0, message=f"Warning: Could not add Word document {filename}: {str(e)}")
                 continue
 
         if docs_added > 0:
@@ -833,7 +1052,7 @@ def create_docx_packet(signer_name, docs_for_signer, output_folder):
             return packet_path
 
     except Exception as e:
-        pass
+        emit("progress", percent=0, message=f"Warning: Failed to assemble Word signature packet for {signer_name}: {str(e)}")
 
     return None
 
@@ -906,6 +1125,7 @@ def convert_docx_to_pdf(docx_path, pdf_path):
     Note: This is a basic conversion - complex formatting may not be preserved perfectly.
     """
     try:
+        ensure_docx_support()
         # Read DOCX content
         doc = Document(docx_path)
 
@@ -965,6 +1185,104 @@ def convert_docx_to_pdf(docx_path, pdf_path):
         emit("progress", percent=0, message=f"Warning: DOCX to PDF conversion failed: {str(e)}")
 
     return False
+
+
+def count_docx_packet_markers(docx_path):
+    """Count the inserted document markers inside a generated DOCX packet."""
+    ensure_docx_support()
+    doc = Document(docx_path)
+    return sum(1 for para in doc.paragraphs if para.text.strip().startswith("Document: "))
+
+
+def build_signature_packet_verification(df, packets_created):
+    """Verify packet outputs and flag ambiguous signature pages for review."""
+    warnings = []
+    packet_checks = []
+    status = "passed"
+
+    if df is None or df.empty:
+        return {
+            "status": "review_required",
+            "warnings": ["No signature rows were captured for verification."],
+            "packet_checks": [],
+            "review_required_count": 0,
+            "unassigned_signature_count": 0
+        }
+
+    review_required_count = 0
+    unassigned_signature_count = 0
+    review_documents = []
+
+    if "Review Required" in df.columns:
+        review_required_count = int(df["Review Required"].fillna(False).astype(bool).sum())
+
+    if "Signer Name" in df.columns:
+        unassigned_df = df[df["Signer Name"] == UNASSIGNED_SIGNER_BUCKET]
+        unassigned_signature_count = int(len(unassigned_df))
+        if not unassigned_df.empty and "Document" in unassigned_df.columns:
+            review_documents = sorted(set(unassigned_df["Document"].astype(str).tolist()))
+
+    if review_required_count > 0:
+        status = "review_required"
+        warnings.append(
+            f"{review_required_count} signature assignment(s) need review because EmmaNeigh found signature cues without a confident signer match."
+        )
+
+    if unassigned_signature_count > 0:
+        status = "review_required"
+        warnings.append(
+            f"{unassigned_signature_count} signature page(s) were routed into '{UNASSIGNED_SIGNER_BUCKET}' instead of being omitted."
+        )
+
+    for packet in packets_created or []:
+        packet_path = str(packet.get("path") or "").strip()
+        packet_format = str(packet.get("format") or "").strip().lower()
+        expected_units = int(packet.get("pages") or 0)
+        packet_check = {
+            "path": packet_path,
+            "format": packet_format,
+            "expected_units": expected_units,
+            "exists": os.path.isfile(packet_path)
+        }
+
+        if not packet_check["exists"]:
+            packet_check["status"] = "missing"
+            status = "review_required"
+            warnings.append(f"Generated packet file is missing: {packet_path}")
+            packet_checks.append(packet_check)
+            continue
+
+        try:
+            if packet_format == "pdf":
+                doc = fitz.open(packet_path)
+                actual_units = doc.page_count
+                doc.close()
+                packet_check["actual_units"] = actual_units
+                packet_check["status"] = "verified" if actual_units == expected_units else "count_mismatch"
+            elif packet_format == "docx" and Document is not None:
+                actual_units = count_docx_packet_markers(packet_path)
+                packet_check["actual_units"] = actual_units
+                packet_check["status"] = "verified" if actual_units == expected_units else "count_mismatch"
+            else:
+                packet_check["status"] = "unchecked"
+        except Exception as exc:
+            packet_check["status"] = "verification_error"
+            packet_check["error"] = str(exc)
+
+        if packet_check["status"] in {"count_mismatch", "verification_error"}:
+            status = "review_required"
+            warnings.append(f"Packet verification issue for {os.path.basename(packet_path)} ({packet_check['status']}).")
+
+        packet_checks.append(packet_check)
+
+    return {
+        "status": status,
+        "warnings": warnings,
+        "packet_checks": packet_checks,
+        "review_required_count": review_required_count,
+        "unassigned_signature_count": unassigned_signature_count,
+        "review_documents": review_documents
+    }
 
 
 def create_packet_with_format(signer_name, docs_for_signer, output_folder, filepath_lookup, output_format='preserve'):
@@ -1179,11 +1497,12 @@ def main():
                 # PDF processing
                 doc = fitz.open(filepath)
                 for page_num, page in enumerate(doc, start=1):
-                    signers, detection_method = extract_person_signers(page)
-                    if signers:
-                        # Extract footer and document ID for this page
+                    analysis = analyze_pdf_signature_page(page)
+                    if analysis["is_signature_page"]:
+                        signers = analysis["signers"] or {UNASSIGNED_SIGNER_BUCKET}
                         footer = extract_footer_from_pdf_page(page)
                         doc_id = extract_document_id_from_pdf_page(page)
+                        cue_hits = ",".join(analysis["cue_hits"])
                         for signer in signers:
                             rows.append({
                                 "Signer Name": signer,
@@ -1191,16 +1510,20 @@ def main():
                                 "Page": page_num,
                                 "Document ID": doc_id,
                                 "Footer": footer,
-                                "Detection Method": detection_method
+                                "Detection Method": analysis["method"],
+                                "Review Required": bool(analysis["needs_review"] or signer == UNASSIGNED_SIGNER_BUCKET),
+                                "Signature Cue Score": analysis["cue_score"],
+                                "Signature Cues": cue_hits
                             })
                 doc.close()
             elif filename.lower().endswith('.docx'):
                 # DOCX processing
-                signers, detection_method = extract_signers_from_docx(filepath)
-                if signers:
-                    # Extract footer and document ID for DOCX
+                analysis = analyze_docx_signature_page(filepath)
+                if analysis["is_signature_page"]:
+                    signers = analysis["signers"] or {UNASSIGNED_SIGNER_BUCKET}
                     footer = extract_footer_from_docx(filepath)
                     doc_id = extract_document_id_from_docx(filepath)
+                    cue_hits = ",".join(analysis["cue_hits"])
                     for signer in signers:
                         rows.append({
                             "Signer Name": signer,
@@ -1208,7 +1531,10 @@ def main():
                             "Page": 1,  # DOCX doesn't have pages
                             "Document ID": doc_id,
                             "Footer": footer,
-                            "Detection Method": detection_method
+                            "Detection Method": analysis["method"],
+                            "Review Required": bool(analysis["needs_review"] or signer == UNASSIGNED_SIGNER_BUCKET),
+                            "Signature Cue Score": analysis["cue_score"],
+                            "Signature Cues": cue_hits
                         })
         except Exception as e:
             emit("progress", percent=percent, message=f"Warning: {filename} - {str(e)}")
@@ -1221,7 +1547,10 @@ def main():
     # Columns: Signer Name, Document, Page, Document ID, Footer, Detection Method
     df = pd.DataFrame(rows)
     # Reorder columns for cleaner output
-    column_order = ["Signer Name", "Document", "Page", "Document ID", "Footer", "Detection Method"]
+    column_order = [
+        "Signer Name", "Document", "Page", "Document ID", "Footer", "Detection Method",
+        "Review Required", "Signature Cue Score", "Signature Cues"
+    ]
     df = df[[col for col in column_order if col in df.columns]]
     df = df.sort_values(["Signer Name", "Document", "Page"])
 
@@ -1252,12 +1581,17 @@ def main():
         )
         packets_created.extend(signer_packets)
 
+    verification = build_signature_packet_verification(df, packets_created)
+    with open(os.path.join(output_table_dir, "SIGNATURE_PACKET_VERIFICATION.json"), "w", encoding="utf-8") as handle:
+        json.dump(verification, handle, indent=2)
+
     emit("progress", percent=96, message="Preparing download...")
     emit("result",
          success=True,
          outputPath=output_base,
          packetsCreated=len(packets_created),
-         packets=packets_created)
+         packets=packets_created,
+         verification=verification)
 
 
 if __name__ == "__main__":

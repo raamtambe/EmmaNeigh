@@ -1,6 +1,6 @@
 {
   "name": "emmaneigh",
-  "version": "5.4.24",
+  "version": "5.4.25",
   "description": "Transaction Management & Document Automation",
   "main": "main.js",
   "scripts": {
