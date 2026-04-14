@@ -611,6 +611,19 @@
       overflow: hidden;
     }
 
+    .agent-panel.collapsed {
+      width: 188px !important;
+      min-width: 188px;
+      max-width: 188px;
+      padding: 12px;
+    }
+
+    .agent-panel.collapsed .agent-shell,
+    .agent-panel.collapsed #agentProviderLabel,
+    .agent-panel.collapsed #agentConnectionLabel {
+      display: none;
+    }
+
     .agent-shell-resizer {
       width: 8px;
       flex: 0 0 8px;
@@ -733,6 +746,13 @@
       margin-bottom: 10px;
     }
 
+    .agent-panel-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
     .agent-panel-header h3 {
       font-size: 14px;
       font-weight: 600;
@@ -760,6 +780,13 @@
     .agent-clear-btn:hover {
       border-color: #555;
       color: #ccc;
+    }
+
+    .agent-panel-toggle-btn {
+      min-width: 34px;
+      padding: 5px 9px;
+      line-height: 1;
+      font-size: 14px;
     }
 
     .agent-status {
@@ -914,6 +941,207 @@
 
     .agent-live-entry:last-child {
       margin-bottom: 0;
+    }
+
+    .redline-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .redline-toolbar-copy {
+      flex: 1;
+      min-width: 240px;
+    }
+
+    .redline-toolbar-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .redline-pairs-table-wrap {
+      border: 1px solid #222;
+      border-radius: 12px;
+      background: #0b0b0b;
+      overflow: auto;
+    }
+
+    .redline-pairs-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      min-width: 880px;
+    }
+
+    .redline-pairs-table th,
+    .redline-pairs-table td {
+      padding: 10px;
+      border-bottom: 1px solid #1f1f1f;
+      vertical-align: top;
+    }
+
+    .redline-pairs-table th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      background: rgba(255,255,255,0.02);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .redline-pairs-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .redline-row-index {
+      width: 44px;
+      text-align: center;
+      color: #777;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .redline-drop-cell {
+      border: 1px dashed #333;
+      border-radius: 10px;
+      min-height: 92px;
+      padding: 10px;
+      background: rgba(255,255,255,0.02);
+      transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+      cursor: pointer;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      -webkit-app-region: no-drag;
+    }
+
+    .redline-drop-cell:hover {
+      border-color: #4b5563;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .redline-drop-cell.active {
+      border-color: #3b82f6;
+      background: rgba(59, 130, 246, 0.10);
+    }
+
+    .redline-drop-cell.filled {
+      border-style: solid;
+      border-color: #22c55e;
+      background: rgba(34, 197, 94, 0.10);
+    }
+
+    .redline-drop-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #8b8b8b;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .redline-drop-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f3f4f6;
+      line-height: 1.35;
+      word-break: break-word;
+      padding-right: 28px;
+    }
+
+    .redline-drop-hint {
+      font-size: 11px;
+      color: #7c7c7c;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .redline-cell-clear {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 22px;
+      height: 22px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.07);
+      color: #aaa;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-app-region: no-drag;
+    }
+
+    .redline-cell-clear:hover {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+    }
+
+    .redline-cpo-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #ddd;
+      margin-top: 4px;
+    }
+
+    .redline-cpo-toggle input {
+      margin: 0;
+    }
+
+    .redline-cpo-note {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.35;
+    }
+
+    .redline-output-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .redline-output-path {
+      min-height: 34px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #d1d5db;
+      word-break: break-word;
+    }
+
+    .redline-output-path.default {
+      color: #777;
+    }
+
+    .redline-output-actions,
+    .redline-row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .redline-mini-btn {
+      padding: 6px 10px;
+      font-size: 11px;
+      margin-top: 0;
+    }
+
+    .redline-ready-summary {
+      font-size: 11px;
+      color: #777;
+      margin-top: -4px;
     }
 
     .agent-input-wrap {
@@ -5625,57 +5853,42 @@
           </select>
           <label style="display: flex; align-items: center; gap: 6px; margin-left: auto; color: #ccc;">
             <input type="checkbox" id="redlineChangePagesOnly">
-            Change pages only (PDF)
+            New rows default to CPO (PDF)
           </label>
         </div>
         <p style="font-size: 11px; color: #666; margin-bottom: 12px;">
-          Litera-only options. Default is full-document PDF; choose DOCX or "Change pages only" when needed.
+          Full-document output defaults to PDF. Each row can still be toggled independently between full-document output and CPO.
         </p>
 
-        <!-- Document Pair Input -->
-        <div class="sigblock-step">
-          <div class="sigblock-step-header">
-            <span class="step-number">1</span>
-            Original Document
+        <div class="redline-toolbar">
+          <div class="redline-toolbar-copy">
+            <p class="input-label" style="margin-bottom: 6px;">Comparison Workspace</p>
+            <p class="input-hint" style="margin: 0;">Add rows before you attach anything, or drop multiple files into any original/modified cell and EmmaNeigh will fan them out into separate comparison rows.</p>
           </div>
-          <div class="input-section" id="redlineOriginalInput">
-            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
-            </svg>
-            <p class="input-label">Drop original document here</p>
-            <p class="input-hint">PDF, Word, PowerPoint, or Excel</p>
-            <div class="input-selected-wrapper">
-              <p class="input-selected" id="redlineOriginalSelected"></p>
-              <button class="clear-file-btn" id="clearRedlineOriginal">×</button>
-            </div>
+          <div class="redline-toolbar-actions">
+            <button class="btn btn-secondary redline-mini-btn" id="redlineAddPairBtn">+ Add Another Pair</button>
           </div>
         </div>
 
-        <div class="sigblock-step">
-          <div class="sigblock-step-header">
-            <span class="step-number">2</span>
-            Modified Document
-          </div>
-          <div class="input-section" id="redlineModifiedInput">
-            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
-            </svg>
-            <p class="input-label">Drop modified document here</p>
-            <p class="input-hint">The newer version to compare</p>
-            <div class="input-selected-wrapper">
-              <p class="input-selected" id="redlineModifiedSelected"></p>
-              <button class="clear-file-btn" id="clearRedlineModified">×</button>
-            </div>
-          </div>
+        <div class="redline-pairs-table-wrap">
+          <table class="redline-pairs-table">
+            <thead>
+              <tr>
+                <th style="width: 44px;">#</th>
+                <th style="width: 28%;">Original Document</th>
+                <th style="width: 28%;">Modified Document</th>
+                <th style="width: 16%;">CPO?</th>
+                <th style="width: 18%;">Output Folder</th>
+                <th style="width: 10%;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="redlinePairsTableBody"></tbody>
+          </table>
         </div>
 
-        <!-- Document Pairs List -->
-        <div id="redlinePairsList" class="file-list hidden">
-          <!-- Populated dynamically with document pairs -->
-        </div>
+        <div class="redline-ready-summary" id="redlineReadySummary">0 complete pair(s) ready to run.</div>
 
         <div class="exec-actions" style="display: flex; gap: 12px; align-items: center;">
-          <button class="btn btn-secondary" id="redlineAddPairBtn" style="display: none;">+ Add Another Pair</button>
           <button class="btn btn-primary" id="redlineBtn" disabled>Generate Redline</button>
         </div>
       </div>
@@ -6144,7 +6357,10 @@
             <p id="agentProviderLabel">Uses your current provider in Settings.</p>
             <p id="agentConnectionLabel" style="font-size: 11px; color: #888; margin-top: 4px;">Connection details loading...</p>
           </div>
-          <button class="agent-clear-btn" id="agentClearBtn">Clear</button>
+          <div class="agent-panel-header-actions">
+            <button class="agent-clear-btn agent-panel-toggle-btn" id="agentPanelToggleBtn" title="Minimize Agent Mode">−</button>
+            <button class="agent-clear-btn" id="agentClearBtn">Clear</button>
+          </div>
         </div>
 
         <div class="agent-shell">
@@ -6199,7 +6415,7 @@
               </div>
             </div>
 
-            <div class="agent-live-log" id="agentLiveLog"></div>
+            <div class="agent-live-log" id="agentLiveLog" style="display: none;"></div>
 
             <div class="agent-input-wrap">
               <textarea id="agentPromptInput" class="agent-prompt-input" rows="3" placeholder='Try: "see latest emails from Person A, save attachments to iManage, redline v1 vs v2, and send reply"'></textarea>
@@ -8499,6 +8715,7 @@
     const agentPromptInput = document.getElementById('agentPromptInput');
     const agentRunBtn = document.getElementById('agentRunBtn');
     const agentClearBtn = document.getElementById('agentClearBtn');
+    const agentPanelToggleBtn = document.getElementById('agentPanelToggleBtn');
     const agentThreadList = document.getElementById('agentThreadList');
     const agentNewThreadBtn = document.getElementById('agentNewThreadBtn');
 
@@ -8858,6 +9075,18 @@
       agentThreadSidebar.style.maxWidth = `${Math.max(clamped, maxWidth)}px`;
     }
 
+    function setAgentPanelCollapsed(collapsed) {
+      if (!agentPanel) return;
+      agentPanel.classList.toggle('collapsed', !!collapsed);
+      if (agentPanelToggleBtn) {
+        agentPanelToggleBtn.textContent = collapsed ? '+' : '−';
+        agentPanelToggleBtn.title = collapsed ? 'Expand Agent Mode' : 'Minimize Agent Mode';
+      }
+      try {
+        localStorage.setItem('emmaneigh_agent_panel_collapsed_v1', collapsed ? '1' : '0');
+      } catch (_) {}
+    }
+
     function installAgentPanelResizers() {
       if (!workspaceLayout || !workspaceResizer || !agentPanel || !agentShell || !agentThreadSidebar || !agentShellResizer) {
         return;
@@ -8880,9 +9109,16 @@
         } catch (_) {}
       };
 
+      try {
+        setAgentPanelCollapsed(localStorage.getItem('emmaneigh_agent_panel_collapsed_v1') === '1');
+      } catch (_) {
+        setAgentPanelCollapsed(false);
+      }
+
       let dragMode = null;
       const onMouseMove = (e) => {
         if (!dragMode) return;
+        if (agentPanel.classList.contains('collapsed')) return;
         if (window.innerWidth <= 1200) return;
         e.preventDefault();
         if (dragMode === 'panel') {
@@ -8914,6 +9150,7 @@
       };
 
       workspaceResizer.addEventListener('mousedown', (e) => {
+        if (agentPanel.classList.contains('collapsed')) return;
         if (window.innerWidth <= 1200) return;
         e.preventDefault();
         dragMode = 'panel';
@@ -8923,6 +9160,7 @@
       });
 
       agentShellResizer.addEventListener('mousedown', (e) => {
+        if (agentPanel.classList.contains('collapsed')) return;
         if (window.innerWidth <= 1200) return;
         e.preventDefault();
         dragMode = 'sidebar';
@@ -9034,6 +9272,39 @@
         renderAgentLiveLog();
       }
       renderAgentThreadList();
+    }
+
+    function addAgentProgressMessageToThread(threadId, text, isError = false) {
+      const messageText = String(text || '').trim();
+      if (!messageText) return;
+      const thread = agentThreads.find((item) => item.id === threadId) || getActiveAgentThread();
+      if (!thread) return;
+
+      const normalizedText = isError && !/^error:/i.test(messageText)
+        ? `Error: ${messageText}`
+        : messageText;
+      const lastMessage = Array.isArray(thread.messages) && thread.messages.length
+        ? thread.messages[thread.messages.length - 1]
+        : null;
+      if (lastMessage && lastMessage.role === 'system' && String(lastMessage.text || '').trim() === normalizedText) {
+        return;
+      }
+
+      thread.messages.push({
+        role: 'system',
+        text: normalizedText,
+        timestamp: new Date().toISOString()
+      });
+      if (thread.messages.length > AGENT_MAX_MESSAGES_PER_THREAD) {
+        thread.messages = thread.messages.slice(-AGENT_MAX_MESSAGES_PER_THREAD);
+      }
+      thread.updated_at = new Date().toISOString();
+      agentThreads.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      if (thread.id === activeAgentThreadId) {
+        renderAgentMessages();
+      }
+      renderAgentThreadList();
+      saveAgentThreads();
     }
 
     function addAgentLiveStep(text, isError = false) {
@@ -9438,9 +9709,9 @@
         }
       }
 
-      const shouldAppendToLiveLog = status !== 'complete' && status !== 'error';
-      if (shouldAppendToLiveLog) {
-        addAgentLiveStepToThread(threadId, message, isError);
+      const shouldAppendToChat = status !== 'complete';
+      if (shouldAppendToChat) {
+        addAgentProgressMessageToThread(threadId, message, isError);
       }
       if (threadId === activeAgentThreadId) {
         if (status === 'error') {
@@ -9654,6 +9925,13 @@
         if (agentBusy) return;
         createNewAgentThread();
         agentPromptInput.focus();
+      });
+    }
+
+    if (agentPanelToggleBtn) {
+      agentPanelToggleBtn.addEventListener('click', () => {
+        if (!agentPanel) return;
+        setAgentPanelCollapsed(!agentPanel.classList.contains('collapsed'));
       });
     }
 
@@ -10928,13 +11206,10 @@
     collateRetryBtn.addEventListener('click', resetCollateState);
 
     // ========== REDLINE TAB ==========
-    const redlineOriginalInput = document.getElementById('redlineOriginalInput');
-    const redlineModifiedInput = document.getElementById('redlineModifiedInput');
-    const redlineOriginalSelected = document.getElementById('redlineOriginalSelected');
-    const redlineModifiedSelected = document.getElementById('redlineModifiedSelected');
     const redlineBtn = document.getElementById('redlineBtn');
     const redlineAddPairBtn = document.getElementById('redlineAddPairBtn');
-    const redlinePairsList = document.getElementById('redlinePairsList');
+    const redlinePairsTableBody = document.getElementById('redlinePairsTableBody');
+    const redlineReadySummary = document.getElementById('redlineReadySummary');
     const redlineInputs = document.getElementById('redlineInputs');
     const redlineProcessing = document.getElementById('redlineProcessing');
     const redlineComplete = document.getElementById('redlineComplete');
@@ -10965,16 +11240,14 @@
     const redlineLiteraFormat = document.getElementById('redlineLiteraFormat');
     const redlineOutputFormat = document.getElementById('redlineOutputFormat');
     const redlineChangePagesOnly = document.getElementById('redlineChangePagesOnly');
-    const clearRedlineOriginal = document.getElementById('clearRedlineOriginal');
-    const clearRedlineModified = document.getElementById('clearRedlineModified');
 
-    let redlineOriginalPath = null;
-    let redlineModifiedPath = null;
-    let redlinePairs = []; // [{original: path, modified: path}]
+    let redlinePairs = [];
+    let redlinePairCounter = 0;
     let redlineOutputFolder = null;
     let redlineDownloadMode = 'none'; // 'none' | 'file' | 'zip'
     let redlineDownloadPath = null;
     let redlineDownloadSuggestedName = null;
+    let redlineLastRunPairs = [];
     let literaInstalled = false;
     let literaCapabilities = {};
 
@@ -11010,14 +11283,8 @@
     checkLiteraStatus();
 
     function syncRedlineOptions() {
-      if (redlineChangePagesOnly.checked) {
+      if (!redlineOutputFormat.value) {
         redlineOutputFormat.value = 'pdf';
-        redlineOutputFormat.disabled = true;
-      } else {
-        if (!redlineOutputFormat.value) {
-          redlineOutputFormat.value = 'pdf';
-        }
-        redlineOutputFormat.disabled = false;
       }
     }
     redlineChangePagesOnly.addEventListener('change', syncRedlineOptions);
@@ -11073,48 +11340,57 @@
       redlineError.classList.toggle('visible', state === 'error');
     }
 
+    function createRedlinePair(overrides = {}) {
+      redlinePairCounter += 1;
+      return {
+        id: `redline_pair_${redlinePairCounter}`,
+        original: '',
+        modified: '',
+        changePagesOnly: !!redlineChangePagesOnly.checked,
+        outputFolder: '',
+        ...overrides
+      };
+    }
+
+    function ensureRedlinePairs() {
+      if (!redlinePairs.length) {
+        redlinePairs = [createRedlinePair()];
+      }
+    }
+
+    function getRedlinePairIndex(pairId) {
+      return redlinePairs.findIndex((pair) => pair && pair.id === pairId);
+    }
+
+    function getReadyRedlinePairs() {
+      return redlinePairs
+        .filter((pair) => pair && pair.original && pair.modified)
+        .map((pair) => ({ ...pair }));
+    }
+
+    function getRedlinePairOutputLabel(pair) {
+      if (pair && pair.outputFolder) {
+        return pair.outputFolder;
+      }
+      if (pair && pair.original) {
+        return `Same folder as ${getFileNameOnly(pair.original)}`;
+      }
+      return 'Same folder as original document';
+    }
+
+    function isRedlinePairIncomplete(pair) {
+      const hasOriginal = !!(pair && pair.original);
+      const hasModified = !!(pair && pair.modified);
+      return (hasOriginal || hasModified) && !(hasOriginal && hasModified);
+    }
+
     function updateRedlineButton() {
-      const hasCurrentPair = redlineOriginalPath && redlineModifiedPath;
-      const hasPairs = redlinePairs.length > 0;
-      redlineBtn.disabled = !hasCurrentPair && !hasPairs;
-      redlineAddPairBtn.style.display = hasCurrentPair ? 'inline-block' : 'none';
-    }
-
-    function setRedlineOriginalFile(filePath) {
-      redlineOriginalPath = filePath;
-      redlineOriginalSelected.textContent = getFileNameOnly(filePath);
-      redlineOriginalInput.classList.add('selected');
-      clearRedlineOriginal.classList.add('visible');
-      updateRedlineButton();
-    }
-
-    function clearRedlineOriginalFile() {
-      redlineOriginalPath = null;
-      redlineOriginalSelected.textContent = '';
-      redlineOriginalInput.classList.remove('selected');
-      clearRedlineOriginal.classList.remove('visible');
-      updateRedlineButton();
-    }
-
-    function setRedlineModifiedFile(filePath) {
-      redlineModifiedPath = filePath;
-      redlineModifiedSelected.textContent = getFileNameOnly(filePath);
-      redlineModifiedInput.classList.add('selected');
-      clearRedlineModified.classList.add('visible');
-      updateRedlineButton();
-    }
-
-    function clearRedlineModifiedFile() {
-      redlineModifiedPath = null;
-      redlineModifiedSelected.textContent = '';
-      redlineModifiedInput.classList.remove('selected');
-      clearRedlineModified.classList.remove('visible');
-      updateRedlineButton();
-    }
-
-    function clearCurrentRedlinePair() {
-      clearRedlineOriginalFile();
-      clearRedlineModifiedFile();
+      const readyPairs = getReadyRedlinePairs();
+      const incompleteCount = redlinePairs.filter(isRedlinePairIncomplete).length;
+      redlineBtn.disabled = readyPairs.length === 0;
+      if (redlineReadySummary) {
+        redlineReadySummary.textContent = `${readyPairs.length} complete pair(s) ready to run.${incompleteCount ? ` ${incompleteCount} incomplete row(s) will be skipped.` : ''}`;
+      }
     }
 
     function isRedlineFile(filename) {
@@ -11122,135 +11398,250 @@
       return REDLINE_EXTENSIONS.includes(ext);
     }
 
-    // Original document drop handlers
-    redlineOriginalInput.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      redlineOriginalInput.classList.add('active');
-    });
-
-    redlineOriginalInput.addEventListener('dragleave', () => {
-      redlineOriginalInput.classList.remove('active');
-    });
-
-    redlineOriginalInput.addEventListener('drop', (e) => {
-      e.preventDefault();
-      redlineOriginalInput.classList.remove('active');
-      const files = e.dataTransfer.files;
-      if (files.length > 0 && isRedlineFile(files[0].name)) {
-        setRedlineOriginalFile(files[0].path);
-      }
-    });
-
-    redlineOriginalInput.addEventListener('click', async (e) => {
-      if (e.target === clearRedlineOriginal || clearRedlineOriginal.contains(e.target)) return;
-      const filePaths = await ipcRenderer.invoke('select-file', {
-        title: 'Select Original Document',
-        filters: [{ name: 'Documents', extensions: REDLINE_EXTENSIONS }]
+    function normalizeRedlinePaths(inputs) {
+      const raw = Array.isArray(inputs) ? inputs : [inputs];
+      const seen = new Set();
+      const normalized = [];
+      raw.forEach((entry) => {
+        const filePath = typeof entry === 'string'
+          ? entry
+          : entry && typeof entry.path === 'string'
+            ? entry.path
+            : '';
+        const trimmed = String(filePath || '').trim();
+        if (!trimmed) return;
+        if (!isRedlineFile(getFileNameOnly(trimmed))) return;
+        const key = trimmed.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        normalized.push(trimmed);
       });
-      if (filePaths) {
-        setRedlineOriginalFile(filePaths);
-      }
-    });
+      return normalized;
+    }
 
-    // Modified document drop handlers
-    redlineModifiedInput.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      redlineModifiedInput.classList.add('active');
-    });
-
-    redlineModifiedInput.addEventListener('dragleave', () => {
-      redlineModifiedInput.classList.remove('active');
-    });
-
-    redlineModifiedInput.addEventListener('drop', (e) => {
-      e.preventDefault();
-      redlineModifiedInput.classList.remove('active');
-      const files = e.dataTransfer.files;
-      if (files.length > 0 && isRedlineFile(files[0].name)) {
-        setRedlineModifiedFile(files[0].path);
-      }
-    });
-
-    redlineModifiedInput.addEventListener('click', async (e) => {
-      if (e.target === clearRedlineModified || clearRedlineModified.contains(e.target)) return;
-      const filePaths = await ipcRenderer.invoke('select-file', {
-        title: 'Select Modified Document',
-        filters: [{ name: 'Documents', extensions: REDLINE_EXTENSIONS }]
-      });
-      if (filePaths) {
-        setRedlineModifiedFile(filePaths);
-      }
-    });
-
-    clearRedlineOriginal.addEventListener('click', (e) => {
-      e.stopPropagation();
-      clearRedlineOriginalFile();
-    });
-
-    clearRedlineModified.addEventListener('click', (e) => {
-      e.stopPropagation();
-      clearRedlineModifiedFile();
-    });
-
-    // Add another pair button
-    redlineAddPairBtn.addEventListener('click', () => {
-      if (redlineOriginalPath && redlineModifiedPath) {
-        redlinePairs.push({
-          original: redlineOriginalPath,
-          modified: redlineModifiedPath
-        });
-
-        // Update pairs list UI
-        const pairDiv = document.createElement('div');
-        pairDiv.className = 'file-item';
-        pairDiv.innerHTML = `
-          <span class="file-name">${redlineOriginalPath.split(/[/\\]/).pop()} vs ${redlineModifiedPath.split(/[/\\]/).pop()}</span>
-          <button class="remove-btn" data-index="${redlinePairs.length - 1}">×</button>
+    function renderRedlinePairsTable() {
+      ensureRedlinePairs();
+      if (!redlinePairsTableBody) return;
+      redlinePairsTableBody.innerHTML = redlinePairs.map((pair, index) => {
+        const originalName = pair.original ? escapeHtml(getFileNameOnly(pair.original)) : 'Drop or click to add original document(s)';
+        const modifiedName = pair.modified ? escapeHtml(getFileNameOnly(pair.modified)) : 'Drop or click to add modified document(s)';
+        const originalHint = pair.original
+          ? 'Click to replace. Drop multiple files here to create more rows.'
+          : 'PDF, Word, PowerPoint, or Excel';
+        const modifiedHint = pair.modified
+          ? 'Click to replace. Drop multiple files here to create more rows.'
+          : 'The newer version to compare';
+        const outputLabel = escapeHtml(getRedlinePairOutputLabel(pair));
+        const cpoNote = pair.changePagesOnly
+          ? 'This row will output changed pages only as a PDF.'
+          : `This row will use the full-document ${String(redlineOutputFormat.value || 'pdf').toUpperCase()} setting.`;
+        return `
+          <tr data-redline-pair-id="${pair.id}">
+            <td class="redline-row-index">${index + 1}</td>
+            <td>
+              <div class="redline-drop-cell ${pair.original ? 'filled' : ''}" data-redline-drop="${pair.id}" data-redline-kind="original">
+                <div class="redline-drop-label">Original</div>
+                <div class="redline-drop-title">${originalName}</div>
+                <div class="redline-drop-hint">${escapeHtml(originalHint)}</div>
+                ${pair.original ? `<button type="button" class="redline-cell-clear" data-redline-clear="${pair.id}" data-redline-clear-kind="original" title="Clear original">×</button>` : ''}
+              </div>
+            </td>
+            <td>
+              <div class="redline-drop-cell ${pair.modified ? 'filled' : ''}" data-redline-drop="${pair.id}" data-redline-kind="modified">
+                <div class="redline-drop-label">Modified</div>
+                <div class="redline-drop-title">${modifiedName}</div>
+                <div class="redline-drop-hint">${escapeHtml(modifiedHint)}</div>
+                ${pair.modified ? `<button type="button" class="redline-cell-clear" data-redline-clear="${pair.id}" data-redline-clear-kind="modified" title="Clear modified">×</button>` : ''}
+              </div>
+            </td>
+            <td>
+              <label class="redline-cpo-toggle">
+                <input type="checkbox" data-redline-cpo="${pair.id}" ${pair.changePagesOnly ? 'checked' : ''}>
+                <span>${pair.changePagesOnly ? 'Yes' : 'No'}</span>
+              </label>
+              <div class="redline-cpo-note">${escapeHtml(cpoNote)}</div>
+            </td>
+            <td>
+              <div class="redline-output-cell">
+                <div class="redline-output-path ${pair.outputFolder ? '' : 'default'}">${outputLabel}</div>
+                <div class="redline-output-actions">
+                  <button type="button" class="btn btn-secondary redline-mini-btn" data-redline-output-choose="${pair.id}">Choose</button>
+                  ${pair.outputFolder ? `<button type="button" class="btn btn-secondary redline-mini-btn" data-redline-output-reset="${pair.id}">Reset</button>` : ''}
+                </div>
+              </div>
+            </td>
+            <td>
+              <div class="redline-row-actions">
+                <button type="button" class="btn btn-secondary redline-mini-btn" data-redline-swap="${pair.id}">Swap</button>
+                <button type="button" class="btn btn-secondary redline-mini-btn" data-redline-remove="${pair.id}">Remove</button>
+              </div>
+            </td>
+          </tr>
         `;
-        redlinePairsList.appendChild(pairDiv);
-        redlinePairsList.classList.remove('hidden');
+      }).join('');
+      updateRedlineButton();
+    }
 
-        // Reset current inputs for next pair
-        clearCurrentRedlinePair();
-      }
-    });
+    function assignRedlineFilesToPair(pairId, kind, inputs) {
+      const filePaths = normalizeRedlinePaths(inputs);
+      if (!filePaths.length) return;
 
-    // Remove pair from list
-    redlinePairsList.addEventListener('click', (e) => {
-      if (e.target.classList.contains('remove-btn')) {
-        const index = parseInt(e.target.dataset.index);
-        redlinePairs.splice(index, 1);
+      ensureRedlinePairs();
+      const index = getRedlinePairIndex(pairId);
+      if (index === -1) return;
 
-        // Rebuild list
-        redlinePairsList.innerHTML = '';
-        redlinePairs.forEach((pair, i) => {
-          const pairDiv = document.createElement('div');
-          pairDiv.className = 'file-item';
-          pairDiv.innerHTML = `
-            <span class="file-name">${pair.original.split(/[/\\]/).pop()} vs ${pair.modified.split(/[/\\]/).pop()}</span>
-            <button class="remove-btn" data-index="${i}">×</button>
-          `;
-          redlinePairsList.appendChild(pairDiv);
+      const pair = redlinePairs[index];
+      const otherKind = kind === 'original' ? 'modified' : 'original';
+      const carryForwardValue = pair[otherKind] || '';
+      const sharedOptions = {
+        changePagesOnly: !!pair.changePagesOnly,
+        outputFolder: pair.outputFolder || ''
+      };
+
+      pair[kind] = filePaths[0];
+
+      for (let i = 1; i < filePaths.length; i += 1) {
+        const nextPair = createRedlinePair({
+          ...sharedOptions,
+          [kind]: filePaths[i],
+          [otherKind]: carryForwardValue
         });
-
-        if (redlinePairs.length === 0) {
-          redlinePairsList.classList.add('hidden');
-        }
-        updateRedlineButton();
+        redlinePairs.splice(index + i, 0, nextPair);
       }
+
+      renderRedlinePairsTable();
+    }
+
+    function setRedlineOriginalFile(filePath, pairId = null) {
+      ensureRedlinePairs();
+      assignRedlineFilesToPair(pairId || redlinePairs[0].id, 'original', [filePath]);
+    }
+
+    function setRedlineModifiedFile(filePath, pairId = null) {
+      ensureRedlinePairs();
+      assignRedlineFilesToPair(pairId || redlinePairs[0].id, 'modified', [filePath]);
+    }
+
+    redlineAddPairBtn.addEventListener('click', () => {
+      redlinePairs.push(createRedlinePair());
+      renderRedlinePairsTable();
     });
+
+    if (redlinePairsTableBody) {
+      redlinePairsTableBody.addEventListener('click', async (e) => {
+        const clearBtn = e.target.closest('[data-redline-clear]');
+        if (clearBtn) {
+          e.stopPropagation();
+          const pairIndex = getRedlinePairIndex(String(clearBtn.dataset.redlineClear || ''));
+          const kind = String(clearBtn.dataset.redlineClearKind || '');
+          if (pairIndex >= 0 && (kind === 'original' || kind === 'modified')) {
+            redlinePairs[pairIndex][kind] = '';
+            renderRedlinePairsTable();
+          }
+          return;
+        }
+
+        const chooseOutputBtn = e.target.closest('[data-redline-output-choose]');
+        if (chooseOutputBtn) {
+          const pairIndex = getRedlinePairIndex(String(chooseOutputBtn.dataset.redlineOutputChoose || ''));
+          if (pairIndex >= 0) {
+            const folderPath = await ipcRenderer.invoke('select-folder');
+            if (folderPath) {
+              redlinePairs[pairIndex].outputFolder = folderPath;
+              renderRedlinePairsTable();
+            }
+          }
+          return;
+        }
+
+        const resetOutputBtn = e.target.closest('[data-redline-output-reset]');
+        if (resetOutputBtn) {
+          const pairIndex = getRedlinePairIndex(String(resetOutputBtn.dataset.redlineOutputReset || ''));
+          if (pairIndex >= 0) {
+            redlinePairs[pairIndex].outputFolder = '';
+            renderRedlinePairsTable();
+          }
+          return;
+        }
+
+        const swapBtn = e.target.closest('[data-redline-swap]');
+        if (swapBtn) {
+          const pairIndex = getRedlinePairIndex(String(swapBtn.dataset.redlineSwap || ''));
+          if (pairIndex >= 0) {
+            const pair = redlinePairs[pairIndex];
+            const currentOriginal = pair.original;
+            pair.original = pair.modified;
+            pair.modified = currentOriginal;
+            renderRedlinePairsTable();
+          }
+          return;
+        }
+
+        const removeBtn = e.target.closest('[data-redline-remove]');
+        if (removeBtn) {
+          const pairIndex = getRedlinePairIndex(String(removeBtn.dataset.redlineRemove || ''));
+          if (pairIndex >= 0) {
+            redlinePairs.splice(pairIndex, 1);
+            ensureRedlinePairs();
+            renderRedlinePairsTable();
+          }
+          return;
+        }
+
+        const dropCell = e.target.closest('[data-redline-drop]');
+        if (!dropCell) return;
+        const pairId = String(dropCell.dataset.redlineDrop || '');
+        const kind = String(dropCell.dataset.redlineKind || '');
+        if (!pairId || !kind) return;
+        const filePaths = await ipcRenderer.invoke('select-files', REDLINE_EXTENSIONS);
+        if (Array.isArray(filePaths) && filePaths.length > 0) {
+          assignRedlineFilesToPair(pairId, kind, filePaths);
+        }
+      });
+
+      redlinePairsTableBody.addEventListener('dragover', (e) => {
+        const dropCell = e.target.closest('[data-redline-drop]');
+        if (!dropCell) return;
+        e.preventDefault();
+        dropCell.classList.add('active');
+      });
+
+      redlinePairsTableBody.addEventListener('change', (e) => {
+        const cpoToggle = e.target.closest('[data-redline-cpo]');
+        if (!cpoToggle) return;
+        const pairIndex = getRedlinePairIndex(String(cpoToggle.dataset.redlineCpo || ''));
+        if (pairIndex >= 0) {
+          redlinePairs[pairIndex].changePagesOnly = !!cpoToggle.checked;
+          renderRedlinePairsTable();
+        }
+      });
+
+      redlinePairsTableBody.addEventListener('dragleave', (e) => {
+        const dropCell = e.target.closest('[data-redline-drop]');
+        if (!dropCell) return;
+        if (dropCell.contains(e.relatedTarget)) return;
+        dropCell.classList.remove('active');
+      });
+
+      redlinePairsTableBody.addEventListener('drop', (e) => {
+        const dropCell = e.target.closest('[data-redline-drop]');
+        if (!dropCell) return;
+        e.preventDefault();
+        dropCell.classList.remove('active');
+        assignRedlineFilesToPair(
+          String(dropCell.dataset.redlineDrop || ''),
+          String(dropCell.dataset.redlineKind || ''),
+          Array.from((e.dataTransfer && e.dataTransfer.files) || [])
+        );
+      });
+    }
+
+    renderRedlinePairsTable();
 
     // Generate redline
     redlineBtn.addEventListener('click', async () => {
-      // Add current pair if exists
-      if (redlineOriginalPath && redlineModifiedPath) {
-        redlinePairs.push({
-          original: redlineOriginalPath,
-          modified: redlineModifiedPath
-        });
-      }
-
-      if (redlinePairs.length === 0) return;
+      const readyPairs = getReadyRedlinePairs();
+      if (readyPairs.length === 0) return;
 
       redlineDownloadMode = 'none';
       redlineDownloadPath = null;
@@ -11264,32 +11655,37 @@
       const startTime = Date.now();
       const selectedEngine = redlineEngineSelect.value; // 'auto', 'litera', 'emmaneigh'
       const requestedOutputFormat = redlineOutputFormat.value || 'pdf';
-      const effectiveOutputFormat = (!redlineChangePagesOnly.checked && (!literaInstalled || selectedEngine === 'emmaneigh'))
+      const effectiveOutputFormat = ((!literaInstalled || selectedEngine === 'emmaneigh'))
         ? 'native'
         : requestedOutputFormat;
-      const redlineCompareOptions = {
-        output_format: effectiveOutputFormat,
-        change_pages_only: redlineChangePagesOnly.checked
-      };
 
       try {
-        // Determine output folder (same as first original document)
-        redlineOutputFolder = redlinePairs[0].original.split(/[/\\]/).slice(0, -1).join('/');
+        redlineLastRunPairs = readyPairs.map((pair) => ({ ...pair }));
+        redlineOutputFolder = redlineLastRunPairs[0].outputFolder || redlineLastRunPairs[0].original.split(/[/\\]/).slice(0, -1).join('/');
 
-        const config = redlinePairs.length === 1 ? {
-          original: redlinePairs[0].original,
-          modified: redlinePairs[0].modified,
-          output: null, // Let backend generate output path
+        const preparedPairs = redlineLastRunPairs.map((pair) => ({
+          original: pair.original,
+          modified: pair.modified,
+          output_folder: pair.outputFolder || '',
+          output_format: pair.changePagesOnly ? 'pdf' : effectiveOutputFormat,
+          change_pages_only: !!pair.changePagesOnly
+        }));
+
+        const config = preparedPairs.length === 1 ? {
+          original: preparedPairs[0].original,
+          modified: preparedPairs[0].modified,
+          output: null,
+          output_folder: preparedPairs[0].output_folder || null,
           engine: selectedEngine,
-          output_format: redlineCompareOptions.output_format,
-          change_pages_only: redlineCompareOptions.change_pages_only
+          output_format: preparedPairs[0].output_format,
+          change_pages_only: preparedPairs[0].change_pages_only
         } : {
           batch: true,
-          pairs: redlinePairs,
+          pairs: preparedPairs,
           output_folder: redlineOutputFolder,
           engine: selectedEngine,
-          output_format: redlineCompareOptions.output_format,
-          change_pages_only: redlineCompareOptions.change_pages_only
+          output_format: effectiveOutputFormat,
+          change_pages_only: false
         };
 
         const result = await ipcRenderer.invoke('redline-documents', config);
@@ -11319,7 +11715,11 @@
 
           if (result.mode === 'batch') {
             redlineResultText.textContent = `Generated ${result.successful} of ${result.total} comparison documents`;
-            redlineOutputFolder = config.output_folder;
+            const firstSuccessfulOutput = (result.results || []).find((item) => item && item.success && item.output_path);
+            if (firstSuccessfulOutput && firstSuccessfulOutput.output_path) {
+              const sep = firstSuccessfulOutput.output_path.includes('\\') ? '\\' : '/';
+              redlineOutputFolder = firstSuccessfulOutput.output_path.substring(0, firstSuccessfulOutput.output_path.lastIndexOf(sep));
+            }
 
             if (usedLitera) {
               // Litera batch — show document type info
@@ -11333,18 +11733,20 @@
                   .map(r => r && r.litera_style ? String(r.litera_style).trim() : '')
                   .filter(Boolean)
               ));
-              if (result.change_pages_only) {
+              const successfulResults = (result.results || []).filter(r => r && r.success);
+              const cpoCount = successfulResults.filter(r => r.change_pages_only).length;
+              const sampleOutput = successfulResults.find(r => r && r.output_path);
+              const sampleExt = sampleOutput ? (sampleOutput.output_path.split('.').pop() || '').toUpperCase() : '';
+              if (cpoCount === successfulResults.length && successfulResults.length > 0) {
                 redlineLiteraFormat.textContent = `PDF (changed pages) • ${result.successful} file(s)`;
+              } else if (cpoCount > 0) {
+                redlineLiteraFormat.textContent = `Mixed output • ${cpoCount} CPO / ${successfulResults.length - cpoCount} full`;
+              } else if (sampleExt === 'PDF') {
+                redlineLiteraFormat.textContent = `PDF • ${result.successful} file(s)`;
+              } else if (sampleExt) {
+                redlineLiteraFormat.textContent = `${sampleExt} • ${result.successful} file(s)`;
               } else {
-                const sampleOutput = result.results.find(r => r && r.success && r.output_path);
-                const sampleExt = sampleOutput ? (sampleOutput.output_path.split('.').pop() || '').toUpperCase() : '';
-                if (sampleExt === 'PDF') {
-                  redlineLiteraFormat.textContent = `PDF • ${result.successful} file(s)`;
-                } else if (sampleExt) {
-                  redlineLiteraFormat.textContent = `${sampleExt} • ${result.successful} file(s)`;
-                } else {
-                  redlineLiteraFormat.textContent = result.successful + ' file(s)';
-                }
+                redlineLiteraFormat.textContent = result.successful + ' file(s)';
               }
               if (batchStyles.length > 0) {
                 redlineResultText.textContent += ` • Style: ${batchStyles.join(', ')}`;
@@ -11409,7 +11811,7 @@
               redlineDownloadMode = 'file';
               redlineDownloadPath = outputPaths[0];
               redlineDownloadSuggestedName = getRedlineSuggestedFileName(
-                redlinePairs[0],
+                redlineLastRunPairs[0],
                 getFileExtension(outputPaths[0], '.docx')
               );
               redlineDownloadZipBtn.textContent = 'Download File';
@@ -11417,7 +11819,7 @@
               redlineProgressText.textContent = 'Creating ZIP file...';
               redlineDownloadMode = 'zip';
               redlineDownloadPath = await ipcRenderer.invoke('create-zip-files', outputPaths);
-              redlineDownloadSuggestedName = getRedlineSuggestedZipName(redlinePairs, outputPaths.length);
+              redlineDownloadSuggestedName = getRedlineSuggestedZipName(redlineLastRunPairs, outputPaths.length);
               redlineDownloadZipBtn.textContent = 'Download ZIP';
             } else {
               redlineDownloadMode = 'none';
@@ -11429,7 +11831,7 @@
             redlineDownloadMode = 'file';
             redlineDownloadPath = result.output_path;
             redlineDownloadSuggestedName = getRedlineSuggestedFileName(
-              redlinePairs[0],
+              redlineLastRunPairs[0],
               getFileExtension(result.output_path, '.docx')
             );
             redlineDownloadZipBtn.textContent = 'Download File';
@@ -11440,7 +11842,7 @@
           await logUsage(
             'redline',
             'compare',
-            redlinePairs.length,
+            redlineLastRunPairs.length,
             result.mode === 'batch' ? result.successful : 1,
             duration,
             { engine: result.engine || 'unknown' }
@@ -11482,23 +11884,12 @@
 
     // Reset state
     function resetRedlineState() {
-      redlineOriginalPath = null;
-      redlineModifiedPath = null;
-      redlinePairs = [];
+      redlinePairs = [createRedlinePair()];
       redlineOutputFolder = null;
       redlineDownloadMode = 'none';
       redlineDownloadPath = null;
       redlineDownloadSuggestedName = null;
-
-      redlineOriginalSelected.textContent = '';
-      redlineModifiedSelected.textContent = '';
-      redlinePairsList.innerHTML = '';
-      redlinePairsList.classList.add('hidden');
-
-      redlineOriginalInput.classList.remove('selected');
-      redlineModifiedInput.classList.remove('selected');
-      clearRedlineOriginal.classList.remove('visible');
-      clearRedlineModified.classList.remove('visible');
+      redlineLastRunPairs = [];
 
       // Reset engine result display
       redlineEngineResult.style.display = 'none';
@@ -11513,7 +11904,7 @@
       redlineDownloadZipBtn.textContent = 'Download Output';
       syncRedlineOptions();
 
-      updateRedlineButton();
+      renderRedlinePairsTable();
       showRedlineState('idle');
     }
 

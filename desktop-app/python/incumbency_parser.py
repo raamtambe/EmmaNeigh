@@ -15,6 +15,12 @@ from docx import Document
 # Keywords for name column in incumbency tables
 NAME_HEADERS = ["NAME", "OFFICER", "DIRECTOR", "AUTHORIZED"]
 TITLE_HEADERS = ["TITLE", "POSITION", "OFFICE", "CAPACITY"]
+TITLE_KEYWORDS = [
+    "PRESIDENT", "VICE PRESIDENT", "VICE-PRESIDENT", "CEO", "CFO", "COO",
+    "SECRETARY", "TREASURER", "ASSISTANT SECRETARY", "ASSISTANT TREASURER",
+    "MANAGER", "DIRECTOR", "MEMBER", "AUTHORIZED SIGNATORY", "SIGNATORY",
+    "OFFICER", "GENERAL COUNSEL", "SENIOR VICE PRESIDENT", "SVP", "EVP"
+]
 
 
 def emit(msg_type, **kwargs):
@@ -120,32 +126,90 @@ def is_valid_name(name):
     return True
 
 
+def normalize_cell_text(value):
+    return re.sub(r'\s+', ' ', str(value or '').strip())
+
+
+def looks_like_title(value):
+    text = normalize_cell_text(value).upper()
+    if not text or len(text) < 2:
+        return False
+    return any(keyword in text for keyword in TITLE_KEYWORDS)
+
+
+def extract_name_and_title_from_cell(value):
+    text = normalize_cell_text(value)
+    if not text:
+        return "", ""
+    patterns = [
+        r'^([A-Z][A-Za-z.\'\-]+\s+[A-Z][A-Za-z.\'\-]+(?:\s+[A-Z][A-Za-z.\'\-]+)?)\s*[,\-–—|]\s*(.+)$',
+        r'^([A-Z][A-Za-z.\'\-]+\s+[A-Z][A-Za-z.\'\-]+(?:\s+[A-Z][A-Za-z.\'\-]+)?)\s{2,}(.+)$',
+    ]
+    for pattern in patterns:
+        match = re.match(pattern, text)
+        if not match:
+            continue
+        name = match.group(1).strip()
+        title = match.group(2).strip()
+        if is_valid_name(name) and looks_like_title(title):
+            return name, title
+    return "", ""
+
+
 def extract_signers_from_table(table_data):
     """Extract signer information from a table."""
-    if not table_data or len(table_data) < 2:
+    if not table_data:
         return []
 
-    headers = table_data[0]
+    rows = [[normalize_cell_text(cell) for cell in row] for row in table_data]
+    rows = [row for row in rows if any(row)]
+    if not rows:
+        return []
+
+    headers = rows[0]
     name_idx = find_column_index(headers, NAME_HEADERS)
     title_idx = find_column_index(headers, TITLE_HEADERS)
+    data_rows = rows[1:] if is_incumbency_table(headers) else rows
 
     # If no explicit name column, try first column
-    if name_idx is None:
+    if name_idx is None and is_incumbency_table(headers):
         name_idx = 0
 
     signers = []
-    for row in table_data[1:]:
-        if name_idx >= len(row):
-            continue
-
-        name = row[name_idx].strip() if row[name_idx] else ""
-
-        # Get title if available
+    seen = set()
+    for row in data_rows:
+        name = ""
         title = ""
+
+        if name_idx is not None and name_idx < len(row):
+            name = row[name_idx].strip() if row[name_idx] else ""
+
         if title_idx is not None and title_idx < len(row):
             title = row[title_idx].strip() if row[title_idx] else ""
 
+        if not (name and is_valid_name(name)):
+            for cell in row:
+                candidate_name, candidate_title = extract_name_and_title_from_cell(cell)
+                if candidate_name:
+                    name = candidate_name
+                    title = candidate_title or title
+                    break
+
+        if not (name and is_valid_name(name)):
+            for idx, cell in enumerate(row):
+                if is_valid_name(cell):
+                    name = cell
+                    if idx + 1 < len(row) and looks_like_title(row[idx + 1]):
+                        title = row[idx + 1]
+                    elif idx > 0 and looks_like_title(row[idx - 1]):
+                        title = row[idx - 1]
+                    break
+
         if name and is_valid_name(name):
+            key = (name.upper(), title.upper())
+            if key in seen:
+                continue
+            seen.add(key)
             signers.append({
                 "name": name,
                 "title": title
@@ -183,9 +247,8 @@ def parse_incumbency_pdf(filepath):
             for table in tables.tables:
                 data = table.extract()
                 if data and len(data) > 0:
-                    if is_incumbency_table(data[0]):
-                        signers = extract_signers_from_table(data)
-                        all_signers.extend(signers)
+                    signers = extract_signers_from_table(data)
+                    all_signers.extend(signers)
         except Exception:
             pass
 
@@ -246,9 +309,8 @@ def parse_incumbency_docx(filepath):
             rows.append(row_data)
 
         if rows and len(rows) > 0:
-            if is_incumbency_table(rows[0]):
-                signers = extract_signers_from_table(rows)
-                all_signers.extend(signers)
+            signers = extract_signers_from_table(rows)
+            all_signers.extend(signers)
 
     return {
         "entity_name": entity_name,

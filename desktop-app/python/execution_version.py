@@ -55,6 +55,9 @@ NOISE_PATTERNS = [
     r'^ENVELOPE\s+ID\b',
     r'^SIGNED\s+BY\b',
     r'^SENT\s+BY\b',
+    r'^DOCUSIGN\s+ENVELOPE\b',
+    r'^DOCUSIGN\b',
+    r'^PLEASE\s+REVIEW\b',
     r'^COMPLETED\s+BY\s+DOCUSIGN\b',
     r'^PLEASE\s+SIGN\b',
     r'^SIGN\s+HERE\b',
@@ -281,12 +284,27 @@ def extract_anchor_lines(lines):
 
 def build_visual_fingerprint(page, grid_width=24, grid_height=32):
     rect = page.rect
-    clip = fitz.Rect(
+    return build_region_fingerprint(
+        page,
         rect.x0 + rect.width * 0.05,
         rect.y0 + rect.height * 0.03,
         rect.x1 - rect.width * 0.05,
         rect.y0 + rect.height * 0.82,
+        grid_width=grid_width,
+        grid_height=grid_height,
     )
+
+
+
+def build_region_fingerprint(page, x0, y0, x1, y1, grid_width=24, grid_height=32):
+    clip = fitz.Rect(
+        max(page.rect.x0, x0),
+        max(page.rect.y0, y0),
+        min(page.rect.x1, x1),
+        min(page.rect.y1, y1),
+    )
+    if clip.width <= 1 or clip.height <= 1:
+        return []
     try:
         pix = page.get_pixmap(matrix=fitz.Matrix(0.32, 0.32), colorspace=fitz.csGRAY, alpha=False, clip=clip)
     except Exception:
@@ -336,6 +354,26 @@ def line_overlap_score(left_lines, right_lines):
 
 
 
+def extract_footer_lines(lines):
+    return [line for line in lines[-8:] if len(line) >= 4]
+
+
+
+def extract_signature_zone_lines(lines):
+    signature_lines = []
+    for index, line in enumerate(lines):
+        if re.search(r'\b(SIGNATURE PAGE|BY:|NAME:|TITLE:|ITS:|AUTHORIZED SIGNATORY|DULY AUTHORIZED)\b', line):
+            window = lines[index:min(len(lines), index + 4)]
+            for item in window:
+                if item and item not in signature_lines:
+                    signature_lines.append(item)
+
+    if not signature_lines:
+        signature_lines = [line for line in lines[-16:] if len(line) >= 4]
+    return signature_lines[:16]
+
+
+
 def build_page_features(page, filename, page_num):
     text = page.get_text('text') or ''
     lines = extract_meaningful_lines(text)
@@ -345,6 +383,9 @@ def build_page_features(page, filename, page_num):
     header_lines = lines[:12]
     tail_lines = lines[-18:] if lines else []
     anchor_lines = extract_anchor_lines(lines)
+    footer_lines = extract_footer_lines(lines)
+    signature_lines = extract_signature_zone_lines(lines)
+    rect = page.rect
 
     return {
         'filepath': '',
@@ -357,9 +398,29 @@ def build_page_features(page, filename, page_num):
         'title_name': title_name,
         'header_text': compress_lines(header_lines, max_lines=12, max_chars=800),
         'tail_text': compress_lines(tail_lines, max_lines=18, max_chars=1000),
+        'footer_text': compress_lines(footer_lines, max_lines=8, max_chars=500),
+        'signature_block_text': compress_lines(signature_lines, max_lines=14, max_chars=900),
         'match_text': build_match_line_sample(lines),
         'anchor_lines': anchor_lines,
         'visual_fp': build_visual_fingerprint(page),
+        'signature_visual_fp': build_region_fingerprint(
+            page,
+            rect.x0 + rect.width * 0.05,
+            rect.y0 + rect.height * 0.48,
+            rect.x1 - rect.width * 0.05,
+            rect.y0 + rect.height * 0.92,
+            grid_width=18,
+            grid_height=20,
+        ),
+        'footer_visual_fp': build_region_fingerprint(
+            page,
+            rect.x0 + rect.width * 0.05,
+            rect.y0 + rect.height * 0.80,
+            rect.x1 - rect.width * 0.05,
+            rect.y0 + rect.height * 0.97,
+            grid_width=18,
+            grid_height=10,
+        ),
         'matched': False,
     }
 
@@ -380,22 +441,34 @@ def score_signature_page_match(signed_page, original_page, original_doc):
     text_score = fuzzy_match_score(signed_page.get('match_text', ''), original_page.get('match_text', ''))
     header_score = fuzzy_match_score(signed_page.get('header_text', ''), original_page.get('header_text', ''))
     tail_score = fuzzy_match_score(signed_page.get('tail_text', ''), original_page.get('tail_text', ''))
+    footer_score = fuzzy_match_score(signed_page.get('footer_text', ''), original_page.get('footer_text', ''))
+    signature_block_score = fuzzy_match_score(signed_page.get('signature_block_text', ''), original_page.get('signature_block_text', ''))
     anchor_score = line_overlap_score(signed_page.get('anchor_lines', []), original_page.get('anchor_lines', []))
     visual_score = visual_similarity(signed_page.get('visual_fp', []), original_page.get('visual_fp', []))
+    signature_visual_score = visual_similarity(signed_page.get('signature_visual_fp', []), original_page.get('signature_visual_fp', []))
+    footer_visual_score = visual_similarity(signed_page.get('footer_visual_fp', []), original_page.get('footer_visual_fp', []))
 
     weighted_components = []
     if doc_name_score > 0:
-        weighted_components.append((0.30, doc_name_score))
+        weighted_components.append((0.24, doc_name_score))
     if text_score > 0:
-        weighted_components.append((0.20, text_score))
+        weighted_components.append((0.16, text_score))
     if header_score > 0:
-        weighted_components.append((0.10, header_score))
+        weighted_components.append((0.07, header_score))
     if tail_score > 0:
-        weighted_components.append((0.20, tail_score))
+        weighted_components.append((0.12, tail_score))
+    if footer_score > 0:
+        weighted_components.append((0.11, footer_score))
+    if signature_block_score > 0:
+        weighted_components.append((0.12, signature_block_score))
     if anchor_score > 0:
-        weighted_components.append((0.10, anchor_score))
+        weighted_components.append((0.08, anchor_score))
     if visual_score > 0:
-        weighted_components.append((0.20, visual_score))
+        weighted_components.append((0.04, visual_score))
+    if signature_visual_score > 0:
+        weighted_components.append((0.04, signature_visual_score))
+    if footer_visual_score > 0:
+        weighted_components.append((0.02, footer_visual_score))
 
     if not weighted_components:
         return 0.0, {
@@ -403,8 +476,12 @@ def score_signature_page_match(signed_page, original_page, original_doc):
             'text_score': 0.0,
             'header_score': 0.0,
             'tail_score': 0.0,
+            'footer_score': 0.0,
+            'signature_block_score': 0.0,
             'anchor_score': 0.0,
             'visual_score': 0.0,
+            'signature_visual_score': 0.0,
+            'footer_visual_score': 0.0,
         }, False
 
     total_weight = sum(weight for weight, _ in weighted_components)
@@ -414,16 +491,21 @@ def score_signature_page_match(signed_page, original_page, original_doc):
         score = min(0.99, score + 0.05)
     if tail_score >= 0.85:
         score = min(0.99, score + 0.03)
+    if signature_block_score >= 0.72 and signature_visual_score >= 0.78:
+        score = min(0.99, score + 0.04)
 
     plausible = (
         doc_name_score >= 0.45 or
         text_score >= 0.52 or
         tail_score >= 0.55 or
+        footer_score >= 0.62 or
+        signature_block_score >= 0.55 or
         anchor_score >= 0.35 or
-        visual_score >= VISUAL_STRONG_THRESHOLD
+        visual_score >= VISUAL_STRONG_THRESHOLD or
+        signature_visual_score >= 0.82
     )
 
-    if signed_doc_name and doc_name_score < 0.25 and text_score < 0.60 and tail_score < 0.60 and visual_score < 0.92:
+    if signed_doc_name and doc_name_score < 0.25 and text_score < 0.60 and tail_score < 0.60 and footer_score < 0.55 and signature_block_score < 0.48 and visual_score < 0.92 and signature_visual_score < 0.84:
         plausible = False
 
     details = {
@@ -431,8 +513,12 @@ def score_signature_page_match(signed_page, original_page, original_doc):
         'text_score': round(text_score, 4),
         'header_score': round(header_score, 4),
         'tail_score': round(tail_score, 4),
+        'footer_score': round(footer_score, 4),
+        'signature_block_score': round(signature_block_score, 4),
         'anchor_score': round(anchor_score, 4),
         'visual_score': round(visual_score, 4),
+        'signature_visual_score': round(signature_visual_score, 4),
+        'footer_visual_score': round(footer_visual_score, 4),
     }
     return round(score, 4), details, plausible
 

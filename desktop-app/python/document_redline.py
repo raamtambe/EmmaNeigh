@@ -965,6 +965,7 @@ def process_single_pair(args: Tuple[str, str, str]) -> Dict:
     try:
         result = compare_documents(original, modified, output)
         result['success'] = True
+        result['output_path'] = output
         return result
     except Exception as e:
         return {
@@ -983,10 +984,14 @@ def process_batch(pairs: List[Dict], output_folder: str) -> List[Dict]:
     for pair in pairs:
         original = pair['original']
         modified = pair['modified']
-        orig_name = os.path.splitext(os.path.basename(original))[0]
-        mod_name = os.path.splitext(os.path.basename(modified))[0]
-        output_name = f"Redline_{orig_name}_vs_{mod_name}.xlsx"
-        output_path = os.path.join(output_folder, output_name)
+        pair_output_folder = pair.get('output_folder') or output_folder
+        os.makedirs(pair_output_folder, exist_ok=True)
+        output_path = pair.get('output')
+        if not output_path:
+            orig_name = os.path.splitext(os.path.basename(original))[0]
+            mod_name = os.path.splitext(os.path.basename(modified))[0]
+            output_name = f"Redline_{orig_name}_vs_{mod_name}.xlsx"
+            output_path = os.path.join(pair_output_folder, output_name)
         args_list.append((original, modified, output_path))
 
     max_workers = max(1, mp.cpu_count() // 2)

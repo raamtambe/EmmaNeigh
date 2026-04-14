@@ -6114,7 +6114,7 @@ ipcMain.handle('collate-documents', async (event, config) => {
 const COMMAND_TOOLS = [
   {
     name: 'imanage_browse',
-    description: 'Open iManage file picker to browse and select documents from the document management system (DMS). Use when the user wants to open, find, or browse files in iManage.',
+    description: 'Open the interactive iManage desktop picker to browse and select documents from iManage Work Desktop. Use this only when the user explicitly wants the desktop picker or to select a document manually. For finding documents by matter number, name, author, or general DMS search, prefer imanage_search.',
     input_schema: {
       type: 'object',
       properties: {
@@ -12641,7 +12641,9 @@ function normalizeRedlineConfigPaths(config = {}) {
     normalized.pairs = normalized.pairs.map((pair) => ({
       ...(pair || {}),
       original: resolveExistingLocalPath((pair && (pair.original || pair.originalPath)) || ''),
-      modified: resolveExistingLocalPath((pair && (pair.modified || pair.modifiedPath)) || '')
+      modified: resolveExistingLocalPath((pair && (pair.modified || pair.modifiedPath)) || ''),
+      output: pair && pair.output ? normalizeLocalPath(pair.output) : '',
+      output_folder: pair && pair.output_folder ? normalizeLocalPath(pair.output_folder) : ''
     }));
   }
   return normalized;
@@ -12727,15 +12729,22 @@ async function runRedlineDocuments(config) {
 
         for (let i = 0; i < config.pairs.length; i++) {
           const pair = config.pairs[i];
+          const pairOptions = {
+            output_format: String(pair.output_format || literaOptions.output_format || 'pdf').toLowerCase(),
+            change_pages_only: pair.change_pages_only !== undefined
+              ? !!pair.change_pages_only
+              : !!literaOptions.change_pages_only
+          };
+          const pairOutputFolder = pair.output_folder || outputFolder || path.dirname(pair.original);
           const pct = 10 + Math.round((i / config.pairs.length) * 80);
           mainWindow.webContents.send('redline-progress', {
             percent: pct,
             message: `Comparing pair ${i + 1} of ${config.pairs.length} with Litera...`
           });
 
-          const outputExt = getLiteraOutputExtension(pair.original, literaOptions);
-          const outputPath = path.join(
-            outputFolder,
+          const outputExt = getLiteraOutputExtension(pair.original, pairOptions);
+          const outputPath = pair.output || path.join(
+            pairOutputFolder,
             buildRedlineOutputFilename(pair.original, pair.modified, outputExt)
           );
 
@@ -12744,11 +12753,11 @@ async function runRedlineDocuments(config) {
               pair.original,
               pair.modified,
               outputPath,
-              literaOptions
+              pairOptions
             );
-            results.push({ ...result, pair_index: i });
+            results.push({ ...result, pair_index: i, output_folder: path.dirname(result.output_path || outputPath) });
           } catch (err) {
-            results.push({ success: false, error: err.message, pair_index: i });
+            results.push({ success: false, error: err.message, pair_index: i, output_folder: pairOutputFolder });
           }
         }
 
@@ -12766,9 +12775,14 @@ async function runRedlineDocuments(config) {
         };
       } else {
         // Single pair with Litera
-        const outputExt = getLiteraOutputExtension(config.original, literaOptions);
+        const singleOptions = {
+          output_format: String(config.output_format || literaOptions.output_format || 'pdf').toLowerCase(),
+          change_pages_only: !!config.change_pages_only
+        };
+        const singleOutputFolder = config.output_folder || path.dirname(config.original);
+        const outputExt = getLiteraOutputExtension(config.original, singleOptions);
         const outputPath = config.output || path.join(
-          path.dirname(config.original),
+          singleOutputFolder,
           buildRedlineOutputFilename(config.original, config.modified, outputExt)
         );
 
@@ -12781,7 +12795,7 @@ async function runRedlineDocuments(config) {
           config.original,
           config.modified,
           outputPath,
-          literaOptions
+          singleOptions
         );
 
         mainWindow.webContents.send('redline-progress', {
@@ -12812,6 +12826,16 @@ async function runRedlineDocuments(config) {
   return await new Promise((resolve, reject) => {
     const moduleName = 'document_redline';
     const processorPath = getProcessorPath(moduleName);
+    const fallbackConfig = { ...(config || {}) };
+
+    if (!fallbackConfig.batch && !fallbackConfig.output && fallbackConfig.output_folder) {
+      const fallbackOutputFolder = fallbackConfig.output_folder;
+      try { fs.mkdirSync(fallbackOutputFolder, { recursive: true }); } catch (_) {}
+      fallbackConfig.output = path.join(
+        fallbackOutputFolder,
+        `Redline_${path.parse(fallbackConfig.original || '').name || 'Original'}_vs_${path.parse(fallbackConfig.modified || '').name || 'Modified'}.xlsx`
+      );
+    }
 
     if (!processorPath) {
       reject(new Error('Development mode - please build the app first'));
@@ -12829,7 +12853,7 @@ async function runRedlineDocuments(config) {
 
     // Write config to temp file
     const configPath = path.join(app.getPath('temp'), `redline-config-${Date.now()}.json`);
-    fs.writeFileSync(configPath, JSON.stringify(config));
+    fs.writeFileSync(configPath, JSON.stringify(fallbackConfig));
 
     const proc = spawnTracked(processorPath, [moduleName, configPath]);
     let result = null;
@@ -13795,6 +13819,7 @@ Key terminology:
 For imanage_redline_versions: you can omit version_1 and version_2 to auto-detect (V1 vs latest), or specify them explicitly.
 If the user wants to email the result, pass email_to directly to imanage_redline_versions — it handles checkout, Litera comparison, and Outlook email in one call.
 If the user wants to reply to an existing email thread with the redline, first use outlook_search to find the thread, then imanage_redline_versions to create the redline, then outlook_reply_email with the redline_path as an attachment.
+Use imanage_search before imanage_browse unless the user clearly wants the interactive desktop picker. Do not treat "search the DMS" or "find this file in iManage" as a browse/picker request.
 For Word documents, simple text substitutions can use word_find_replace. Do not assume PDFs are safely editable unless there is a direct tool for that operation.
 For local PDF or DOCX content edits that should end with a redline, use document_edit_and_redline.
 
