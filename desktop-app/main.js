@@ -6223,13 +6223,13 @@ const COMMAND_TOOLS = [
   },
   {
     name: 'run_redline',
-    description: 'Compare two documents to produce a redline showing differences. Supports Word, PDF, Excel, and PowerPoint.',
+    description: 'Compare two documents to produce a redline showing differences. Supports Word, PDF, Excel, and PowerPoint. Litera generates full-document outputs; Literoid generates a local Excel comparison workbook from extracted tables.',
     input_schema: {
       type: 'object',
       properties: {
         original: { type: 'string', description: 'File path of the original document' },
         modified: { type: 'string', description: 'File path of the modified/revised document' },
-        engine: { type: 'string', enum: ['auto', 'litera', 'emmaneigh'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to EmmaNeigh).' },
+        engine: { type: 'string', enum: ['auto', 'litera', 'literoid'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to Literoid).' },
         change_pages_only: { type: 'boolean', description: 'If true, generates a Change Pages Only (CPO) redline — only pages with differences. Default: false.' }
       },
       required: ['original', 'modified']
@@ -11000,7 +11000,7 @@ async function dispatchTool(toolName, input, session = {}) {
         break;
       }
       // Delegate to existing redline-documents handler
-      const engine = safeInput.engine || 'auto';
+      const engine = normalizeRedlineEngineSelection(safeInput.engine);
       const config = {
         engine,
         originalPath,
@@ -12625,6 +12625,14 @@ ipcMain.handle('check-litera-installed', async () => {
 
 // ========== REDLINE DOCUMENTS ==========
 
+function normalizeRedlineEngineSelection(value) {
+  const raw = String(value || 'auto').trim().toLowerCase();
+  if (!raw) return 'auto';
+  if (raw === 'emmaneigh') return 'literoid';
+  if (raw === 'auto' || raw === 'litera' || raw === 'literoid') return raw;
+  return 'auto';
+}
+
 function normalizeRedlineConfigPaths(config = {}) {
   const normalized = { ...(config || {}) };
   if (!normalized.original && normalized.originalPath) {
@@ -12673,12 +12681,12 @@ function ensureRedlineInputFilesExist(config = {}) {
   }
 }
 
-// Redline documents — routes through Litera Compare when available, falls back to EmmaNeigh table comparison
+// Redline documents — routes through Litera Compare when available, falls back to Literoid.
 async function runRedlineDocuments(config) {
   config = normalizeRedlineConfigPaths(config || {});
   ensureRedlineInputFilesExist(config);
 
-  const engine = config.engine || 'auto'; // 'auto', 'litera', 'emmaneigh'
+  const engine = normalizeRedlineEngineSelection(config.engine); // 'auto', 'litera', 'literoid'
   const requestedOutputFormat = String(config.output_format || 'pdf').toLowerCase();
   const normalizedOutputFormat = requestedOutputFormat === 'docx'
     ? 'docx'
@@ -12689,6 +12697,14 @@ async function runRedlineDocuments(config) {
     output_format: normalizedOutputFormat,
     change_pages_only: !!config.change_pages_only
   };
+  let literoidWarning = null;
+  if (engine === 'literoid' && (literaOptions.change_pages_only || literaOptions.output_format === 'pdf' || literaOptions.output_format === 'docx')) {
+    literaOptions.output_format = 'native';
+    literaOptions.change_pages_only = false;
+    config.output_format = 'native';
+    config.change_pages_only = false;
+    literoidWarning = 'Literoid outputs an Excel comparison workbook. PDF, DOCX, and changed-pages options were ignored.';
+  }
   const requiresStrictLitera =
     literaOptions.change_pages_only || literaOptions.output_format === 'pdf' || literaOptions.output_format === 'docx';
 
@@ -12822,7 +12838,7 @@ async function runRedlineDocuments(config) {
     }
   }
 
-  // ---- EMMANEIGH TABLE COMPARISON PATH (fallback) ----
+  // ---- LITEROID PATH (fallback) ----
   return await new Promise((resolve, reject) => {
     const moduleName = 'document_redline';
     const processorPath = getProcessorPath(moduleName);
@@ -12867,7 +12883,10 @@ async function runRedlineDocuments(config) {
             mainWindow.webContents.send('redline-progress', msg);
           } else if (msg.type === 'result') {
             result = msg;
-            result.engine = 'emmaneigh'; // Tag the engine
+            result.engine = 'literoid';
+            if (literoidWarning) {
+              result.warning = literoidWarning;
+            }
           } else if (msg.type === 'error') {
             reject(new Error(msg.message));
           }
@@ -13814,6 +13833,7 @@ Common multi-step workflows you should handle:
 
 Key terminology:
 - "CPO" = Change Pages Only — a Litera mode that outputs only pages with differences. Set change_pages_only=true on imanage_redline_versions or run_redline.
+- "Literoid" = EmmaNeigh's local comparison engine. It extracts tables and produces an Excel workbook comparison when Litera is unavailable or not desired.
 - "Redline against precedent" = compare V1 (original/precedent) to the latest version.
 
 For imanage_redline_versions: you can omit version_1 and version_2 to auto-detect (V1 vs latest), or specify them explicitly.

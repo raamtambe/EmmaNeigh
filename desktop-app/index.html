@@ -5829,7 +5829,7 @@
     <div id="redlineTab" style="display: none;">
       <!-- Input State -->
       <div id="redlineInputs" class="exec-inputs">
-        <p class="subtitle" style="margin-bottom: 8px;">Compare documents using Litera Compare or EmmaNeigh table comparison</p>
+        <p class="subtitle" style="margin-bottom: 8px;">Compare documents using Litera Compare or Literoid</p>
 
         <!-- Engine Indicator -->
         <div id="redlineEngineBar" style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 12px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
@@ -5840,7 +5840,7 @@
           <select id="redlineEngineSelect" style="background: rgba(255,255,255,0.06); color: #ccc; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
             <option value="auto">Auto (best available)</option>
             <option value="litera">Litera Compare only</option>
-            <option value="emmaneigh">EmmaNeigh only</option>
+            <option value="literoid">Literoid only</option>
           </select>
         </div>
 
@@ -5856,7 +5856,7 @@
             New rows default to CPO (PDF)
           </label>
         </div>
-        <p style="font-size: 11px; color: #666; margin-bottom: 12px;">
+        <p id="redlineOutputHint" style="font-size: 11px; color: #666; margin-bottom: 12px;">
           Full-document output defaults to PDF. Each row can still be toggled independently between full-document output and CPO.
         </p>
 
@@ -9653,7 +9653,10 @@
           if (typeof setRedlineOriginalFile === 'function') setRedlineOriginalFile(config.originalPath);
           if (typeof setRedlineModifiedFile === 'function') setRedlineModifiedFile(config.modifiedPath);
           const engineSel = document.getElementById('redlineEngineSelect');
-          if (engineSel && config.engine) engineSel.value = config.engine;
+          if (engineSel && config.engine) {
+            engineSel.value = normalizeRedlineEngineName(config.engine);
+            engineSel.dispatchEvent(new Event('change'));
+          }
           const btn = document.getElementById('redlineBtn');
           if (btn) btn.click();
         }, 300);
@@ -11240,6 +11243,7 @@
     const redlineLiteraFormat = document.getElementById('redlineLiteraFormat');
     const redlineOutputFormat = document.getElementById('redlineOutputFormat');
     const redlineChangePagesOnly = document.getElementById('redlineChangePagesOnly');
+    const redlineOutputHint = document.getElementById('redlineOutputHint');
 
     let redlinePairs = [];
     let redlinePairCounter = 0;
@@ -11250,6 +11254,19 @@
     let redlineLastRunPairs = [];
     let literaInstalled = false;
     let literaCapabilities = {};
+
+    function normalizeRedlineEngineName(value) {
+      const raw = String(value || 'auto').trim().toLowerCase();
+      if (!raw) return 'auto';
+      if (raw === 'emmaneigh') return 'literoid';
+      if (raw === 'auto' || raw === 'litera' || raw === 'literoid') return raw;
+      return 'auto';
+    }
+
+    function isLiteroidModeActive() {
+      const selected = normalizeRedlineEngineName(redlineEngineSelect.value);
+      return selected === 'literoid' || (selected === 'auto' && !literaInstalled);
+    }
 
     // Check for Litera Compare on startup
     async function checkLiteraStatus() {
@@ -11267,7 +11284,7 @@
           redlineEngineLabel.style.color = '#86efac';
         } else {
           redlineEngineDot.style.background = '#f59e0b'; // amber
-          redlineEngineLabel.textContent = 'Litera Compare not found — using EmmaNeigh table comparison';
+          redlineEngineLabel.textContent = 'Litera Compare not found — Literoid workbook mode is ready';
           redlineEngineLabel.style.color = '#fcd34d';
           // Hide Litera-only option
           const literaOption = redlineEngineSelect.querySelector('option[value="litera"]');
@@ -11278,15 +11295,43 @@
         redlineEngineLabel.textContent = 'Engine check failed';
         redlineEngineLabel.style.color = '#fca5a5';
       }
+      syncRedlineOptions();
+      renderRedlinePairsTable();
     }
 
     checkLiteraStatus();
 
     function syncRedlineOptions() {
-      if (!redlineOutputFormat.value) {
-        redlineOutputFormat.value = 'pdf';
+      redlineEngineSelect.value = normalizeRedlineEngineName(redlineEngineSelect.value);
+      const literoidMode = isLiteroidModeActive();
+
+      if (literoidMode) {
+        redlineOutputFormat.value = 'native';
+        redlineOutputFormat.disabled = true;
+        redlineChangePagesOnly.checked = false;
+        redlineChangePagesOnly.disabled = true;
+        if (redlineOutputHint) {
+          redlineOutputHint.textContent = 'Literoid creates an Excel comparison workbook from extracted tables. PDF, DOCX, and changed-pages output remain Litera-only.';
+        }
+        redlinePairs = redlinePairs.map((pair) => ({
+          ...pair,
+          changePagesOnly: false
+        }));
+      } else {
+        if (!redlineOutputFormat.value || redlineOutputFormat.value === 'native') {
+          redlineOutputFormat.value = 'pdf';
+        }
+        redlineOutputFormat.disabled = false;
+        redlineChangePagesOnly.disabled = false;
+        if (redlineOutputHint) {
+          redlineOutputHint.textContent = 'Full-document output defaults to PDF. Each row can still be toggled independently between full-document output and CPO.';
+        }
       }
     }
+    redlineEngineSelect.addEventListener('change', () => {
+      syncRedlineOptions();
+      renderRedlinePairsTable();
+    });
     redlineChangePagesOnly.addEventListener('change', syncRedlineOptions);
     syncRedlineOptions();
 
@@ -11346,7 +11391,7 @@
         id: `redline_pair_${redlinePairCounter}`,
         original: '',
         modified: '',
-        changePagesOnly: !!redlineChangePagesOnly.checked,
+        changePagesOnly: !isLiteroidModeActive() && !!redlineChangePagesOnly.checked,
         outputFolder: '',
         ...overrides
       };
@@ -11432,9 +11477,12 @@
           ? 'Click to replace. Drop multiple files here to create more rows.'
           : 'The newer version to compare';
         const outputLabel = escapeHtml(getRedlinePairOutputLabel(pair));
-        const cpoNote = pair.changePagesOnly
-          ? 'This row will output changed pages only as a PDF.'
-          : `This row will use the full-document ${String(redlineOutputFormat.value || 'pdf').toUpperCase()} setting.`;
+        const literoidMode = isLiteroidModeActive();
+        const cpoNote = literoidMode
+          ? 'Literoid will create an Excel comparison workbook for this row.'
+          : pair.changePagesOnly
+            ? 'This row will output changed pages only as a PDF.'
+            : `This row will use the full-document ${String(redlineOutputFormat.value || 'pdf').toUpperCase()} setting.`;
         return `
           <tr data-redline-pair-id="${pair.id}">
             <td class="redline-row-index">${index + 1}</td>
@@ -11456,8 +11504,8 @@
             </td>
             <td>
               <label class="redline-cpo-toggle">
-                <input type="checkbox" data-redline-cpo="${pair.id}" ${pair.changePagesOnly ? 'checked' : ''}>
-                <span>${pair.changePagesOnly ? 'Yes' : 'No'}</span>
+                <input type="checkbox" data-redline-cpo="${pair.id}" ${pair.changePagesOnly ? 'checked' : ''} ${literoidMode ? 'disabled' : ''}>
+                <span>${literoidMode ? 'N/A' : pair.changePagesOnly ? 'Yes' : 'No'}</span>
               </label>
               <div class="redline-cpo-note">${escapeHtml(cpoNote)}</div>
             </td>
@@ -11609,6 +11657,7 @@
       redlinePairsTableBody.addEventListener('change', (e) => {
         const cpoToggle = e.target.closest('[data-redline-cpo]');
         if (!cpoToggle) return;
+        if (isLiteroidModeActive()) return;
         const pairIndex = getRedlinePairIndex(String(cpoToggle.dataset.redlineCpo || ''));
         if (pairIndex >= 0) {
           redlinePairs[pairIndex].changePagesOnly = !!cpoToggle.checked;
@@ -11653,9 +11702,10 @@
       redlineProgressFill.style.width = '0%';
 
       const startTime = Date.now();
-      const selectedEngine = redlineEngineSelect.value; // 'auto', 'litera', 'emmaneigh'
+      const selectedEngine = normalizeRedlineEngineName(redlineEngineSelect.value); // 'auto', 'litera', 'literoid'
       const requestedOutputFormat = redlineOutputFormat.value || 'pdf';
-      const effectiveOutputFormat = ((!literaInstalled || selectedEngine === 'emmaneigh'))
+      const literoidMode = selectedEngine === 'literoid' || (!literaInstalled && selectedEngine === 'auto');
+      const effectiveOutputFormat = literoidMode
         ? 'native'
         : requestedOutputFormat;
 
@@ -11667,8 +11717,8 @@
           original: pair.original,
           modified: pair.modified,
           output_folder: pair.outputFolder || '',
-          output_format: pair.changePagesOnly ? 'pdf' : effectiveOutputFormat,
-          change_pages_only: !!pair.changePagesOnly
+          output_format: (!literoidMode && pair.changePagesOnly) ? 'pdf' : effectiveOutputFormat,
+          change_pages_only: !literoidMode && !!pair.changePagesOnly
         }));
 
         const config = preparedPairs.length === 1 ? {
@@ -11705,10 +11755,10 @@
             redlineStatsLitera.style.display = '';
             redlineStatsEmmaNeigh.style.display = 'none';
           } else {
-            redlineEngineResult.style.background = 'rgba(34,197,94,0.15)';
-            redlineEngineResult.style.color = '#86efac';
-            redlineEngineResultIcon.textContent = 'EN';
-            redlineEngineResultLabel.textContent = 'EmmaNeigh Table Comparison';
+            redlineEngineResult.style.background = 'rgba(245,158,11,0.15)';
+            redlineEngineResult.style.color = '#fcd34d';
+            redlineEngineResultIcon.textContent = 'LR';
+            redlineEngineResultLabel.textContent = 'Powered by Literoid';
             redlineStatsLitera.style.display = 'none';
             redlineStatsEmmaNeigh.style.display = '';
           }
@@ -11755,7 +11805,7 @@
                 redlineResultText.textContent += ` • ${batchWarnings[0]}`;
               }
             } else {
-              // EmmaNeigh batch — sum up table stats
+              // Literoid batch — sum up table stats
               let totalAdded = 0, totalDeleted = 0, totalModified = 0, totalTables = 0;
               result.results.forEach(r => {
                 if (r.rows_added) totalAdded += r.rows_added;
@@ -11767,6 +11817,9 @@
               redlineRowsDeleted.textContent = totalDeleted;
               redlineRowsModified.textContent = totalModified;
               redlineTableChanges.textContent = totalTables;
+              if (result.warning) {
+                redlineResultText.textContent += ` • ${result.warning}`;
+              }
             }
           } else {
             // Single pair results
@@ -11793,11 +11846,14 @@
                 redlineResultText.textContent += ` — ${result.warning}`;
               }
             } else {
-              redlineResultText.textContent = 'Table comparison spreadsheet generated';
+              redlineResultText.textContent = 'Literoid comparison workbook generated';
               redlineRowsAdded.textContent = result.rows_added || 0;
               redlineRowsDeleted.textContent = result.rows_deleted || 0;
               redlineRowsModified.textContent = result.rows_modified || 0;
               redlineTableChanges.textContent = result.table_changes || 0;
+              if (result.warning) {
+                redlineResultText.textContent += ` — ${result.warning}`;
+              }
             }
           }
 

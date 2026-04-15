@@ -4,6 +4,22 @@ All notable changes to EmmaNeigh will be documented in this file.
 
 ---
 
+## [5.4.28] - 2026-04-15
+
+### Added
+- Introduced `Literoid` as a first-class local comparison engine for redlines when Litera Compare is unavailable or not desired.
+
+### Changed
+- Updated the redline UI and agent/tool routing to refer to the local workbook-based compare engine as `Literoid` instead of the generic EmmaNeigh fallback.
+- Added UI guardrails so Literoid mode no longer offers Litera-only options like CPO or PDF/DOCX redline output.
+- Clarified redline tool descriptions so Litera vs. Literoid output behavior is explicit.
+
+## [5.4.27] - 2026-04-15
+
+### Changed
+- Updated GitHub release workflows to Node 24-compatible action runtimes.
+- Bumped build-time Node from 20 to 22 in CI for forward-compatible releases.
+
 ## [5.4.3] - 2026-03-05
 
 ### Fixed
