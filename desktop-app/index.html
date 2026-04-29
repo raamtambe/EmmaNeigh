@@ -954,6 +954,11 @@
     .redline-toolbar-copy {
       flex: 1;
       min-width: 240px;
+      padding: 16px 18px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
     }
 
     .redline-toolbar-actions {
@@ -962,24 +967,79 @@
       flex-wrap: wrap;
     }
 
+    .redline-bulk-controls,
+    .redline-settings-panel {
+      display: grid;
+      gap: 12px;
+    }
+
+    .redline-global-card,
+    .redline-settings-card {
+      padding: 16px 18px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    .redline-settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .redline-setting-field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .redline-setting-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+    }
+
+    .redline-setting-note {
+      margin-top: 8px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #64748b;
+    }
+
+    .redline-setting-path {
+      min-height: 34px;
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #0f172a;
+      word-break: break-word;
+    }
+
+    .redline-setting-path.default {
+      color: #64748b;
+    }
+
     .redline-pairs-table-wrap {
-      border: 1px solid #222;
-      border-radius: 12px;
-      background: #0b0b0b;
-      overflow: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      background: #ffffff;
+      overflow: visible;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
     }
 
     .redline-pairs-table {
       width: 100%;
       border-collapse: collapse;
-      table-layout: fixed;
-      min-width: 880px;
+      table-layout: auto;
+      min-width: 0;
     }
 
     .redline-pairs-table th,
     .redline-pairs-table td {
       padding: 10px;
-      border-bottom: 1px solid #1f1f1f;
+      border-bottom: 1px solid #e2e8f0;
       vertical-align: top;
     }
 
@@ -987,13 +1047,10 @@
       text-align: left;
       font-size: 11px;
       font-weight: 600;
-      color: #888;
+      color: #475569;
       text-transform: uppercase;
       letter-spacing: 0.03em;
-      background: rgba(255,255,255,0.02);
-      position: sticky;
-      top: 0;
-      z-index: 1;
+      background: #f8fafc;
     }
 
     .redline-pairs-table tbody tr:last-child td {
@@ -1003,17 +1060,17 @@
     .redline-row-index {
       width: 44px;
       text-align: center;
-      color: #777;
+      color: #64748b;
       font-size: 12px;
       font-weight: 600;
     }
 
     .redline-drop-cell {
-      border: 1px dashed #333;
-      border-radius: 10px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 12px;
       min-height: 92px;
-      padding: 10px;
-      background: rgba(255,255,255,0.02);
+      padding: 12px;
+      background: #ffffff;
       transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
       cursor: pointer;
       position: relative;
@@ -1024,25 +1081,25 @@
     }
 
     .redline-drop-cell:hover {
-      border-color: #4b5563;
-      background: rgba(255,255,255,0.04);
+      border-color: #94a3b8;
+      background: #f8fafc;
     }
 
     .redline-drop-cell.active {
       border-color: #3b82f6;
-      background: rgba(59, 130, 246, 0.10);
+      background: #eff6ff;
     }
 
     .redline-drop-cell.filled {
       border-style: solid;
       border-color: #22c55e;
-      background: rgba(34, 197, 94, 0.10);
+      background: #f0fdf4;
     }
 
     .redline-drop-label {
       font-size: 10px;
       font-weight: 600;
-      color: #8b8b8b;
+      color: #64748b;
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
@@ -1050,7 +1107,7 @@
     .redline-drop-title {
       font-size: 12px;
       font-weight: 600;
-      color: #f3f4f6;
+      color: #0f172a;
       line-height: 1.35;
       word-break: break-word;
       padding-right: 28px;
@@ -1058,7 +1115,7 @@
 
     .redline-drop-hint {
       font-size: 11px;
-      color: #7c7c7c;
+      color: #64748b;
       line-height: 1.4;
       word-break: break-word;
     }
@@ -1071,8 +1128,8 @@
       height: 22px;
       border: none;
       border-radius: 999px;
-      background: rgba(255,255,255,0.07);
-      color: #aaa;
+      background: #e2e8f0;
+      color: #475569;
       cursor: pointer;
       font-size: 14px;
       line-height: 1;
@@ -1092,7 +1149,7 @@
       align-items: center;
       gap: 8px;
       font-size: 12px;
-      color: #ddd;
+      color: #334155;
       margin-top: 4px;
     }
 
@@ -1103,7 +1160,7 @@
     .redline-cpo-note {
       margin-top: 6px;
       font-size: 11px;
-      color: #666;
+      color: #64748b;
       line-height: 1.35;
     }
 
@@ -1117,12 +1174,12 @@
       min-height: 34px;
       font-size: 11px;
       line-height: 1.4;
-      color: #d1d5db;
+      color: #0f172a;
       word-break: break-word;
     }
 
     .redline-output-path.default {
-      color: #777;
+      color: #64748b;
     }
 
     .redline-output-actions,
@@ -1140,8 +1197,38 @@
 
     .redline-ready-summary {
       font-size: 11px;
-      color: #777;
+      color: #64748b;
       margin-top: -4px;
+    }
+
+    #redlineEngineBar,
+    #redlineInputs .output-format-row {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    #redlineInputs .output-format-row label,
+    #redlineEngineLabel,
+    .redline-toolbar-copy .input-hint,
+    .redline-global-card .input-hint,
+    .redline-settings-card .input-hint {
+      color: #64748b;
+    }
+
+    #redlineInputs .input-label,
+    .redline-toolbar-copy .input-label,
+    .redline-global-card .input-label,
+    .redline-settings-card .input-label {
+      color: #0f172a;
+    }
+
+    #redlineInputs .output-format-select,
+    #redlineEngineSelect {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      color: #0f172a;
     }
 
     .agent-input-wrap {
@@ -5832,12 +5919,12 @@
         <p class="subtitle" style="margin-bottom: 8px;">Compare documents using Litera Compare or Literoid</p>
 
         <!-- Engine Indicator -->
-        <div id="redlineEngineBar" style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 12px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <div id="redlineEngineBar" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 12px;">
           <div id="redlineEngineStatus" style="display: flex; align-items: center; gap: 8px; flex: 1;">
             <span id="redlineEngineDot" style="width: 8px; height: 8px; border-radius: 50%; background: #666; flex-shrink: 0;"></span>
-            <span id="redlineEngineLabel" style="font-size: 12px; color: #999;">Checking comparison engine...</span>
+            <span id="redlineEngineLabel" style="font-size: 12px;">Checking comparison engine...</span>
           </div>
-          <select id="redlineEngineSelect" style="background: rgba(255,255,255,0.06); color: #ccc; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
+          <select id="redlineEngineSelect" class="output-format-select" style="font-size: 12px; cursor: pointer;">
             <option value="auto">Auto (best available)</option>
             <option value="litera">Litera Compare only</option>
             <option value="literoid">Literoid only</option>
@@ -5851,14 +5938,52 @@
             <option value="docx">DOCX (full document)</option>
             <option value="native">Same as source</option>
           </select>
-          <label style="display: flex; align-items: center; gap: 6px; margin-left: auto; color: #ccc;">
+          <label style="display: flex; align-items: center; gap: 6px; margin-left: auto;">
             <input type="checkbox" id="redlineChangePagesOnly">
-            New rows default to CPO (PDF)
+            Make All Rows CPO (PDF)
           </label>
         </div>
         <p id="redlineOutputHint" style="font-size: 11px; color: #666; margin-bottom: 12px;">
           Full-document output defaults to PDF. Each row can still be toggled independently between full-document output and CPO.
         </p>
+
+        <div class="redline-settings-panel">
+          <div class="redline-settings-card">
+            <p class="input-label" style="margin-bottom: 6px;">Redline Settings</p>
+            <p class="input-hint" style="margin: 0;">These defaults are saved on this machine and reused whenever you open the redline tab.</p>
+            <div class="redline-settings-grid">
+              <label class="redline-setting-field">
+                <span class="redline-setting-title">Default engine</span>
+                <select id="redlineDefaultEngineSelect" class="output-format-select">
+                  <option value="auto">Auto (best available)</option>
+                  <option value="litera">Litera Compare only</option>
+                  <option value="literoid">Literoid only</option>
+                </select>
+              </label>
+              <label class="redline-setting-field">
+                <span class="redline-setting-title">Default full-document output</span>
+                <select id="redlineDefaultOutputFormatSelect" class="output-format-select">
+                  <option value="pdf">PDF</option>
+                  <option value="docx">DOCX</option>
+                  <option value="native">Same as source</option>
+                </select>
+              </label>
+              <div class="redline-setting-field" style="justify-content: flex-end;">
+                <span class="redline-setting-title">Default CPO state on open</span>
+                <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: #334155;">
+                  <input type="checkbox" id="redlineDefaultCpoCheckbox">
+                  Start with all rows in CPO
+                </label>
+              </div>
+            </div>
+            <div class="redline-setting-path default" id="redlineDefaultOutputPath">No saved default folder. Redlines will save next to each original document.</div>
+            <div class="redline-setting-note">Saved default folder is used automatically for new redline workspaces, but you can still override it for the current run below.</div>
+            <div class="redline-output-actions" style="margin-top: 10px;">
+              <button type="button" class="btn btn-secondary redline-mini-btn" id="redlineDefaultOutputChooseBtn">Choose Default Folder</button>
+              <button type="button" class="btn btn-secondary redline-mini-btn" id="redlineDefaultOutputResetBtn" style="display: none;">Reset Default</button>
+            </div>
+          </div>
+        </div>
 
         <div class="redline-toolbar">
           <div class="redline-toolbar-copy">
@@ -5867,6 +5992,18 @@
           </div>
           <div class="redline-toolbar-actions">
             <button class="btn btn-secondary redline-mini-btn" id="redlineAddPairBtn">+ Add Another Pair</button>
+          </div>
+        </div>
+
+        <div class="redline-bulk-controls">
+          <div class="redline-global-card">
+            <p class="input-label" style="margin-bottom: 6px;">Save All Outputs To</p>
+            <p class="input-hint" style="margin: 0;">Use one folder for this entire redline run, while still keeping the option to override a specific row if needed.</p>
+            <div class="redline-setting-path default" id="redlineGlobalOutputPath">No folder selected. Each output will save next to its original document.</div>
+            <div class="redline-output-actions" style="margin-top: 10px;">
+              <button type="button" class="btn btn-secondary redline-mini-btn" id="redlineGlobalOutputChooseBtn">Choose Folder for All Rows</button>
+              <button type="button" class="btn btn-secondary redline-mini-btn" id="redlineGlobalOutputResetBtn" style="display: none;">Reset</button>
+            </div>
           </div>
         </div>
 
@@ -11244,6 +11381,15 @@
     const redlineOutputFormat = document.getElementById('redlineOutputFormat');
     const redlineChangePagesOnly = document.getElementById('redlineChangePagesOnly');
     const redlineOutputHint = document.getElementById('redlineOutputHint');
+    const redlineDefaultEngineSelect = document.getElementById('redlineDefaultEngineSelect');
+    const redlineDefaultOutputFormatSelect = document.getElementById('redlineDefaultOutputFormatSelect');
+    const redlineDefaultCpoCheckbox = document.getElementById('redlineDefaultCpoCheckbox');
+    const redlineDefaultOutputPath = document.getElementById('redlineDefaultOutputPath');
+    const redlineDefaultOutputChooseBtn = document.getElementById('redlineDefaultOutputChooseBtn');
+    const redlineDefaultOutputResetBtn = document.getElementById('redlineDefaultOutputResetBtn');
+    const redlineGlobalOutputPath = document.getElementById('redlineGlobalOutputPath');
+    const redlineGlobalOutputChooseBtn = document.getElementById('redlineGlobalOutputChooseBtn');
+    const redlineGlobalOutputResetBtn = document.getElementById('redlineGlobalOutputResetBtn');
 
     let redlinePairs = [];
     let redlinePairCounter = 0;
@@ -11254,6 +11400,17 @@
     let redlineLastRunPairs = [];
     let literaInstalled = false;
     let literaCapabilities = {};
+    let redlineGlobalOutputFolder = '';
+    let redlineDefaultChangePagesOnly = false;
+
+    const REDLINE_SETTINGS_STORAGE_KEY = 'emmaneigh_redline_settings_v1';
+    const DEFAULT_REDLINE_SETTINGS = {
+      engine: 'auto',
+      outputFormat: 'pdf',
+      defaultOutputFolder: '',
+      defaultAllRowsCpo: false
+    };
+    let redlineSettings = { ...DEFAULT_REDLINE_SETTINGS };
 
     function normalizeRedlineEngineName(value) {
       const raw = String(value || 'auto').trim().toLowerCase();
@@ -11261,6 +11418,87 @@
       if (raw === 'emmaneigh') return 'literoid';
       if (raw === 'auto' || raw === 'litera' || raw === 'literoid') return raw;
       return 'auto';
+    }
+
+    function getAvailableRedlineEngineName(value) {
+      const normalized = normalizeRedlineEngineName(value);
+      if (!literaInstalled && normalized === 'litera') {
+        return 'auto';
+      }
+      return normalized;
+    }
+
+    function normalizeRedlineOutputFormat(value) {
+      const raw = String(value || 'pdf').trim().toLowerCase();
+      if (raw === 'docx' || raw === 'native' || raw === 'pdf') return raw;
+      return 'pdf';
+    }
+
+    function loadRedlineSettings() {
+      try {
+        const raw = localStorage.getItem(REDLINE_SETTINGS_STORAGE_KEY);
+        if (!raw) return { ...DEFAULT_REDLINE_SETTINGS };
+        const parsed = JSON.parse(raw);
+        return {
+          engine: normalizeRedlineEngineName(parsed && parsed.engine),
+          outputFormat: normalizeRedlineOutputFormat(parsed && parsed.outputFormat),
+          defaultOutputFolder: String((parsed && parsed.defaultOutputFolder) || '').trim(),
+          defaultAllRowsCpo: !!(parsed && parsed.defaultAllRowsCpo)
+        };
+      } catch (_) {
+        return { ...DEFAULT_REDLINE_SETTINGS };
+      }
+    }
+
+    function persistRedlineSettings() {
+      localStorage.setItem(REDLINE_SETTINGS_STORAGE_KEY, JSON.stringify(redlineSettings));
+    }
+
+    function syncRedlineDefaultOutputSummary() {
+      if (!redlineDefaultOutputPath) return;
+      if (redlineSettings.defaultOutputFolder) {
+        redlineDefaultOutputPath.textContent = redlineSettings.defaultOutputFolder;
+        redlineDefaultOutputPath.classList.remove('default');
+        if (redlineDefaultOutputResetBtn) redlineDefaultOutputResetBtn.style.display = '';
+      } else {
+        redlineDefaultOutputPath.textContent = 'No saved default folder. Redlines will save next to each original document.';
+        redlineDefaultOutputPath.classList.add('default');
+        if (redlineDefaultOutputResetBtn) redlineDefaultOutputResetBtn.style.display = 'none';
+      }
+    }
+
+    function syncRedlineGlobalOutputSummary() {
+      if (!redlineGlobalOutputPath) return;
+      if (redlineGlobalOutputFolder) {
+        redlineGlobalOutputPath.textContent = redlineGlobalOutputFolder;
+        redlineGlobalOutputPath.classList.remove('default');
+        if (redlineGlobalOutputResetBtn) redlineGlobalOutputResetBtn.style.display = '';
+      } else {
+        redlineGlobalOutputPath.textContent = 'No folder selected. Each output will save next to its original document.';
+        redlineGlobalOutputPath.classList.add('default');
+        if (redlineGlobalOutputResetBtn) redlineGlobalOutputResetBtn.style.display = 'none';
+      }
+    }
+
+    function applyRedlineSettingsToRunState() {
+      const preferredEngine = getAvailableRedlineEngineName(redlineSettings.engine);
+      redlineEngineSelect.value = preferredEngine;
+      redlineOutputFormat.value = normalizeRedlineOutputFormat(redlineSettings.outputFormat);
+      redlineGlobalOutputFolder = redlineSettings.defaultOutputFolder || '';
+      redlineDefaultChangePagesOnly = !!redlineSettings.defaultAllRowsCpo;
+
+      if (redlineDefaultEngineSelect) {
+        redlineDefaultEngineSelect.value = preferredEngine;
+      }
+      if (redlineDefaultOutputFormatSelect) {
+        redlineDefaultOutputFormatSelect.value = normalizeRedlineOutputFormat(redlineSettings.outputFormat);
+      }
+      if (redlineDefaultCpoCheckbox) {
+        redlineDefaultCpoCheckbox.checked = !!redlineSettings.defaultAllRowsCpo;
+      }
+
+      syncRedlineDefaultOutputSummary();
+      syncRedlineGlobalOutputSummary();
     }
 
     function isLiteroidModeActive() {
@@ -11282,19 +11520,27 @@
             .map(([k]) => k.charAt(0).toUpperCase() + k.slice(1));
           redlineEngineLabel.textContent = `Litera Compare available (${caps.join(', ')})`;
           redlineEngineLabel.style.color = '#86efac';
+          const literaOption = redlineEngineSelect.querySelector('option[value="litera"]');
+          if (literaOption) literaOption.disabled = false;
+          const defaultLiteraOption = redlineDefaultEngineSelect && redlineDefaultEngineSelect.querySelector('option[value="litera"]');
+          if (defaultLiteraOption) defaultLiteraOption.disabled = false;
         } else {
           redlineEngineDot.style.background = '#f59e0b'; // amber
           redlineEngineLabel.textContent = 'Litera Compare not found — Literoid workbook mode is ready';
           redlineEngineLabel.style.color = '#fcd34d';
-          // Hide Litera-only option
+          // Disable Litera-only options when unavailable.
           const literaOption = redlineEngineSelect.querySelector('option[value="litera"]');
           if (literaOption) literaOption.disabled = true;
+          const defaultLiteraOption = redlineDefaultEngineSelect && redlineDefaultEngineSelect.querySelector('option[value="litera"]');
+          if (defaultLiteraOption) defaultLiteraOption.disabled = true;
         }
       } catch (err) {
         redlineEngineDot.style.background = '#ef4444'; // red
         redlineEngineLabel.textContent = 'Engine check failed';
         redlineEngineLabel.style.color = '#fca5a5';
       }
+      redlineSettings = loadRedlineSettings();
+      applyRedlineSettingsToRunState();
       syncRedlineOptions();
       renderRedlinePairsTable();
     }
@@ -11302,13 +11548,17 @@
     checkLiteraStatus();
 
     function syncRedlineOptions() {
-      redlineEngineSelect.value = normalizeRedlineEngineName(redlineEngineSelect.value);
+      redlineEngineSelect.value = getAvailableRedlineEngineName(redlineEngineSelect.value);
       const literoidMode = isLiteroidModeActive();
 
       if (literoidMode) {
-        redlineOutputFormat.value = 'native';
+        redlineOutputFormat.value = normalizeRedlineOutputFormat(redlineSettings.outputFormat) === 'native'
+          ? 'native'
+          : 'native';
         redlineOutputFormat.disabled = true;
+        redlineDefaultChangePagesOnly = false;
         redlineChangePagesOnly.checked = false;
+        redlineChangePagesOnly.indeterminate = false;
         redlineChangePagesOnly.disabled = true;
         if (redlineOutputHint) {
           redlineOutputHint.textContent = 'Literoid creates an Excel comparison workbook from extracted tables. PDF, DOCX, and changed-pages output remain Litera-only.';
@@ -11319,21 +11569,35 @@
         }));
       } else {
         if (!redlineOutputFormat.value || redlineOutputFormat.value === 'native') {
-          redlineOutputFormat.value = 'pdf';
+          redlineOutputFormat.value = normalizeRedlineOutputFormat(redlineSettings.outputFormat);
         }
         redlineOutputFormat.disabled = false;
         redlineChangePagesOnly.disabled = false;
         if (redlineOutputHint) {
-          redlineOutputHint.textContent = 'Full-document output defaults to PDF. Each row can still be toggled independently between full-document output and CPO.';
+          redlineOutputHint.textContent = 'Full-document output uses the selected format above. “Make All Rows CPO” updates every row, and you can still override an individual row below.';
         }
       }
+      syncRedlineGlobalOutputSummary();
+      syncRedlineBulkCpoState();
     }
     redlineEngineSelect.addEventListener('change', () => {
       syncRedlineOptions();
       renderRedlinePairsTable();
     });
-    redlineChangePagesOnly.addEventListener('change', syncRedlineOptions);
-    syncRedlineOptions();
+    redlineChangePagesOnly.addEventListener('change', () => {
+      if (isLiteroidModeActive()) {
+        redlineChangePagesOnly.checked = false;
+        redlineChangePagesOnly.indeterminate = false;
+        return;
+      }
+      redlineDefaultChangePagesOnly = !!redlineChangePagesOnly.checked;
+      redlinePairs = redlinePairs.map((pair) => ({
+        ...pair,
+        changePagesOnly: redlineDefaultChangePagesOnly
+      }));
+      syncRedlineOptions();
+      renderRedlinePairsTable();
+    });
 
     const REDLINE_EXTENSIONS = ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls'];
 
@@ -11391,7 +11655,7 @@
         id: `redline_pair_${redlinePairCounter}`,
         original: '',
         modified: '',
-        changePagesOnly: !isLiteroidModeActive() && !!redlineChangePagesOnly.checked,
+        changePagesOnly: !isLiteroidModeActive() && !!redlineDefaultChangePagesOnly,
         outputFolder: '',
         ...overrides
       };
@@ -11417,10 +11681,31 @@
       if (pair && pair.outputFolder) {
         return pair.outputFolder;
       }
+      if (redlineGlobalOutputFolder) {
+        return `Using folder for all rows: ${redlineGlobalOutputFolder}`;
+      }
       if (pair && pair.original) {
         return `Same folder as ${getFileNameOnly(pair.original)}`;
       }
       return 'Same folder as original document';
+    }
+
+    function syncRedlineBulkCpoState() {
+      if (isLiteroidModeActive()) {
+        redlineChangePagesOnly.checked = false;
+        redlineChangePagesOnly.indeterminate = false;
+        return;
+      }
+      const pairs = Array.isArray(redlinePairs) ? redlinePairs : [];
+      if (pairs.length === 0) {
+        redlineChangePagesOnly.checked = !!redlineDefaultChangePagesOnly;
+        redlineChangePagesOnly.indeterminate = false;
+        return;
+      }
+      const anyCpo = pairs.some((pair) => !!pair.changePagesOnly);
+      const allCpo = pairs.every((pair) => !!pair.changePagesOnly);
+      redlineChangePagesOnly.checked = allCpo;
+      redlineChangePagesOnly.indeterminate = anyCpo && !allCpo;
     }
 
     function isRedlinePairIncomplete(pair) {
@@ -11477,6 +11762,7 @@
           ? 'Click to replace. Drop multiple files here to create more rows.'
           : 'The newer version to compare';
         const outputLabel = escapeHtml(getRedlinePairOutputLabel(pair));
+        const hasResolvedOutputFolder = !!(pair.outputFolder || redlineGlobalOutputFolder);
         const literoidMode = isLiteroidModeActive();
         const cpoNote = literoidMode
           ? 'Literoid will create an Excel comparison workbook for this row.'
@@ -11511,7 +11797,7 @@
             </td>
             <td>
               <div class="redline-output-cell">
-                <div class="redline-output-path ${pair.outputFolder ? '' : 'default'}">${outputLabel}</div>
+                <div class="redline-output-path ${hasResolvedOutputFolder ? '' : 'default'}">${outputLabel}</div>
                 <div class="redline-output-actions">
                   <button type="button" class="btn btn-secondary redline-mini-btn" data-redline-output-choose="${pair.id}">Choose</button>
                   ${pair.outputFolder ? `<button type="button" class="btn btn-secondary redline-mini-btn" data-redline-output-reset="${pair.id}">Reset</button>` : ''}
@@ -11527,6 +11813,8 @@
           </tr>
         `;
       }).join('');
+      syncRedlineGlobalOutputSummary();
+      syncRedlineBulkCpoState();
       updateRedlineButton();
     }
 
@@ -11568,6 +11856,86 @@
     function setRedlineModifiedFile(filePath, pairId = null) {
       ensureRedlinePairs();
       assignRedlineFilesToPair(pairId || redlinePairs[0].id, 'modified', [filePath]);
+    }
+
+    if (redlineDefaultEngineSelect) {
+      redlineDefaultEngineSelect.addEventListener('change', () => {
+        redlineSettings.engine = normalizeRedlineEngineName(redlineDefaultEngineSelect.value);
+        persistRedlineSettings();
+        applyRedlineSettingsToRunState();
+        syncRedlineOptions();
+        renderRedlinePairsTable();
+      });
+    }
+
+    if (redlineDefaultOutputFormatSelect) {
+      redlineDefaultOutputFormatSelect.addEventListener('change', () => {
+        redlineSettings.outputFormat = normalizeRedlineOutputFormat(redlineDefaultOutputFormatSelect.value);
+        persistRedlineSettings();
+        if (!isLiteroidModeActive()) {
+          redlineOutputFormat.value = redlineSettings.outputFormat;
+        }
+        syncRedlineOptions();
+        renderRedlinePairsTable();
+      });
+    }
+
+    if (redlineDefaultCpoCheckbox) {
+      redlineDefaultCpoCheckbox.addEventListener('change', () => {
+        redlineSettings.defaultAllRowsCpo = !!redlineDefaultCpoCheckbox.checked;
+        persistRedlineSettings();
+        if (!isLiteroidModeActive()) {
+          redlineDefaultChangePagesOnly = !!redlineSettings.defaultAllRowsCpo;
+          redlinePairs = redlinePairs.map((pair) => ({
+            ...pair,
+            changePagesOnly: redlineDefaultChangePagesOnly
+          }));
+        }
+        syncRedlineOptions();
+        renderRedlinePairsTable();
+      });
+    }
+
+    if (redlineDefaultOutputChooseBtn) {
+      redlineDefaultOutputChooseBtn.addEventListener('click', async () => {
+        const folderPath = await ipcRenderer.invoke('select-folder');
+        if (!folderPath) return;
+        redlineSettings.defaultOutputFolder = folderPath;
+        redlineGlobalOutputFolder = folderPath;
+        persistRedlineSettings();
+        syncRedlineDefaultOutputSummary();
+        syncRedlineGlobalOutputSummary();
+        renderRedlinePairsTable();
+      });
+    }
+
+    if (redlineDefaultOutputResetBtn) {
+      redlineDefaultOutputResetBtn.addEventListener('click', () => {
+        redlineSettings.defaultOutputFolder = '';
+        redlineGlobalOutputFolder = '';
+        persistRedlineSettings();
+        syncRedlineDefaultOutputSummary();
+        syncRedlineGlobalOutputSummary();
+        renderRedlinePairsTable();
+      });
+    }
+
+    if (redlineGlobalOutputChooseBtn) {
+      redlineGlobalOutputChooseBtn.addEventListener('click', async () => {
+        const folderPath = await ipcRenderer.invoke('select-folder');
+        if (!folderPath) return;
+        redlineGlobalOutputFolder = folderPath;
+        syncRedlineGlobalOutputSummary();
+        renderRedlinePairsTable();
+      });
+    }
+
+    if (redlineGlobalOutputResetBtn) {
+      redlineGlobalOutputResetBtn.addEventListener('click', () => {
+        redlineGlobalOutputFolder = redlineSettings.defaultOutputFolder || '';
+        syncRedlineGlobalOutputSummary();
+        renderRedlinePairsTable();
+      });
     }
 
     redlineAddPairBtn.addEventListener('click', () => {
@@ -11711,12 +12079,14 @@
 
       try {
         redlineLastRunPairs = readyPairs.map((pair) => ({ ...pair }));
-        redlineOutputFolder = redlineLastRunPairs[0].outputFolder || redlineLastRunPairs[0].original.split(/[/\\]/).slice(0, -1).join('/');
+        redlineOutputFolder = redlineLastRunPairs[0].outputFolder
+          || redlineGlobalOutputFolder
+          || redlineLastRunPairs[0].original.split(/[/\\]/).slice(0, -1).join('/');
 
         const preparedPairs = redlineLastRunPairs.map((pair) => ({
           original: pair.original,
           modified: pair.modified,
-          output_folder: pair.outputFolder || '',
+          output_folder: pair.outputFolder || redlineGlobalOutputFolder || '',
           output_format: (!literoidMode && pair.changePagesOnly) ? 'pdf' : effectiveOutputFormat,
           change_pages_only: !literoidMode && !!pair.changePagesOnly
         }));
@@ -11940,6 +12310,8 @@
 
     // Reset state
     function resetRedlineState() {
+      redlineGlobalOutputFolder = redlineSettings.defaultOutputFolder || '';
+      redlineDefaultChangePagesOnly = !!redlineSettings.defaultAllRowsCpo;
       redlinePairs = [createRedlinePair()];
       redlineOutputFolder = null;
       redlineDownloadMode = 'none';
@@ -11955,9 +12327,13 @@
       redlineRowsDeleted.textContent = '0';
       redlineRowsModified.textContent = '0';
       redlineTableChanges.textContent = '0';
-      redlineOutputFormat.value = 'pdf';
-      redlineChangePagesOnly.checked = false;
+      redlineEngineSelect.value = getAvailableRedlineEngineName(redlineSettings.engine);
+      redlineOutputFormat.value = normalizeRedlineOutputFormat(redlineSettings.outputFormat);
+      redlineChangePagesOnly.checked = !!redlineDefaultChangePagesOnly;
+      redlineChangePagesOnly.indeterminate = false;
       redlineDownloadZipBtn.textContent = 'Download Output';
+      syncRedlineDefaultOutputSummary();
+      syncRedlineGlobalOutputSummary();
       syncRedlineOptions();
 
       renderRedlinePairsTable();
