@@ -6230,6 +6230,8 @@ const COMMAND_TOOLS = [
         original: { type: 'string', description: 'File path of the original document' },
         modified: { type: 'string', description: 'File path of the modified/revised document' },
         engine: { type: 'string', enum: ['auto', 'litera', 'literoid'], description: 'Comparison engine. Default: auto (tries Litera first, falls back to Literoid).' },
+        output_format: { type: 'string', enum: ['native', 'pdf', 'docx'], description: 'Optional redline output format. Default: pdf. Literoid always outputs an Excel workbook.' },
+        pdf_compare_mode: { type: 'string', enum: ['native', 'word'], description: 'Optional PDF handling for Litera runs. "native" compares PDFs as PDFs. "word" converts both PDFs to Word first, then compares them.' },
         change_pages_only: { type: 'boolean', description: 'If true, generates a Change Pages Only (CPO) redline — only pages with differences. Default: false.' }
       },
       required: ['original', 'modified']
@@ -9716,6 +9718,44 @@ try {
   return { success: true, text: text.substring(0, 50000), truncated: text.length > 50000 };
 }
 
+async function wordConvertPdfToDocx(filePath, outputPath) {
+  if (process.platform !== 'win32') return { success: false, error: 'PDF-to-Word conversion is only available on Windows with Microsoft Word installed.' };
+  const resolvedInputPath = resolveExistingLocalPath(filePath);
+  if (!resolvedInputPath || !fs.existsSync(resolvedInputPath)) return { success: false, error: `File not found: ${filePath}` };
+  const defaultDocxPath = resolvedInputPath.replace(/\.pdf$/i, '.docx');
+  const docxPath = normalizeLocalPath(outputPath || defaultDocxPath);
+  const escapedInput = resolvedInputPath.replace(/'/g, "''");
+  const escapedOutput = docxPath.replace(/'/g, "''");
+  const script = `
+$ErrorActionPreference = 'Stop'
+$word = $null
+$doc = $null
+try {
+  $word = New-Object -ComObject "Word.Application"
+  $word.Visible = $false
+  $word.DisplayAlerts = 0
+  $doc = $word.Documents.Open('${escapedInput}', $false, $true)
+  try {
+    $doc.SaveAs2('${escapedOutput}', 16) # 16 = wdFormatDocumentDefault (.docx)
+  } catch {
+    $doc.SaveAs('${escapedOutput}', 16)
+  }
+  Write-Output '###JSON_START###{"success":true,"output":"${escapedOutput.replace(/\\/g, '\\\\')}"}###JSON_END###'
+} catch {
+  $errMsg = $_.Exception.Message -replace '"', '\\"'
+  Write-Output "###JSON_START###{\\"error\\":\\"$errMsg\\"}###JSON_END###"
+} finally {
+  try { if ($doc -ne $null) { $doc.Close($false) } } catch {}
+  try { if ($word -ne $null) { $word.Quit() } } catch {}
+  try { if ($doc -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null } } catch {}
+  try { if ($word -ne $null) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null } } catch {}
+}`;
+  const result = await imanageRunPowerShell(script, { timeoutMs: 120000 });
+  const failure = normalizeOfficeComFailure(result, 'Word');
+  if (failure) return failure;
+  return { success: true, message: `Converted PDF to DOCX: ${docxPath}`, output_path: docxPath };
+}
+
 // ========== FILE SYSTEM TOOLS ==========
 
 function fileCopy(source, destination) {
@@ -12657,6 +12697,11 @@ function normalizeRedlineConfigPaths(config = {}) {
   return normalized;
 }
 
+function normalizeRedlinePdfCompareMode(value) {
+  const raw = String(value || 'native').trim().toLowerCase();
+  return raw === 'word' ? 'word' : 'native';
+}
+
 function ensureRedlineInputFilesExist(config = {}) {
   const missing = [];
   const pushIfMissing = (filePath, label) => {
@@ -12681,12 +12726,83 @@ function ensureRedlineInputFilesExist(config = {}) {
   }
 }
 
+function isPdfForRedline(filePath) {
+  return path.extname(String(filePath || '')).toLowerCase() === '.pdf';
+}
+
+function buildTempRedlineDocxPath(sourcePath, label = 'document') {
+  const safeBase = sanitizeFilenameSegment(path.parse(sourcePath || '').name, label);
+  return path.join(
+    app.getPath('temp'),
+    `emmaneigh-redline-${Date.now()}-${Math.floor(Math.random() * 100000)}-${safeBase}.docx`
+  );
+}
+
+function mergeRedlineWarnings(...warnings) {
+  return warnings
+    .map((warning) => String(warning || '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+async function prepareLiteraPairForComparison(originalPath, modifiedPath, compareOptions = {}) {
+  const resolvedOriginal = resolveExistingLocalPath(originalPath);
+  const resolvedModified = resolveExistingLocalPath(modifiedPath);
+  const cleanupPaths = [];
+  const pdfCompareMode = normalizeRedlinePdfCompareMode(compareOptions.pdf_compare_mode);
+
+  const cleanup = () => {
+    cleanupPaths.forEach((filePath) => {
+      try {
+        if (filePath && fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (_) {}
+    });
+  };
+
+  if (pdfCompareMode !== 'word' || !isPdfForRedline(resolvedOriginal) || !isPdfForRedline(resolvedModified)) {
+    return {
+      originalPath: resolvedOriginal,
+      modifiedPath: resolvedModified,
+      cleanup,
+      warning: null,
+      convertedFromPdf: false
+    };
+  }
+
+  const tempOriginalDocx = buildTempRedlineDocxPath(resolvedOriginal, 'original');
+  const tempModifiedDocx = buildTempRedlineDocxPath(resolvedModified, 'modified');
+  const convertedOriginal = await wordConvertPdfToDocx(resolvedOriginal, tempOriginalDocx);
+  if (!convertedOriginal || !convertedOriginal.success || !convertedOriginal.output_path) {
+    cleanup();
+    throw new Error(convertedOriginal?.error || 'Could not convert the original PDF to Word for comparison.');
+  }
+  cleanupPaths.push(convertedOriginal.output_path);
+
+  const convertedModified = await wordConvertPdfToDocx(resolvedModified, tempModifiedDocx);
+  if (!convertedModified || !convertedModified.success || !convertedModified.output_path) {
+    cleanup();
+    throw new Error(convertedModified?.error || 'Could not convert the modified PDF to Word for comparison.');
+  }
+  cleanupPaths.push(convertedModified.output_path);
+
+  return {
+    originalPath: convertedOriginal.output_path,
+    modifiedPath: convertedModified.output_path,
+    cleanup,
+    warning: 'PDFs were converted to Word before running Litera Compare.',
+    convertedFromPdf: true
+  };
+}
+
 // Redline documents — routes through Litera Compare when available, falls back to Literoid.
 async function runRedlineDocuments(config) {
   config = normalizeRedlineConfigPaths(config || {});
   ensureRedlineInputFilesExist(config);
 
   const engine = normalizeRedlineEngineSelection(config.engine); // 'auto', 'litera', 'literoid'
+  const pdfCompareMode = normalizeRedlinePdfCompareMode(config.pdf_compare_mode);
   const requestedOutputFormat = String(config.output_format || 'pdf').toLowerCase();
   const normalizedOutputFormat = requestedOutputFormat === 'docx'
     ? 'docx'
@@ -12695,7 +12811,8 @@ async function runRedlineDocuments(config) {
       : 'native';
   const literaOptions = {
     output_format: normalizedOutputFormat,
-    change_pages_only: !!config.change_pages_only
+    change_pages_only: !!config.change_pages_only,
+    pdf_compare_mode: pdfCompareMode
   };
   let literoidWarning = null;
   if (engine === 'literoid' && (literaOptions.change_pages_only || literaOptions.output_format === 'pdf' || literaOptions.output_format === 'docx')) {
@@ -12714,7 +12831,11 @@ async function runRedlineDocuments(config) {
     const literaPath = findLiteraInstallation();
     if (literaPath) {
       // Check if file types are supported by Litera
-      const origExt = path.extname(config.original || (config.pairs && config.pairs[0] ? config.pairs[0].original : ''));
+      const initialOriginalPath = config.original || (config.pairs && config.pairs[0] ? config.pairs[0].original : '');
+      const initialModifiedPath = config.modified || (config.pairs && config.pairs[0] ? config.pairs[0].modified : '');
+      const origExt = pdfCompareMode === 'word' && isPdfForRedline(initialOriginalPath) && isPdfForRedline(initialModifiedPath)
+        ? '.docx'
+        : path.extname(initialOriginalPath || '');
       const literaExe = origExt ? getLiteraExecutable(origExt, { preferPerApp: literaOptions.change_pages_only }) : null;
       if (literaExe) {
         useLitera = true;
@@ -12749,7 +12870,8 @@ async function runRedlineDocuments(config) {
             output_format: String(pair.output_format || literaOptions.output_format || 'pdf').toLowerCase(),
             change_pages_only: pair.change_pages_only !== undefined
               ? !!pair.change_pages_only
-              : !!literaOptions.change_pages_only
+              : !!literaOptions.change_pages_only,
+            pdf_compare_mode: normalizeRedlinePdfCompareMode(pair.pdf_compare_mode || literaOptions.pdf_compare_mode)
           };
           const pairOutputFolder = pair.output_folder || outputFolder || path.dirname(pair.original);
           const pct = 10 + Math.round((i / config.pairs.length) * 80);
@@ -12758,19 +12880,27 @@ async function runRedlineDocuments(config) {
             message: `Comparing pair ${i + 1} of ${config.pairs.length} with Litera...`
           });
 
-          const outputExt = getLiteraOutputExtension(pair.original, pairOptions);
-          const outputPath = pair.output || path.join(
-            pairOutputFolder,
-            buildRedlineOutputFilename(pair.original, pair.modified, outputExt)
-          );
-
           try {
-            const result = await runLiteraComparison(
-              pair.original,
-              pair.modified,
-              outputPath,
-              pairOptions
+            const preparedPair = await prepareLiteraPairForComparison(pair.original, pair.modified, pairOptions);
+            const outputExt = getLiteraOutputExtension(preparedPair.originalPath, pairOptions);
+            const outputPath = pair.output || path.join(
+              pairOutputFolder,
+              buildRedlineOutputFilename(pair.original, pair.modified, outputExt)
             );
+            let result;
+            try {
+              result = await runLiteraComparison(
+                preparedPair.originalPath,
+                preparedPair.modifiedPath,
+                outputPath,
+                pairOptions
+              );
+            } finally {
+              preparedPair.cleanup();
+            }
+            if (preparedPair.warning) {
+              result.warning = mergeRedlineWarnings(result.warning, preparedPair.warning);
+            }
             results.push({ ...result, pair_index: i, output_folder: path.dirname(result.output_path || outputPath) });
           } catch (err) {
             results.push({ success: false, error: err.message, pair_index: i, output_folder: pairOutputFolder });
@@ -12793,26 +12923,37 @@ async function runRedlineDocuments(config) {
         // Single pair with Litera
         const singleOptions = {
           output_format: String(config.output_format || literaOptions.output_format || 'pdf').toLowerCase(),
-          change_pages_only: !!config.change_pages_only
+          change_pages_only: !!config.change_pages_only,
+          pdf_compare_mode: pdfCompareMode
         };
         const singleOutputFolder = config.output_folder || path.dirname(config.original);
-        const outputExt = getLiteraOutputExtension(config.original, singleOptions);
-        const outputPath = config.output || path.join(
-          singleOutputFolder,
-          buildRedlineOutputFilename(config.original, config.modified, outputExt)
-        );
 
         mainWindow.webContents.send('redline-progress', {
           percent: 20,
           message: 'Running Litera Compare...'
         });
 
-        const result = await runLiteraComparison(
-          config.original,
-          config.modified,
-          outputPath,
-          singleOptions
+        const preparedPair = await prepareLiteraPairForComparison(config.original, config.modified, singleOptions);
+        const outputExt = getLiteraOutputExtension(preparedPair.originalPath, singleOptions);
+        const outputPath = config.output || path.join(
+          singleOutputFolder,
+          buildRedlineOutputFilename(config.original, config.modified, outputExt)
         );
+
+        let result;
+        try {
+          result = await runLiteraComparison(
+            preparedPair.originalPath,
+            preparedPair.modifiedPath,
+            outputPath,
+            singleOptions
+          );
+        } finally {
+          preparedPair.cleanup();
+        }
+        if (preparedPair.warning) {
+          result.warning = mergeRedlineWarnings(result.warning, preparedPair.warning);
+        }
 
         mainWindow.webContents.send('redline-progress', {
           percent: 100,
