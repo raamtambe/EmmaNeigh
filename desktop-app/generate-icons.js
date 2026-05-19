@@ -60,17 +60,22 @@ async function generateIcons() {
 
   // Generate ICO for Windows using png-to-ico
   try {
-    const pngToIco = require('png-to-ico');
+    const pngToIcoModule = require('png-to-ico');
+    const pngToIco = typeof pngToIcoModule === 'function'
+      ? pngToIcoModule
+      : pngToIcoModule.default || pngToIcoModule.imagesToIco;
 
     // Use 256, 48, 32, 16 for ICO
     const icoPngs = [256, 48, 32, 16]
       .filter(s => pngBuffers[s])
       .map(s => path.join(buildDir, `icon_${s}x${s}.png`));
 
-    if (icoPngs.length > 0) {
+    if (icoPngs.length > 0 && pngToIco) {
       const icoBuffer = await pngToIco(icoPngs);
       fs.writeFileSync(path.join(__dirname, 'icon.ico'), icoBuffer);
       console.log('Created icon.ico');
+    } else if (!pngToIco) {
+      throw new Error('png-to-ico export is unavailable');
     }
   } catch (e) {
     console.log('png-to-ico failed, creating simple ICO:', e.message);

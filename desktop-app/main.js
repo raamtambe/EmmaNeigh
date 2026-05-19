@@ -5215,6 +5215,9 @@ function isAllowedNavigationUrl(rawUrl) {
 }
 
 function createWindow() {
+  const preferredIconPath = process.platform === 'win32'
+    ? path.join(__dirname, 'icon.ico')
+    : path.join(__dirname, 'icon.png');
   mainWindow = new BrowserWindow({
     width: 800,
     height: 700,
@@ -5229,7 +5232,8 @@ function createWindow() {
       webSecurity: true
     },
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0a0a0a'
+    backgroundColor: '#fafbfd',
+    icon: fs.existsSync(preferredIconPath) ? preferredIconPath : undefined
   });
 
   mainWindow.loadFile('index.html');
@@ -5267,6 +5271,13 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+
+  if (process.platform === 'darwin' && app.dock) {
+    const dockIconPath = path.join(__dirname, 'icon.png');
+    if (fs.existsSync(dockIconPath)) {
+      app.dock.setIcon(dockIconPath);
+    }
+  }
 
   // Setup auto-updater with enhanced progress reporting
   if (autoUpdater) {
